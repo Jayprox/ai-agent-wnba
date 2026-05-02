@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 // CONFIG — flip to false to fire real API calls
 // ============================================================
 const IS_SANDBOX = false;
-const API_BASE = 'http://localhost:3001';
+const API_BASE = import.meta.env.VITE_API_BASE || '';
 const SEASON = 2025;
 
 // ============================================================
