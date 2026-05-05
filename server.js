@@ -539,6 +539,65 @@ app.get('/api/wnba/injuries', async (req, res) => {
 });
 
 /**
+ * GET /api/wnba/top-picks?date=YYYY-MM-DD&limit=20
+ * Returns top prop picks across all games on a given date, sorted by confidence_score DESC.
+ * Used by the PICKS tab in the frontend.
+ */
+app.get('/api/wnba/top-picks', async (req, res) => {
+  try {
+    const date  = req.query.date  || new Date().toISOString().slice(0, 10);
+    const limit = Math.min(50, parseInt(req.query.limit || '25', 10));
+
+    // Find all games on this date
+    const { data: games, error: gamesError } = await supabase
+      .from('games')
+      .select('id, game_date, home_team_id, visitor_team_id, status')
+      .eq('game_date', date);
+
+    if (gamesError) throw gamesError;
+    if (!games?.length) return res.json({ data: [] });
+
+    const gameIds   = games.map(g => g.id);
+    const gamesById = new Map(games.map(g => [g.id, g]));
+    const teamsById = await getTeamsById();
+
+    // Pull top picks sorted by confidence
+    const { data: picks, error: picksError } = await supabase
+      .from('prop_analysis_results')
+      .select(`
+        id, game_id, player_id, prop_type, line, recommendation,
+        confidence_score, projection, l5_avg, season_avg, value_gap,
+        key_factors, risk_flags, correlated_opportunity, correlated_props,
+        score_referee,
+        players(id, full_name, first_name, last_name, position, team_id)
+      `)
+      .in('game_id', gameIds)
+      .in('recommendation', ['OVER', 'UNDER'])
+      .order('confidence_score', { ascending: false })
+      .limit(limit);
+
+    if (picksError) throw picksError;
+
+    const data = (picks || []).map(pick => {
+      const game       = gamesById.get(pick.game_id);
+      const homeTeam   = game ? teamsById.get(game.home_team_id)    : null;
+      const visitorTeam = game ? teamsById.get(game.visitor_team_id) : null;
+      return {
+        ...pick,
+        game_date:    game?.game_date  ?? date,
+        game_status:  game?.status     ?? null,
+        home_team:    homeTeam    ? formatTeam(homeTeam)    : null,
+        visitor_team: visitorTeam ? formatTeam(visitorTeam) : null,
+      };
+    });
+
+    res.json({ data });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
  * GET /health
  * Simple health check — useful for confirming the server is up.
  */

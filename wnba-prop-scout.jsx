@@ -1,49 +1,44 @@
 import { useState, useEffect, useCallback } from 'react';
 
 // ============================================================
-// CONFIG — flip to false to fire real API calls
+// CONFIG — flip IS_SANDBOX to true to use local mock data
 // ============================================================
 const IS_SANDBOX = false;
-const API_BASE = import.meta.env.VITE_API_BASE || '';
-const SEASON = 2025;
+const API_BASE   = import.meta.env.VITE_API_BASE || '';
+const SEASON     = 2025;
 
 // ============================================================
-// THEME
+// THEME — Direction A: Orange accent on deep navy
 // ============================================================
 const T = {
-  bg:      '#1e1f22',
-  card:    '#2b2d31',
-  card2:   '#313338',
-  card3:   '#383a40',
-  border:  '#404249',
-  text:    '#ffffff',
-  text2:   '#b5bac1',
-  text3:   '#80848e',
-  green:   '#57f287',
-  yellow:  '#fee75c',
-  red:     '#ed4245',
-  blue:    '#5865f2',
-  blueDim: '#4752c4',
-  font:    "'Courier New', Courier, monospace",
+  bg:        '#0c1124',
+  card:      '#141d38',
+  card2:     '#1b2648',
+  card3:     '#212f59',
+  border:    '#273660',
+  accent:    '#f97316',
+  accentDim: 'rgba(249,115,22,0.14)',
+  text:      '#f0f4ff',
+  text2:     '#8fa3c8',
+  text3:     '#4d6080',
+  green:     '#22d87a',
+  greenDim:  'rgba(34,216,122,0.14)',
+  yellow:    '#f4c020',
+  yellowDim: 'rgba(244,192,32,0.14)',
+  red:       '#f24b4b',
+  redDim:    'rgba(242,75,75,0.14)',
+  font:      "system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
 };
 
 const TEAM_VENUES = {
-  ATL: 'Gateway Center Arena',
-  CHI: 'Wintrust Arena',
-  CON: 'Mohegan Sun Arena',
-  DAL: 'College Park Center',
-  IND: 'Gainbridge Fieldhouse',
-  LV:  'Michelob ULTRA Arena',
-  LA:  'Crypto.com Arena',
-  MIN: 'Target Center',
-  NY:  'Barclays Center',
-  PHX: 'Footprint Center',
-  SEA: 'Climate Pledge Arena',
-  WSH: 'Entertainment & Sports Arena',
-  GS:  'Chase Center',
-  GSV: 'Chase Center',
-  TOR: 'Scotiabank Arena',
-  POR: 'Moda Center',
+  ATL: 'Gateway Center Arena',  CHI: 'Wintrust Arena',
+  CON: 'Mohegan Sun Arena',     DAL: 'College Park Center',
+  IND: 'Gainbridge Fieldhouse', LV:  'Michelob ULTRA Arena',
+  LA:  'Crypto.com Arena',      MIN: 'Target Center',
+  NY:  'Barclays Center',       PHX: 'Footprint Center',
+  SEA: 'Climate Pledge Arena',  WSH: 'Entertainment & Sports Arena',
+  GS:  'Chase Center',          GSV: 'Chase Center',
+  TOR: 'Scotiabank Arena',      POR: 'Moda Center',
 };
 
 // ============================================================
@@ -53,153 +48,70 @@ const SANDBOX = {
   games: [
     {
       id: 'g1',
-      home_team:   { id: 't1', name: 'New York Liberty',  abbreviation: 'NYL' },
-      visitor_team:{ id: 't2', name: 'Las Vegas Aces',    abbreviation: 'LVA' },
-      status:   '7:30 PM ET',
-      date:     '2025-05-20',
-      home_record:    '12-3',
-      visitor_record: '11-4',
-      home_form:    ['W','W','L','W','W'],
-      visitor_form: ['W','L','W','W','L'],
+      home_team:    { id:'t1', name:'New York Liberty',  abbreviation:'NY'  },
+      visitor_team: { id:'t2', name:'Las Vegas Aces',    abbreviation:'LV'  },
+      status: '7:30 PM ET', date: '2025-05-20',
+      home_record: '12-3', visitor_record: '11-4',
+      home_form: ['W','W','L','W','W'], visitor_form: ['W','L','W','W','L'],
       head_to_head: [
-        { date: '2024-09-10', home: 'NYL', away: 'LVA', score: '91-80' },
-        { date: '2024-08-02', home: 'LVA', away: 'NYL', score: '88-84' },
-        { date: '2024-07-14', home: 'NYL', away: 'LVA', score: '82-79' },
+        { date:'2024-09-10', home:'NY',  away:'LV',  score:'91-80' },
+        { date:'2024-08-02', home:'LV',  away:'NY',  score:'88-84' },
+        { date:'2024-07-14', home:'NY',  away:'LV',  score:'82-79' },
       ],
+      spread: -2.5, total: 162.5, home_ml: -140, away_ml: 118,
     },
     {
       id: 'g2',
-      home_team:   { id: 't3', name: 'Chicago Sky',   abbreviation: 'CHI' },
-      visitor_team:{ id: 't4', name: 'Seattle Storm', abbreviation: 'SEA' },
-      status:   '9:00 PM ET',
-      date:     '2025-05-20',
-      home_record:    '7-8',
-      visitor_record: '9-6',
-      home_form:    ['L','W','L','L','W'],
-      visitor_form: ['W','W','L','W','W'],
+      home_team:    { id:'t3', name:'Chicago Sky',   abbreviation:'CHI' },
+      visitor_team: { id:'t4', name:'Seattle Storm', abbreviation:'SEA' },
+      status: '9:00 PM ET', date: '2025-05-20',
+      home_record: '7-8', visitor_record: '9-6',
+      home_form: ['L','W','L','L','W'], visitor_form: ['W','W','L','W','W'],
       head_to_head: [
-        { date: '2024-07-30', home: 'SEA', away: 'CHI', score: '85-78' },
-        { date: '2024-06-21', home: 'CHI', away: 'SEA', score: '76-81' },
+        { date:'2024-07-30', home:'SEA', away:'CHI', score:'85-78' },
+        { date:'2024-06-21', home:'CHI', away:'SEA', score:'76-81' },
       ],
+      spread: 4.5, total: 148.5, home_ml: 165, away_ml: -195,
     },
   ],
 
   players: {
     t1: [
       { id:'p1',  name:'Breanna Stewart',      pos:'F', starter:true,  ppg:21.2, rpg:8.3, apg:3.7, mpg:33.1, fga:16.2, fta:5.1, tov:2.8 },
-      { id:'p2',  name:'Sabrina Ionescu',      pos:'G', starter:true,  ppg:19.8, rpg:4.2, apg:6.1, mpg:32.8, fga:15.8, fta:3.2, tov:2.1 },
-      { id:'p3',  name:'Jonquel Jones',        pos:'C', starter:true,  ppg:16.4, rpg:9.1, apg:2.3, mpg:28.6, fga:11.3, fta:4.8, tov:1.9 },
-      { id:'p4',  name:'Courtney Vandersloot', pos:'G', starter:true,  ppg:9.2,  rpg:2.8, apg:5.9, mpg:26.4, fga:7.1,  fta:2.3, tov:1.6 },
-      { id:'p5',  name:'Rebecca Allen',        pos:'F', starter:true,  ppg:11.7, rpg:5.2, apg:1.4, mpg:27.3, fga:8.9,  fta:2.9, tov:1.2 },
-      { id:'p6',  name:'Betnijah Laney',       pos:'G', starter:false, ppg:7.3,  rpg:3.1, apg:1.8, mpg:18.2, fga:5.9,  fta:1.8, tov:0.9 },
-      { id:'p7',  name:'Marine Johannes',      pos:'F', starter:false, ppg:5.8,  rpg:2.4, apg:1.2, mpg:14.7, fga:4.6,  fta:1.3, tov:0.7 },
+      { id:'p2',  name:'Sabrina Ionescu',       pos:'G', starter:true,  ppg:19.8, rpg:4.2, apg:6.1, mpg:32.8, fga:15.8, fta:3.2, tov:2.1 },
+      { id:'p3',  name:'Jonquel Jones',         pos:'C', starter:true,  ppg:16.4, rpg:9.1, apg:2.3, mpg:28.6, fga:11.3, fta:4.8, tov:1.9 },
+      { id:'p4',  name:'Courtney Vandersloot',  pos:'G', starter:true,  ppg:9.2,  rpg:2.8, apg:5.9, mpg:26.4, fga:7.1,  fta:2.3, tov:1.6 },
+      { id:'p5',  name:'Rebecca Allen',         pos:'F', starter:true,  ppg:11.7, rpg:5.2, apg:1.4, mpg:27.3, fga:8.9,  fta:2.9, tov:1.2 },
     ],
     t2: [
-      { id:'p8',  name:"A'ja Wilson",          pos:'F', starter:true,  ppg:26.4, rpg:9.2, apg:2.8, mpg:33.7, fga:18.1, fta:8.3, tov:3.1 },
-      { id:'p9',  name:'Kelsey Plum',          pos:'G', starter:true,  ppg:17.9, rpg:2.9, apg:4.3, mpg:30.2, fga:14.6, fta:4.1, tov:1.8 },
-      { id:'p10', name:'Jackie Young',         pos:'G', starter:true,  ppg:15.3, rpg:5.1, apg:4.7, mpg:32.1, fga:12.4, fta:3.6, tov:2.3 },
-      { id:'p11', name:'Chelsea Gray',         pos:'G', starter:true,  ppg:11.8, rpg:2.4, apg:5.8, mpg:27.8, fga:8.9,  fta:2.2, tov:1.9 },
-      { id:'p12', name:'Kiah Stokes',          pos:'C', starter:true,  ppg:6.2,  rpg:7.4, apg:0.8, mpg:22.3, fga:4.8,  fta:2.1, tov:0.8 },
-      { id:'p13', name:'Alysha Clark',         pos:'F', starter:false, ppg:8.4,  rpg:3.8, apg:1.1, mpg:17.6, fga:6.3,  fta:2.0, tov:0.7 },
-      { id:'p14', name:'Kierstan Bell',        pos:'G', starter:false, ppg:4.9,  rpg:1.7, apg:0.9, mpg:12.4, fga:4.1,  fta:1.1, tov:0.6 },
+      { id:'p8',  name:"A'ja Wilson",           pos:'F', starter:true,  ppg:26.4, rpg:9.2, apg:2.8, mpg:33.7, fga:18.1, fta:8.3, tov:3.1 },
+      { id:'p9',  name:'Kelsey Plum',           pos:'G', starter:true,  ppg:17.9, rpg:2.9, apg:4.3, mpg:30.2, fga:14.6, fta:4.1, tov:1.8 },
+      { id:'p10', name:'Jackie Young',          pos:'G', starter:true,  ppg:15.3, rpg:5.1, apg:4.7, mpg:32.1, fga:12.4, fta:3.6, tov:2.3 },
+      { id:'p11', name:'Chelsea Gray',          pos:'G', starter:true,  ppg:11.8, rpg:2.4, apg:5.8, mpg:27.8, fga:8.9,  fta:2.2, tov:1.9 },
+      { id:'p12', name:'Kiah Stokes',           pos:'C', starter:true,  ppg:6.2,  rpg:7.4, apg:0.8, mpg:22.3, fga:4.8,  fta:2.1, tov:0.8 },
     ],
     t3: [
-      { id:'p15', name:'Angel Reese',          pos:'C', starter:true,  ppg:13.1, rpg:13.9,apg:1.4, mpg:30.8, fga:10.2, fta:3.8, tov:2.1 },
-      { id:'p16', name:'Marina Mabrey',        pos:'G', starter:true,  ppg:18.2, rpg:3.7, apg:3.8, mpg:32.4, fga:14.9, fta:4.2, tov:1.7 },
-      { id:'p17', name:'Chennedy Carter',      pos:'G', starter:true,  ppg:16.7, rpg:3.2, apg:4.1, mpg:29.6, fga:13.8, fta:3.9, tov:2.4 },
-      { id:'p18', name:'Kamilla Cardoso',      pos:'C', starter:true,  ppg:9.3,  rpg:8.7, apg:0.9, mpg:24.2, fga:7.1,  fta:4.6, tov:1.3 },
-      { id:'p19', name:'Michaela Onyenwere',   pos:'F', starter:true,  ppg:12.4, rpg:4.9, apg:1.8, mpg:26.7, fga:9.8,  fta:3.1, tov:1.5 },
-      { id:'p20', name:'Elizabeth Williams',   pos:'C', starter:false, ppg:5.9,  rpg:5.1, apg:0.7, mpg:16.3, fga:4.2,  fta:2.1, tov:0.6 },
-      { id:'p21', name:'Dana Evans',           pos:'G', starter:false, ppg:7.2,  rpg:1.9, apg:2.8, mpg:19.8, fga:5.8,  fta:1.6, tov:1.1 },
+      { id:'p15', name:'Angel Reese',           pos:'C', starter:true,  ppg:13.1, rpg:13.9, apg:1.4, mpg:30.8, fga:10.2, fta:3.8, tov:2.1 },
+      { id:'p16', name:'Marina Mabrey',         pos:'G', starter:true,  ppg:18.2, rpg:3.7,  apg:3.8, mpg:32.4, fga:14.9, fta:4.2, tov:1.7 },
+      { id:'p17', name:'Chennedy Carter',       pos:'G', starter:true,  ppg:16.7, rpg:3.2,  apg:4.1, mpg:29.6, fga:13.8, fta:3.9, tov:2.4 },
+      { id:'p18', name:'Kamilla Cardoso',       pos:'C', starter:true,  ppg:9.3,  rpg:8.7,  apg:0.9, mpg:24.2, fga:7.1,  fta:4.6, tov:1.3 },
+      { id:'p19', name:'Michaela Onyenwere',    pos:'F', starter:true,  ppg:12.4, rpg:4.9,  apg:1.8, mpg:26.7, fga:9.8,  fta:3.1, tov:1.5 },
     ],
     t4: [
-      { id:'p22', name:'Nneka Ogwumike',       pos:'F', starter:true,  ppg:19.8, rpg:7.4, apg:2.9, mpg:32.1, fga:14.7, fta:6.8, tov:2.3 },
-      { id:'p23', name:'Skylar Diggins-Smith', pos:'G', starter:true,  ppg:18.3, rpg:3.8, apg:5.7, mpg:31.8, fga:14.2, fta:4.4, tov:2.7 },
-      { id:'p24', name:'Jewell Loyd',          pos:'G', starter:true,  ppg:21.1, rpg:3.1, apg:3.6, mpg:33.4, fga:16.8, fta:5.1, tov:2.0 },
-      { id:'p25', name:'Mercedes Russell',     pos:'C', starter:true,  ppg:8.7,  rpg:8.1, apg:0.9, mpg:24.9, fga:6.3,  fta:3.8, tov:1.1 },
-      { id:'p26', name:'Ezi Magbegor',         pos:'C', starter:true,  ppg:10.4, rpg:6.8, apg:1.3, mpg:25.6, fga:7.9,  fta:3.2, tov:1.4 },
-      { id:'p27', name:'Gabby Williams',       pos:'F', starter:false, ppg:8.1,  rpg:4.3, apg:2.1, mpg:20.7, fga:6.4,  fta:2.3, tov:1.2 },
-      { id:'p28', name:'Kiana Williams',       pos:'G', starter:false, ppg:6.3,  rpg:1.8, apg:2.9, mpg:15.1, fga:5.1,  fta:1.4, tov:0.8 },
+      { id:'p22', name:'Nneka Ogwumike',        pos:'F', starter:true,  ppg:19.8, rpg:7.4, apg:2.9, mpg:32.1, fga:14.7, fta:6.8, tov:2.3 },
+      { id:'p23', name:'Skylar Diggins-Smith',  pos:'G', starter:true,  ppg:18.3, rpg:3.8, apg:5.7, mpg:31.8, fga:14.2, fta:4.4, tov:2.7 },
+      { id:'p24', name:'Jewell Loyd',           pos:'G', starter:true,  ppg:21.1, rpg:3.1, apg:3.6, mpg:33.4, fga:16.8, fta:5.1, tov:2.0 },
+      { id:'p25', name:'Mercedes Russell',      pos:'C', starter:true,  ppg:8.7,  rpg:8.1, apg:0.9, mpg:24.9, fga:6.3,  fta:3.8, tov:1.1 },
+      { id:'p26', name:'Ezi Magbegor',          pos:'C', starter:true,  ppg:10.4, rpg:6.8, apg:1.3, mpg:25.6, fga:7.9,  fta:3.2, tov:1.4 },
     ],
-  },
-
-  gameLogs: {
-    p1:  [{date:'5/18',pts:24,reb:9,ast:4},{date:'5/16',pts:18,reb:7,ast:3},{date:'5/14',pts:22,reb:10,ast:5},{date:'5/12',pts:19,reb:8,ast:2},{date:'5/10',pts:26,reb:9,ast:4}],
-    p2:  [{date:'5/18',pts:22,reb:5,ast:7},{date:'5/16',pts:17,reb:3,ast:5},{date:'5/14',pts:21,reb:4,ast:8},{date:'5/12',pts:16,reb:4,ast:6},{date:'5/10',pts:23,reb:5,ast:7}],
-    p3:  [{date:'5/18',pts:14,reb:11,ast:3},{date:'5/16',pts:19,reb:8,ast:2},{date:'5/14',pts:16,reb:10,ast:1},{date:'5/12',pts:18,reb:9,ast:3},{date:'5/10',pts:15,reb:10,ast:2}],
-    p4:  [{date:'5/18',pts:8,reb:3,ast:7},{date:'5/16',pts:11,reb:2,ast:6},{date:'5/14',pts:9,reb:3,ast:5},{date:'5/12',pts:7,reb:2,ast:8},{date:'5/10',pts:10,reb:3,ast:5}],
-    p5:  [{date:'5/18',pts:13,reb:6,ast:1},{date:'5/16',pts:10,reb:5,ast:2},{date:'5/14',pts:14,reb:6,ast:1},{date:'5/12',pts:11,reb:4,ast:2},{date:'5/10',pts:9,reb:5,ast:1}],
-    p6:  [{date:'5/18',pts:6,reb:3,ast:2},{date:'5/16',pts:9,reb:4,ast:2},{date:'5/14',pts:7,reb:2,ast:1},{date:'5/12',pts:5,reb:3,ast:3},{date:'5/10',pts:8,reb:3,ast:1}],
-    p7:  [{date:'5/18',pts:4,reb:2,ast:1},{date:'5/16',pts:7,reb:3,ast:1},{date:'5/14',pts:5,reb:2,ast:2},{date:'5/12',pts:6,reb:2,ast:1},{date:'5/10',pts:4,reb:3,ast:1}],
-    p8:  [{date:'5/18',pts:28,reb:10,ast:3},{date:'5/16',pts:23,reb:9,ast:2},{date:'5/14',pts:31,reb:8,ast:4},{date:'5/12',pts:25,reb:11,ast:3},{date:'5/10',pts:24,reb:9,ast:2}],
-    p9:  [{date:'5/18',pts:19,reb:3,ast:5},{date:'5/16',pts:16,reb:2,ast:4},{date:'5/14',pts:22,reb:3,ast:4},{date:'5/12',pts:14,reb:3,ast:5},{date:'5/10',pts:18,reb:2,ast:4}],
-    p10: [{date:'5/18',pts:17,reb:5,ast:5},{date:'5/16',pts:14,reb:6,ast:4},{date:'5/14',pts:18,reb:4,ast:6},{date:'5/12',pts:12,reb:5,ast:4},{date:'5/10',pts:16,reb:5,ast:5}],
-    p11: [{date:'5/18',pts:10,reb:2,ast:7},{date:'5/16',pts:13,reb:3,ast:5},{date:'5/14',pts:9,reb:2,ast:6},{date:'5/12',pts:14,reb:2,ast:7},{date:'5/10',pts:12,reb:2,ast:5}],
-    p12: [{date:'5/18',pts:5,reb:8,ast:1},{date:'5/16',pts:7,reb:7,ast:0},{date:'5/14',pts:6,reb:9,ast:1},{date:'5/12',pts:8,reb:7,ast:1},{date:'5/10',pts:5,reb:8,ast:0}],
-    p13: [{date:'5/18',pts:8,reb:4,ast:1},{date:'5/16',pts:10,reb:3,ast:1},{date:'5/14',pts:6,reb:4,ast:2},{date:'5/12',pts:9,reb:4,ast:0},{date:'5/10',pts:7,reb:3,ast:1}],
-    p14: [{date:'5/18',pts:4,reb:2,ast:1},{date:'5/16',pts:6,reb:1,ast:1},{date:'5/14',pts:3,reb:2,ast:0},{date:'5/12',pts:5,reb:1,ast:1},{date:'5/10',pts:6,reb:2,ast:1}],
-    p15: [{date:'5/18',pts:14,reb:16,ast:2},{date:'5/16',pts:11,reb:13,ast:1},{date:'5/14',pts:16,reb:15,ast:2},{date:'5/12',pts:12,reb:14,ast:1},{date:'5/10',pts:13,reb:12,ast:1}],
-    p16: [{date:'5/18',pts:20,reb:4,ast:4},{date:'5/16',pts:17,reb:3,ast:3},{date:'5/14',pts:22,reb:4,ast:5},{date:'5/12',pts:15,reb:3,ast:3},{date:'5/10',pts:18,reb:4,ast:4}],
-    p17: [{date:'5/18',pts:18,reb:3,ast:5},{date:'5/16',pts:14,reb:3,ast:4},{date:'5/14',pts:19,reb:4,ast:4},{date:'5/12',pts:15,reb:2,ast:5},{date:'5/10',pts:17,reb:3,ast:3}],
-    p18: [{date:'5/18',pts:10,reb:9,ast:1},{date:'5/16',pts:7,reb:8,ast:0},{date:'5/14',pts:12,reb:10,ast:1},{date:'5/12',pts:8,reb:8,ast:1},{date:'5/10',pts:9,reb:9,ast:0}],
-    p19: [{date:'5/18',pts:13,reb:5,ast:2},{date:'5/16',pts:10,reb:4,ast:1},{date:'5/14',pts:14,reb:5,ast:2},{date:'5/12',pts:11,reb:5,ast:2},{date:'5/10',pts:12,reb:4,ast:1}],
-    p20: [{date:'5/18',pts:6,reb:5,ast:0},{date:'5/16',pts:4,reb:6,ast:1},{date:'5/14',pts:7,reb:5,ast:0},{date:'5/12',pts:5,reb:5,ast:0},{date:'5/10',pts:6,reb:4,ast:0}],
-    p21: [{date:'5/18',pts:8,reb:2,ast:3},{date:'5/16',pts:5,reb:1,ast:2},{date:'5/14',pts:9,reb:2,ast:3},{date:'5/12',pts:7,reb:2,ast:3},{date:'5/10',pts:6,reb:1,ast:2}],
-    p22: [{date:'5/18',pts:21,reb:8,ast:3},{date:'5/16',pts:18,reb:7,ast:2},{date:'5/14',pts:23,reb:8,ast:4},{date:'5/12',pts:17,reb:7,ast:2},{date:'5/10',pts:20,reb:8,ast:3}],
-    p23: [{date:'5/18',pts:20,reb:4,ast:6},{date:'5/16',pts:16,reb:3,ast:5},{date:'5/14',pts:22,reb:4,ast:7},{date:'5/12',pts:15,reb:3,ast:5},{date:'5/10',pts:19,reb:4,ast:6}],
-    p24: [{date:'5/18',pts:24,reb:3,ast:4},{date:'5/16',pts:19,reb:3,ast:3},{date:'5/14',pts:26,reb:4,ast:4},{date:'5/12',pts:17,reb:2,ast:4},{date:'5/10',pts:22,reb:3,ast:3}],
-    p25: [{date:'5/18',pts:9,reb:9,ast:1},{date:'5/16',pts:7,reb:8,ast:0},{date:'5/14',pts:10,reb:9,ast:1},{date:'5/12',pts:8,reb:7,ast:0},{date:'5/10',pts:9,reb:8,ast:0}],
-    p26: [{date:'5/18',pts:11,reb:7,ast:1},{date:'5/16',pts:9,reb:6,ast:1},{date:'5/14',pts:13,reb:8,ast:2},{date:'5/12',pts:8,reb:6,ast:1},{date:'5/10',pts:11,reb:7,ast:1}],
-    p27: [{date:'5/18',pts:9,reb:4,ast:2},{date:'5/16',pts:7,reb:4,ast:2},{date:'5/14',pts:10,reb:5,ast:3},{date:'5/12',pts:6,reb:3,ast:1},{date:'5/10',pts:8,reb:4,ast:2}],
-    p28: [{date:'5/18',pts:7,reb:2,ast:3},{date:'5/16',pts:5,reb:1,ast:2},{date:'5/14',pts:8,reb:2,ast:4},{date:'5/12',pts:4,reb:2,ast:2},{date:'5/10',pts:7,reb:1,ast:3}],
-  },
-
-  // defenderRating: 0-100, higher = more pts allowed = more favorable for offense
-  matchups: {
-    p1:  { defender:'A\'ja Wilson',          defenderRating:68, role:'Star vs. star' },
-    p2:  { defender:'Kelsey Plum',           defenderRating:72, role:'Guard matchup' },
-    p3:  { defender:'Kiah Stokes',           defenderRating:61, role:'Big matchup' },
-    p4:  { defender:'Chelsea Gray',          defenderRating:58, role:'Backup PG' },
-    p5:  { defender:'Jackie Young',          defenderRating:55, role:'Wing matchup' },
-    p6:  { defender:'Alysha Clark',          defenderRating:65, role:'Bench wing' },
-    p7:  { defender:'Kierstan Bell',         defenderRating:70, role:'Bench wing' },
-    p8:  { defender:'Breanna Stewart',       defenderRating:62, role:'Star vs. star' },
-    p9:  { defender:'Sabrina Ionescu',       defenderRating:60, role:'Guard battle' },
-    p10: { defender:'Rebecca Allen',         defenderRating:67, role:'Wing vs. wing' },
-    p11: { defender:'Courtney Vandersloot',  defenderRating:63, role:'Backup PG' },
-    p12: { defender:'Jonquel Jones',         defenderRating:59, role:'Big matchup' },
-    p13: { defender:'Betnijah Laney',        defenderRating:66, role:'Bench wing' },
-    p14: { defender:'Marine Johannes',       defenderRating:71, role:'Bench guard' },
-    p15: { defender:'Ezi Magbegor',          defenderRating:55, role:'Big matchup' },
-    p16: { defender:'Skylar Diggins-Smith',  defenderRating:64, role:'Guard matchup' },
-    p17: { defender:'Kiana Williams',        defenderRating:72, role:'Guard battle' },
-    p18: { defender:'Mercedes Russell',      defenderRating:60, role:'Center matchup' },
-    p19: { defender:'Gabby Williams',        defenderRating:66, role:'Wing matchup' },
-    p20: { defender:'Ezi Magbegor',          defenderRating:57, role:'Backup C' },
-    p21: { defender:'Kiana Williams',        defenderRating:69, role:'Bench guard' },
-    p22: { defender:'Angel Reese',           defenderRating:65, role:'Big matchup' },
-    p23: { defender:'Chennedy Carter',       defenderRating:68, role:'Guard matchup' },
-    p24: { defender:'Marina Mabrey',         defenderRating:61, role:'Guard battle' },
-    p25: { defender:'Kamilla Cardoso',       defenderRating:58, role:'Center matchup' },
-    p26: { defender:'Angel Reese',           defenderRating:63, role:'Big matchup' },
-    p27: { defender:'Michaela Onyenwere',    defenderRating:70, role:'Bench wing' },
-    p28: { defender:'Dana Evans',            defenderRating:67, role:'Bench guard' },
   },
 
   intel: {
     g1: {
-      homePace:77.8, visitorPace:79.2, avgPace:78.5,
-      homeATS:   ['W','W','L','W','L'], visitorATS:['W','L','W','L','W'],
-      homeOU:    ['O','O','U','O','U'], visitorOU: ['U','O','U','O','O'],
-      homePPG:   { home:82.4, away:78.1 },
-      visitorPPG:{ home:86.2, away:79.8 },
-    },
-    g2: {
-      homePace:72.3, visitorPace:74.6, avgPace:73.5,
-      homeATS:   ['L','W','L','L','W'], visitorATS:['W','W','L','W','W'],
-      homeOU:    ['U','O','U','U','O'], visitorOU: ['O','O','U','O','O'],
-      homePPG:   { home:74.8, away:71.2 },
-      visitorPPG:{ home:81.4, away:77.6 },
+      avgPace: 76.2, homePace: 74.8, visitorPace: 77.6,
+      homeATS: ['W','L','W','W','L'], visitorATS: ['W','W','L','W','W'],
+      homeOU:  ['U','O','U','U','O'], visitorOU:  ['O','O','U','O','O'],
+      homePPG: { home:74.8, away:71.2 }, visitorPPG: { home:81.4, away:77.6 },
     },
   },
 
@@ -217,19 +129,35 @@ const SANDBOX = {
   },
 
   props: {
-    p1:  [{ type:'PTS', line:20.5 },{ type:'REB', line:8.5 },{ type:'AST', line:3.5 }],
-    p2:  [{ type:'PTS', line:18.5 },{ type:'AST', line:5.5 },{ type:'REB', line:4.5 }],
-    p3:  [{ type:'PTS', line:15.5 },{ type:'REB', line:8.5 },{ type:'AST', line:2.5 }],
-    p8:  [{ type:'PTS', line:25.5 },{ type:'REB', line:9.5 },{ type:'AST', line:2.5 }],
-    p9:  [{ type:'PTS', line:17.5 },{ type:'AST', line:4.5 },{ type:'REB', line:2.5 }],
-    p10: [{ type:'PTS', line:14.5 },{ type:'AST', line:4.5 },{ type:'REB', line:5.5 }],
-    p15: [{ type:'PTS', line:12.5 },{ type:'REB', line:13.5 },{ type:'AST', line:1.5 }],
-    p16: [{ type:'PTS', line:17.5 },{ type:'REB', line:3.5 },{ type:'AST', line:3.5 }],
-    p17: [{ type:'PTS', line:15.5 },{ type:'AST', line:3.5 },{ type:'REB', line:3.5 }],
-    p22: [{ type:'PTS', line:18.5 },{ type:'REB', line:7.5 },{ type:'AST', line:2.5 }],
-    p23: [{ type:'PTS', line:17.5 },{ type:'AST', line:5.5 },{ type:'REB', line:3.5 }],
-    p24: [{ type:'PTS', line:20.5 },{ type:'REB', line:3.5 },{ type:'AST', line:3.5 }],
+    p1:  [{ type:'PTS', line:20.5 }, { type:'REB', line:8.5 }],
+    p2:  [{ type:'PTS', line:18.5 }, { type:'AST', line:5.5 }],
+    p8:  [{ type:'PTS', line:25.5 }, { type:'REB', line:9.5 }],
+    p9:  [{ type:'PTS', line:17.5 }, { type:'AST', line:4.5 }],
+    p15: [{ type:'REB', line:13.5 }, { type:'PTS', line:12.5 }],
+    p24: [{ type:'PTS', line:20.5 }],
   },
+
+  topPicks: [
+    // — PTS —
+    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  players:{ full_name:"A'ja Wilson",         position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'] },
+    { id:'tp3',  player_id:'p24', prop_type:'pts', line:20.5, recommendation:'UNDER', confidence_score:72, projection:18.9, l5_avg:18.2, season_avg:21.1, value_gap:-1.6, players:{ full_name:'Jewell Loyd',          position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Tough defensive matchup','Slow pace game'] },
+    { id:'tp5',  player_id:'p1',  prop_type:'pts', line:20.5, recommendation:'OVER',  confidence_score:67, projection:22.1, l5_avg:21.8, season_avg:21.2, value_gap:1.6,  players:{ full_name:'Breanna Stewart',      position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Home advantage','High usage + favorable opp'] },
+    { id:'tp6',  player_id:'p16', prop_type:'pts', line:17.5, recommendation:'OVER',  confidence_score:63, projection:19.0, l5_avg:18.6, season_avg:18.2, value_gap:1.5,  players:{ full_name:'Marina Mabrey',        position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['L5 avg 18.6 pts','Elevated role with lineup changes'] },
+    { id:'tp7',  player_id:'p9',  prop_type:'pts', line:17.5, recommendation:'OVER',  confidence_score:58, projection:19.1, l5_avg:18.9, season_avg:17.9, value_gap:1.6,  players:{ full_name:'Kelsey Plum',          position:'G' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['High pace matchup (76.2 poss/g)'] },
+    // — REB —
+    { id:'tp4',  player_id:'p15', prop_type:'reb', line:13.5, recommendation:'OVER',  confidence_score:79, projection:14.2, l5_avg:14.1, season_avg:13.9, value_gap:0.7,  players:{ full_name:'Angel Reese',          position:'C' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Elite rebounding rate','30.8 mpg'] },
+    { id:'tp8',  player_id:'p3',  prop_type:'reb', line:8.5,  recommendation:'OVER',  confidence_score:71, projection:9.3,  l5_avg:9.4,  season_avg:9.1,  value_gap:0.8,  players:{ full_name:'Jonquel Jones',        position:'C' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Consistent double-digit boards','Opp 5th in reb allowed'] },
+    { id:'tp9',  player_id:'p8',  prop_type:'reb', line:8.5,  recommendation:'OVER',  confidence_score:65, projection:9.4,  l5_avg:9.1,  season_avg:9.2,  value_gap:0.9,  players:{ full_name:"A'ja Wilson",         position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['High usage + rebounding role'] },
+    { id:'tp10', player_id:'p18', prop_type:'reb', line:8.5,  recommendation:'UNDER', confidence_score:61, projection:7.8,  l5_avg:7.6,  season_avg:8.7,  value_gap:-0.9, players:{ full_name:'Kamilla Cardoso',      position:'C' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Foul trouble risk vs aggressive front-court'] },
+    // — AST —
+    { id:'tp2',  player_id:'p2',  prop_type:'ast', line:5.5,  recommendation:'OVER',  confidence_score:76, projection:6.3,  l5_avg:6.1,  season_avg:6.1,  value_gap:0.8,  players:{ full_name:'Sabrina Ionescu',      position:'G' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Fast pace matchup (77.6 poss/g)','Elite assist rate'] },
+    { id:'tp11', player_id:'p11', prop_type:'ast', line:5.5,  recommendation:'UNDER', confidence_score:68, projection:4.9,  l5_avg:4.7,  season_avg:5.8,  value_gap:-0.9, players:{ full_name:'Chelsea Gray',         position:'G' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Hampered by defensive scheme','L5 trending down'] },
+    { id:'tp12', player_id:'p17', prop_type:'ast', line:3.5,  recommendation:'OVER',  confidence_score:62, projection:4.2,  l5_avg:4.4,  season_avg:4.1,  value_gap:0.7,  players:{ full_name:'Chennedy Carter',      position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Primary ball-handler in this lineup'] },
+    // — 3PM —
+    { id:'tp13', player_id:'p2',  prop_type:'fg3m', line:2.5, recommendation:'OVER',  confidence_score:74, projection:3.1,  l5_avg:3.0,  season_avg:2.8,  value_gap:0.6,  players:{ full_name:'Sabrina Ionescu',      position:'G' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp allows 33% of shots as 3s','Career high 3PA rate'] },
+    { id:'tp14', player_id:'p16', prop_type:'fg3m', line:2.5, recommendation:'OVER',  confidence_score:66, projection:3.0,  l5_avg:2.9,  season_avg:2.6,  value_gap:0.5,  players:{ full_name:'Marina Mabrey',        position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['High 3PA volume (7.1/g)','Favorable opp 3PT defense'] },
+    { id:'tp15', player_id:'p9',  prop_type:'fg3m', line:2.5, recommendation:'UNDER', confidence_score:59, projection:2.1,  l5_avg:2.0,  season_avg:2.4,  value_gap:-0.4, players:{ full_name:'Kelsey Plum',          position:'G' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['NY allows fewest 3PM per game','Plum shooting 32% last 5'] },
+  ],
 };
 
 // ============================================================
@@ -242,7 +170,6 @@ function calcUsageRate(fga, fta, tov, mpg) {
 }
 
 function normalizeUsageRate(ur) {
-  // WNBA starters: ~0.35–0.90
   return Math.min(100, Math.max(0, ((ur - 0.2) / 0.75) * 100));
 }
 
@@ -253,38 +180,26 @@ function normalizeMpg(mpg) {
 }
 
 function normalizePace(pace) {
-  // WNBA avg pace ~70-82
   return Math.min(100, Math.max(0, ((pace - 62) / 22) * 100));
 }
 
 function calcFormScore(logs) {
   if (!logs || logs.length === 0) return 50;
   const avgPts = logs.reduce((s, g) => s + Number(g.pts || 0), 0) / logs.length;
-  // Scale: 5 pts = 20, 25 pts = 90
   return Math.min(100, Math.max(0, ((avgPts - 5) / 22) * 80 + 10));
 }
 
 function calcMatchupScore(player, matchup, intel, logs) {
   const ur = calcUsageRate(player.fga, player.fta, player.tov, player.mpg);
-  const usageScore    = normalizeUsageRate(ur);
-  const defScore      = matchup ? matchup.defenderRating : 50;
-  const mpgScore      = normalizeMpg(player.mpg);
-  const paceScore     = normalizePace(intel ? intel.avgPace : 73);
-  const formScore     = calcFormScore(logs);
+  const usageScore = normalizeUsageRate(ur);
+  const defScore   = matchup ? matchup.defenderRating : 50;
+  const mpgScore   = normalizeMpg(player.mpg);
+  const paceScore  = normalizePace(intel ? intel.avgPace : 73);
+  const formScore  = calcFormScore(logs);
 
-  let score =
-    usageScore * 0.30 +
-    defScore   * 0.30 +
-    mpgScore   * 0.20 +
-    paceScore  * 0.10 +
-    formScore  * 0.10;
-
-  // Minutes penalty: bench players shouldn't show green
+  let score = usageScore * 0.30 + defScore * 0.30 + mpgScore * 0.20 + paceScore * 0.10 + formScore * 0.10;
   const mpg = Number(player.mpg || 0);
-  if (mpg < 20) {
-    score = score * (mpg / 20) * 0.75;
-  }
-
+  if (mpg < 20) score = score * (mpg / 20) * 0.75;
   return Math.round(Math.min(100, Math.max(0, score)));
 }
 
@@ -305,101 +220,65 @@ function scoreLabel(s) {
   return 'UNFAVORABLE';
 }
 
-function fmtOdds(n) {
-  return n > 0 ? `+${n}` : `${n}`;
+function fmtOdds(n)   { return n > 0 ? `+${n}` : `${n}`; }
+function fmtSpread(n) { return n > 0 ? `+${n}` : `${n}`; }
+function isNumber(v)  { return Number.isFinite(Number(v)); }
+function fmtOne(v)    { return isNumber(v) ? Number(v).toFixed(1) : '—'; }
+
+function fmtML(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '—';
+  const n = Number(value);
+  return n > 0 ? `+${n}` : String(n);
 }
 
-function fmtSpread(n) {
-  return n > 0 ? `+${n}` : `${n}`;
-}
-
-function isNumber(value) {
-  return Number.isFinite(Number(value));
-}
-
-function fmtOne(value) {
-  return isNumber(value) ? Number(value).toFixed(1) : '—';
+function fmtGameSpread(abbr, spread) {
+  if (spread == null || !Number.isFinite(Number(spread))) return '—';
+  const n = Number(spread);
+  return `${abbr} ${n > 0 ? '+' : ''}${fmtOne(n)}`;
 }
 
 function fmtDate(value) {
   if (!value) return 'TBA';
-  return new Date(value + 'T12:00:00').toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
+  return new Date(value + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
 }
 
-function fmtML(value) {
-  if (value == null || !Number.isFinite(Number(value))) return '—';
-  const num = Number(value);
-  return num > 0 ? `+${num}` : String(num);
+function playerName(p) {
+  return p.name || p.full_name || [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown';
 }
-
-function fmtGameSpread(teamAbbr, spread) {
-  if (spread == null || !Number.isFinite(Number(spread))) return '—';
-  const num = Number(spread);
-  const signed = num > 0 ? `+${fmtOne(num)}` : fmtOne(num);
-  return `${teamAbbr} ${signed}`;
-}
-
-function fmtPlain(value) {
-  return isNumber(value) ? value : '—';
-}
-
-function playerName(player) {
-  return player.name || player.full_name || [player.first_name, player.last_name].filter(Boolean).join(' ') || 'Unknown';
-}
-
-function playerPos(player) {
-  return player.pos || player.position || '—';
-}
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
+function playerPos(p) { return p.pos || p.position || '—'; }
+function today()      { return new Date().toISOString().slice(0, 10); }
 
 // ============================================================
 // API LAYER
 // ============================================================
-async function apiGetGames(date) {
-  if (IS_SANDBOX) return SANDBOX.games;
-  const r = await fetch(`${API_BASE}/api/wnba/games?date=${date}`);
-  const d = await r.json();
-  return d.data || [];
-}
-
 async function apiGetSlate(date) {
   if (IS_SANDBOX) return SANDBOX.games;
   const r = await fetch(`${API_BASE}/api/wnba/slate?date=${date}`);
   if (!r.ok) throw new Error(`slate fetch failed: ${r.status}`);
-  const d = await r.json();
-  return d.data || [];
+  return (await r.json()).data || [];
+}
+
+async function apiGetTopPicks(date, limit = 50) {
+  if (IS_SANDBOX) return SANDBOX.topPicks;
+  const r = await fetch(`${API_BASE}/api/wnba/top-picks?date=${date}&limit=${limit}`);
+  if (!r.ok) return [];
+  return (await r.json()).data || [];
 }
 
 async function apiGetPlayers(teamId) {
   if (IS_SANDBOX) return SANDBOX.players[teamId] || [];
   const r = await fetch(`${API_BASE}/api/wnba/players?team_id=${teamId}&season=${SEASON}`);
   const d = await r.json();
-  return (d.data || []).map(p => ({
-    ...p,
-    name: p.name || p.full_name,
-    pos: p.pos || p.position,
-    starter: !!p.starter,
-  }));
+  return (d.data || []).map(p => ({ ...p, name: p.full_name, pos: p.position, starter: !!p.starter }));
 }
 
 async function apiGetSeasonAverages(playerIds) {
-  if (IS_SANDBOX) {
-    // averages embedded in player objects
-    return {};
-  }
+  if (IS_SANDBOX) return [];
   const ids = playerIds.map(Number).filter(Number.isFinite);
   if (!ids.length) return [];
   const params = ids.map(id => `player_ids[]=${id}`).join('&');
   const r = await fetch(`${API_BASE}/api/wnba/season_averages?${params}&season=${SEASON}`);
-  const d = await r.json();
-  return d.data || [];
+  return (await r.json()).data || [];
 }
 
 function mergeSeasonAverages(players, averages) {
@@ -407,16 +286,7 @@ function mergeSeasonAverages(players, averages) {
   return players.map(player => {
     const avg = byPlayer.get(player.id);
     if (!avg) return player;
-    return {
-      ...player,
-      ppg: avg.pts,
-      rpg: avg.reb,
-      apg: avg.ast,
-      mpg: avg.min,
-      fga: avg.fga ?? player.fga,
-      fta: avg.fta ?? player.fta,
-      tov: avg.turnover ?? player.tov,
-    };
+    return { ...player, ppg: avg.pts, rpg: avg.reb, apg: avg.ast, mpg: avg.min, fga: avg.fga ?? player.fga, fta: avg.fta ?? player.fta, tov: avg.turnover ?? player.tov };
   });
 }
 
@@ -426,62 +296,35 @@ async function apiGetOdds(gameId) {
   if (!r.ok) return null;
   const d = await r.json();
   if (!d.data?.length) return null;
-  // Transform grouped snapshots into the flat format OverviewTab expects.
-  // Use the first sportsbook's current lines.
   const book = d.data[0];
-  const m = book.markets || {};
+  const m    = book.markets || {};
   return {
-    spread: {
-      away: m.spread?.current?.line != null ? -m.spread.current.line : null,
-      home: m.spread?.current?.line ?? null,
-    },
-    total: {
-      line:      m.total?.current?.line ?? null,
-      overOdds:  m.total?.current?.over_odds ?? null,
-      underOdds: m.total?.current?.under_odds ?? null,
-    },
-    moneyline: {
-      away: m.moneyline?.current?.over_odds ?? null,
-      home: m.moneyline?.current?.under_odds ?? null,
-    },
+    spread:    { away: m.spread?.current?.line != null ? -m.spread.current.line : null, home: m.spread?.current?.line ?? null },
+    total:     { line: m.total?.current?.line ?? null, overOdds: m.total?.current?.over_odds ?? null, underOdds: m.total?.current?.under_odds ?? null },
+    moneyline: { away: m.moneyline?.current?.over_odds ?? null, home: m.moneyline?.current?.under_odds ?? null },
   };
 }
 
-async function apiGetMatchups(gameId) {
-  if (IS_SANDBOX) return SANDBOX.matchups;
-  return {}; // live: derive or future endpoint
-}
-
-async function apiGetIntel(gameId) {
-  if (IS_SANDBOX) return SANDBOX.intel[gameId] || null;
-  return null;
-}
+async function apiGetMatchups(gameId) { if (IS_SANDBOX) return {}; return {}; }
+async function apiGetIntel(gameId)    { if (IS_SANDBOX) return SANDBOX.intel[gameId] || null; return null; }
 
 async function apiGetGameLogs(playerId) {
-  if (IS_SANDBOX) return SANDBOX.gameLogs[playerId] || [];
+  if (IS_SANDBOX) return [];
   const r = await fetch(`${API_BASE}/api/wnba/stats?player_ids[]=${playerId}&seasons[]=${SEASON}`);
-  const d = await r.json();
-  return (d.data || []).slice(0, 5);
+  return ((await r.json()).data || []).slice(0, 5);
 }
 
 async function apiGetProps(gameId) {
   if (IS_SANDBOX) return SANDBOX.props;
   const r = await fetch(`${API_BASE}/api/wnba/props?gameId=${gameId}`);
   if (!r.ok) return {};
-  const d = await r.json();
   const grouped = {};
-
-  for (const row of d.data || []) {
-    const playerId = row.player_id;
-    if (!playerId) continue;
-    if (!grouped[playerId]) grouped[playerId] = [];
-    grouped[playerId].push({
-      ...row,
-      type: String(row.prop_type || '').toUpperCase(),
-      player: row.players,
-    });
+  for (const row of ((await r.json()).data || [])) {
+    const pid = row.player_id;
+    if (!pid) continue;
+    if (!grouped[pid]) grouped[pid] = [];
+    grouped[pid].push({ ...row, type: String(row.prop_type || '').toUpperCase(), player: row.players });
   }
-
   return grouped;
 }
 
@@ -489,28 +332,33 @@ async function apiGetFirstBasket(gameId) {
   if (IS_SANDBOX) return [];
   const r = await fetch(`${API_BASE}/api/wnba/first-basket?gameId=${gameId}`);
   if (!r.ok) return [];
-  const d = await r.json();
-  return d.data || [];
+  return (await r.json()).data || [];
 }
 
 // ============================================================
-// COMPONENTS
+// UI COMPONENTS
 // ============================================================
 
-// ---- Pill badge ----
+// ---- Badge ----
 function Badge({ children, color }) {
   return (
-    <span style={{
-      background: color || T.card3,
-      color: T.text,
-      fontFamily: T.font,
-      fontSize: 10,
-      fontWeight: 700,
-      padding: '2px 6px',
-      borderRadius: 4,
-      letterSpacing: 1,
-    }}>
+    <span style={{ background: color || T.card3, color: T.text, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4, letterSpacing: 0.4, whiteSpace: 'nowrap' }}>
       {children}
+    </span>
+  );
+}
+
+// ---- Status badge ----
+function StatusBadge({ status }) {
+  if (!status) return null;
+  const s       = String(status).toUpperCase();
+  const isLive  = s.includes('LIVE') || s.startsWith('Q') || s.includes('HT');
+  const isFinal = s === 'FINAL' || s.includes('FINAL');
+  const bg    = isLive ? T.green  : isFinal ? T.card3  : T.card2;
+  const color = isLive ? '#071a0e': isFinal ? T.text3  : T.text2;
+  return (
+    <span style={{ background: bg, color, fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 20, letterSpacing: isLive ? 0.3 : 0.4, border: isFinal ? `1px solid ${T.border}` : 'none', whiteSpace: 'nowrap' }}>
+      {isLive ? '● LIVE' : status}
     </span>
   );
 }
@@ -518,27 +366,11 @@ function Badge({ children, color }) {
 // ---- Form dots ----
 function FormDots({ form }) {
   const games = Array.isArray(form) ? form : [];
-  if (!games.length) {
-    return (
-      <span style={{
-        fontFamily:T.font,
-        fontSize:10,
-        color:T.text3,
-        letterSpacing:1,
-      }}>
-        NO FORM
-      </span>
-    );
-  }
-
+  if (!games.length) return <span style={{ fontSize: 10, color: T.text3 }}>—</span>;
   return (
-    <span style={{ display:'inline-flex', gap:3 }}>
+    <span style={{ display: 'inline-flex', gap: 3 }}>
       {games.map((r, i) => (
-        <span key={i} style={{
-          width:14, height:14, borderRadius:'50%',
-          background: r==='W' ? T.green : T.red,
-          display:'inline-block',
-        }} title={r} />
+        <span key={i} style={{ width: 7, height: 7, borderRadius: '50%', background: r === 'W' ? T.green : T.red, display: 'inline-block' }} title={r} />
       ))}
     </span>
   );
@@ -546,139 +378,139 @@ function FormDots({ form }) {
 
 // ---- Score gauge ----
 function ScoreGauge({ score }) {
-  const safeScore = Number.isFinite(Number(score)) ? Number(score) : 0;
-  const color = scoreColor(safeScore);
+  const s     = Number.isFinite(Number(score)) ? Number(score) : 0;
+  const color = scoreColor(s);
   return (
-    <div style={{ textAlign:'center' }}>
-      <div style={{
-        fontSize: 28, fontWeight: 700, color, fontFamily: T.font,
-        lineHeight:1,
-      }}>{safeScore}</div>
-      <div style={{ fontSize:9, color, fontFamily:T.font, letterSpacing:1.5, marginTop:2 }}>
-        {scoreLabel(safeScore)}
-      </div>
-      <div style={{
-        height:4, borderRadius:2, background:T.card3, marginTop:6,
-        overflow:'hidden',
-      }}>
-        <div style={{ height:'100%', width:`${safeScore}%`, background:color, borderRadius:2 }} />
+    <div style={{ textAlign: 'center', minWidth: 52 }}>
+      <div style={{ fontSize: 26, fontWeight: 900, color, lineHeight: 1 }}>{s}</div>
+      <div style={{ fontSize: 8, color, letterSpacing: 1.2, marginTop: 2 }}>{scoreLabel(s)}</div>
+      <div style={{ height: 3, borderRadius: 2, background: T.card3, marginTop: 5, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${s}%`, background: color, borderRadius: 2 }} />
       </div>
     </div>
   );
 }
 
+// ---- Confidence bar ----
 function ConfidenceBar({ score }) {
-  const safeScore = Number.isFinite(Number(score)) ? Math.max(0, Math.min(100, Number(score))) : 0;
-  const color = scoreColor(safeScore);
+  const s     = Number.isFinite(Number(score)) ? Math.max(0, Math.min(100, Number(score))) : 0;
+  const color = scoreColor(s);
   return (
-    <div style={{ width:70 }}>
-      <div style={{
-        height:4,
-        borderRadius:2,
-        background:T.card3,
-        overflow:'hidden',
-      }}>
-        <div style={{ height:'100%', width:`${safeScore}%`, background:color }} />
+    <div style={{ width: 62 }}>
+      <div style={{ height: 3, borderRadius: 2, background: T.card3, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${s}%`, background: color }} />
       </div>
-      <div style={{ fontFamily:T.font, fontSize:9, color, fontWeight:700, marginTop:3, textAlign:'right' }}>
-        {fmtOne(safeScore)}
-      </div>
+      <div style={{ fontSize: 9, color, fontWeight: 700, marginTop: 3, textAlign: 'right' }}>{fmtOne(s)}</div>
     </div>
   );
 }
 
-// ---- Slate card ----
-function SlateCard({ game, isSelected, onClick }) {
-  const aw = game.visitor_team?.abbreviation || 'AWAY';
-  const hw = game.home_team?.abbreviation || 'HOME';
-  const venue = TEAM_VENUES[hw] ?? 'TBA';
-  const moneyline = game.home_ml == null && game.away_ml == null
-    ? '—'
-    : `${hw} ${fmtML(game.home_ml)} / ${aw} ${fmtML(game.away_ml)}`;
+// ---- Slate card (redesigned) ----
+function SlateCard({ game, isSelected, onClick, topPick }) {
+  const aw    = game.visitor_team?.abbreviation || 'AWAY';
+  const hw    = game.home_team?.abbreviation    || 'HOME';
+  const venue = TEAM_VENUES[hw] ?? null;
+
+  const spreadLabel = game.spread != null ? fmtGameSpread(hw, game.spread) : '—';
+  const totalLabel  = game.total  != null ? fmtOne(game.total)             : '—';
+  const mlLabel     = (game.home_ml != null || game.away_ml != null)
+    ? `${hw} ${fmtML(game.home_ml)}`
+    : '—';
+
+  const recColor = topPick?.recommendation === 'OVER'  ? T.green
+                 : topPick?.recommendation === 'UNDER' ? T.red
+                 : T.accent;
+
   return (
     <div
       onClick={onClick}
       style={{
-        background: isSelected ? T.card2 : T.card,
-        border: `1px solid ${isSelected ? T.blue : T.border}`,
-        borderRadius:8, padding:'12px 14px', marginBottom:8,
-        cursor:'pointer', transition:'all 0.15s',
-        boxShadow: isSelected ? `0 0 0 2px ${T.blue}44` : 'none',
+        background:   isSelected ? T.card2 : T.card,
+        border:       `1px solid ${isSelected ? T.accent : T.border}`,
+        borderRadius: isSelected ? '12px 12px 0 0' : 12,
+        padding:      '14px 16px 12px',
+        marginBottom: isSelected ? 0 : 10,
+        cursor:       'pointer',
+        transition:   'border-color 0.15s, background 0.15s',
+        boxShadow:    isSelected ? `0 0 0 1px ${T.accentDim}` : 'none',
       }}
     >
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <div style={{ fontFamily:T.font, fontSize:15, fontWeight:700, color:T.text }}>
-          {aw} <span style={{ color:T.text3, fontWeight:400 }}>@</span> {hw}
+      {/* Row 1: matchup + status */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: T.text, letterSpacing: -0.3 }}>
+            {aw} <span style={{ color: T.text3, fontWeight: 400 }}>@</span> {hw}
+          </div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>
+            {game.visitor_record && game.home_record
+              ? `${game.visitor_record}  ·  ${game.home_record}`
+              : venue}
+          </div>
         </div>
-        <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, textTransform:'uppercase' }}>{game.status}</div>
-      </div>
-      <div style={{ fontFamily:T.font, fontSize:11, color:T.text2, marginTop:6 }}>
-        {venue} <span style={{ color:T.text3 }}>·</span> {fmtDate(game.game_date || game.date)}
+        <StatusBadge status={game.status} />
       </div>
 
-      <div style={{ height:1, background:T.border, margin:'10px 0 9px' }} />
+      {/* Venue + date */}
+      {venue && (
+        <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>
+          {venue}  ·  {fmtDate(game.game_date || game.date)}
+        </div>
+      )}
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 0.8fr 1.7fr', gap:10 }}>
+      {/* Odds row */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 10 }}>
         {[
-          { label:'SPREAD', value:fmtGameSpread(hw, game.spread) },
-          { label:'O/U', value:game.total == null ? '—' : fmtOne(game.total) },
-          { label:'ML', value:moneyline },
-        ].map(item => (
-          <div key={item.label} style={{ minWidth:0 }}>
-            <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, letterSpacing:0.6 }}>{item.label}</div>
-            <div style={{
-              fontFamily:T.font, fontSize:12, color:T.text, fontWeight:700,
-              marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-            }}>
-              {item.value}
-            </div>
+          { label: 'SPR', value: spreadLabel },
+          { label: 'O/U', value: totalLabel  },
+          { label: 'ML',  value: mlLabel     },
+        ].map(({ label, value }) => (
+          <div key={label} style={{ background: T.card3, borderRadius: 8, padding: '7px 8px', textAlign: 'center' }}>
+            <div style={{ fontSize: 8, color: T.text3, letterSpacing: 0.8, marginBottom: 3 }}>{label}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.text, letterSpacing: -0.2 }}>{value}</div>
           </div>
         ))}
       </div>
 
-      {game.odds_sportsbook && (
-        <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, marginTop:8 }}>
-          {game.odds_sportsbook}
+      {/* Top pick footer */}
+      {topPick && (
+        <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 9, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: 10, color: T.text2, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ color: T.accent, fontWeight: 700, marginRight: 4 }}>TOP PICK</span>
+            {playerName(topPick.players || {})}
+            {' · '}
+            {String(topPick.prop_type || '').toUpperCase()}
+            {' '}
+            <span style={{ fontWeight: 700, color: recColor }}>
+              {topPick.recommendation} {fmtOne(topPick.line)}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 800, color: scoreColor(topPick.confidence_score), marginLeft: 10, flexShrink: 0 }}>
+            {Math.round(Number(topPick.confidence_score) || 0)}
+          </div>
         </div>
       )}
+
+      {/* Expand cue */}
+      <div style={{ textAlign: 'right', marginTop: topPick ? 4 : 8 }}>
+        <span style={{ fontSize: 9, color: T.text3 }}>{isSelected ? '▴ COLLAPSE' : '▾ VIEW PROPS'}</span>
+      </div>
     </div>
   );
 }
 
-// ---- Tab bar ----
-function TabBar({ tabs, active, onSelect }) {
-  const labels = {
-    pts: 'POINTS',
-    reb: 'REBOUNDS',
-    ast: 'ASSISTS',
-    pra: 'PRA',
-    stl: 'STEALS',
-    blk: 'BLOCKS',
-    fg3m: '3PM',
-    fb: 'FIRST BASKET',
-  };
-
+// ---- Inner prop tab bar ----
+function GameTabBar({ tabs, active, onSelect }) {
+  const labels = { pts:'PTS', reb:'REB', ast:'AST', pra:'PRA', stl:'STL', blk:'BLK', fg3m:'3PM', fb:'FB' };
   return (
-    <div style={{
-      display:'flex', background:T.card2,
-      borderBottom:`1px solid ${T.border}`,
-      overflowX:'auto',
-    }}>
+    <div style={{ display: 'flex', background: T.card2, borderBottom: `1px solid ${T.border}`, overflowX: 'auto' }}>
       {tabs.map(t => (
-        <button
-          key={t}
-          onClick={() => onSelect(t)}
-          style={{
-            flex:'0 0 auto',
-            background:'none', border:'none',
-            padding:'10px 14px',
-            fontFamily:T.font, fontSize:11, fontWeight:700,
-            color: active===t ? T.blue : T.text3,
-            borderBottom: active===t ? `2px solid ${T.blue}` : '2px solid transparent',
-            cursor:'pointer', letterSpacing:0.5,
-            transition:'color 0.1s',
-          }}
-        >
+        <button key={t} onClick={() => onSelect(t)} style={{
+          flex: '0 0 auto', background: 'none', border: 'none',
+          padding: '10px 13px', fontSize: 11, fontWeight: 700,
+          color: active === t ? T.accent : T.text3,
+          borderBottom: active === t ? `2px solid ${T.accent}` : '2px solid transparent',
+          cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
+        }}>
           {labels[t] || t.toUpperCase()}
         </button>
       ))}
@@ -686,83 +518,63 @@ function TabBar({ tabs, active, onSelect }) {
   );
 }
 
-// ---- OVERVIEW TAB ----
+// ---- Overview tab ----
 function OverviewTab({ game, odds }) {
   const aw = game.visitor_team;
   const hw = game.home_team;
 
   return (
-    <div style={{ padding:16 }}>
-      {/* Matchup header */}
-      <div style={{
-        background:T.card2, borderRadius:8, padding:14, marginBottom:12,
-        border:`1px solid ${T.border}`,
-      }}>
-        <div style={{
-          display:'grid', gridTemplateColumns:'1fr auto 1fr',
-          gap:8, alignItems:'center', textAlign:'center',
-        }}>
+    <div style={{ padding: 16 }}>
+      <div style={{ background: T.card2, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${T.border}` }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 8, alignItems: 'center', textAlign: 'center' }}>
           <div>
-            <div style={{ fontFamily:T.font, fontSize:18, fontWeight:700, color:T.text }}>{aw.abbreviation}</div>
-            <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, marginTop:2 }}>{aw.name}</div>
-            <div style={{ fontFamily:T.font, fontSize:11, color:T.text2, marginTop:4 }}>{game.visitor_record}</div>
-            <div style={{ marginTop:6 }}><FormDots form={game.visitor_form} /></div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: T.text }}>{aw.abbreviation}</div>
+            <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{aw.name}</div>
+            <div style={{ fontSize: 11, color: T.text2, marginTop: 3 }}>{game.visitor_record}</div>
+            <div style={{ marginTop: 5 }}><FormDots form={game.visitor_form} /></div>
           </div>
-          <div style={{ fontFamily:T.font, fontSize:12, color:T.text3 }}>
+          <div style={{ fontSize: 13, color: T.text3 }}>
             <div>@</div>
-            <div style={{ marginTop:4, fontSize:10 }}>{game.status}</div>
+            <div style={{ marginTop: 4, fontSize: 10 }}>{game.status}</div>
           </div>
           <div>
-            <div style={{ fontFamily:T.font, fontSize:18, fontWeight:700, color:T.text }}>{hw.abbreviation}</div>
-            <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, marginTop:2 }}>{hw.name}</div>
-            <div style={{ fontFamily:T.font, fontSize:11, color:T.text2, marginTop:4 }}>{game.home_record}</div>
-            <div style={{ marginTop:6 }}><FormDots form={game.home_form} /></div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: T.text }}>{hw.abbreviation}</div>
+            <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{hw.name}</div>
+            <div style={{ fontSize: 11, color: T.text2, marginTop: 3 }}>{game.home_record}</div>
+            <div style={{ marginTop: 5 }}><FormDots form={game.home_form} /></div>
           </div>
         </div>
       </div>
 
-      {/* Odds */}
-      {odds && odds.spread && odds.total && odds.moneyline && (
-        <div style={{ background:T.card2, borderRadius:8, padding:14, border:`1px solid ${T.border}` }}>
-          <div style={{ fontFamily:T.font, fontSize:11, color:T.text3, letterSpacing:1, marginBottom:10 }}>
-            GAME ODDS
-          </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+      {odds && odds.spread && odds.total ? (
+        <div style={{ background: T.card2, borderRadius: 10, padding: 14, border: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>GAME ODDS</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
             {[
               { label:'SPREAD', value:`${aw.abbreviation} ${fmtSpread(odds.spread.away)} / ${hw.abbreviation} ${fmtSpread(odds.spread.home)}` },
-              { label:'TOTAL', value:`O/U ${odds.total.line}` },
-              { label:'ML', value:`${aw.abbreviation} ${fmtOdds(odds.moneyline.away)} / ${hw.abbreviation} ${fmtOdds(odds.moneyline.home)}` },
+              { label:'TOTAL',  value:`O/U ${odds.total.line}` },
+              { label:'ML',     value:`${aw.abbreviation} ${fmtOdds(odds.moneyline.away)} / ${hw.abbreviation} ${fmtOdds(odds.moneyline.home)}` },
             ].map(({ label, value }) => (
-              <div key={label} style={{
-                background:T.card3, borderRadius:6, padding:'10px 8px', textAlign:'center',
-              }}>
-                <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, letterSpacing:1 }}>{label}</div>
-                <div style={{ fontFamily:T.font, fontSize:11, color:T.text, marginTop:4, fontWeight:700 }}>{value}</div>
+              <div key={label} style={{ background: T.card3, borderRadius: 7, padding: '9px 7px', textAlign: 'center' }}>
+                <div style={{ fontSize: 9, color: T.text3, letterSpacing: 0.8 }}>{label}</div>
+                <div style={{ fontSize: 11, color: T.text, marginTop: 3, fontWeight: 700 }}>{value}</div>
               </div>
             ))}
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:8 }}>
-            <div style={{ background:T.card3, borderRadius:6, padding:'8px 10px', textAlign:'center' }}>
-              <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, letterSpacing:1 }}>OVER</div>
-              <div style={{ fontFamily:T.font, fontSize:12, color:T.green, fontWeight:700, marginTop:2 }}>
-                {fmtOdds(odds.total.overOdds)}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+            {[
+              { label:'OVER',  value: fmtOdds(odds.total.overOdds),  color: T.green },
+              { label:'UNDER', value: fmtOdds(odds.total.underOdds), color: T.red   },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{ background: T.card3, borderRadius: 7, padding: '8px 10px', textAlign: 'center' }}>
+                <div style={{ fontSize: 9, color: T.text3, letterSpacing: 0.8 }}>{label}</div>
+                <div style={{ fontSize: 14, color, fontWeight: 800, marginTop: 2 }}>{value}</div>
               </div>
-            </div>
-            <div style={{ background:T.card3, borderRadius:6, padding:'8px 10px', textAlign:'center' }}>
-              <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, letterSpacing:1 }}>UNDER</div>
-              <div style={{ fontFamily:T.font, fontSize:12, color:T.red, fontWeight:700, marginTop:2 }}>
-                {fmtOdds(odds.total.underOdds)}
-              </div>
-            </div>
+            ))}
           </div>
         </div>
-      )}
-
-      {!odds && (
-        <div style={{
-          background:T.card2, borderRadius:8, padding:14, border:`1px solid ${T.border}`,
-          fontFamily:T.font, fontSize:12, color:T.text3, textAlign:'center',
-        }}>
+      ) : (
+        <div style={{ background: T.card2, borderRadius: 10, padding: 14, border: `1px solid ${T.border}`, fontSize: 12, color: T.text3, textAlign: 'center' }}>
           Odds unavailable
         </div>
       )}
@@ -770,97 +582,91 @@ function OverviewTab({ game, odds }) {
   );
 }
 
-// ---- PLAYER DRAWER ----
+// ---- Player drawer ----
 function PlayerDrawer({ player, logs }) {
   return (
-    <div style={{
-      background:T.bg, border:`1px solid ${T.border}`, borderRadius:6,
-      padding:10, margin:'4px 0 8px',
-    }}>
-      <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, letterSpacing:1, marginBottom:6 }}>
-        LAST 5 GAMES
-      </div>
-      <div style={{
-        display:'grid',
-        gridTemplateColumns:'auto 1fr 1fr 1fr',
-        gap:'4px 8px',
-        fontSize:11, fontFamily:T.font,
-      }}>
-        <span style={{ color:T.text3 }}>DATE</span>
-        <span style={{ color:T.text3, textAlign:'right' }}>PTS</span>
-        <span style={{ color:T.text3, textAlign:'right' }}>REB</span>
-        <span style={{ color:T.text3, textAlign:'right' }}>AST</span>
+    <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, padding: 10, margin: '4px 0 8px' }}>
+      <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 6 }}>LAST 5 GAMES</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr', gap: '4px 8px', fontSize: 11 }}>
+        <span style={{ color: T.text3 }}>DATE</span>
+        <span style={{ color: T.text3, textAlign: 'right' }}>PTS</span>
+        <span style={{ color: T.text3, textAlign: 'right' }}>REB</span>
+        <span style={{ color: T.text3, textAlign: 'right' }}>AST</span>
         {logs.map((g, i) => (
           <>
-            <span key={`d${i}`} style={{ color:T.text2 }}>{g.date}</span>
-            <span key={`p${i}`} style={{ color:T.text, textAlign:'right', fontWeight:700 }}>{g.pts}</span>
-            <span key={`r${i}`} style={{ color:T.text, textAlign:'right' }}>{g.reb}</span>
-            <span key={`a${i}`} style={{ color:T.text, textAlign:'right' }}>{g.ast}</span>
+            <span key={`d${i}`} style={{ color: T.text2 }}>{g.date}</span>
+            <span key={`p${i}`} style={{ color: T.text,  textAlign: 'right', fontWeight: 700 }}>{g.pts}</span>
+            <span key={`r${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.reb}</span>
+            <span key={`a${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.ast}</span>
           </>
         ))}
       </div>
-      <div style={{
-        marginTop:8, fontFamily:T.font, fontSize:10, color:T.text3,
-        borderTop:`1px solid ${T.border}`, paddingTop:6,
-      }}>
-        <span style={{ marginRight:12 }}>Role: {player.starter ? 'Starter' : 'Bench'}</span>
+      <div style={{ marginTop: 8, fontSize: 10, color: T.text3, borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>
+        <span style={{ marginRight: 12 }}>Role: {player.starter ? 'Starter' : 'Bench'}</span>
         <span>Usage: {calcUsageRate(player.fga, player.fta, player.tov, player.mpg).toFixed(2)}/min</span>
       </div>
     </div>
   );
 }
 
-// ---- LINEUP TAB ----
+// ---- Team toggle button pair ----
+function TeamToggle({ game, side, setSide }) {
+  return (
+    <div style={{ display: 'flex', padding: '12px 16px 8px', borderBottom: `1px solid ${T.border}` }}>
+      {[
+        { key:'away', label:`${game.visitor_team.abbreviation} (Away)` },
+        { key:'home', label:`${game.home_team.abbreviation} (Home)` },
+      ].map(({ key, label }) => (
+        <button key={key} onClick={() => setSide(key)} style={{
+          flex: 1, padding: '7px 0',
+          background: side === key ? T.accent : T.card3,
+          color: side === key ? '#fff' : T.text2,
+          border: 'none', cursor: 'pointer',
+          fontSize: 11, fontWeight: 700,
+          borderRadius: key === 'away' ? '6px 0 0 6px' : '0 6px 6px 0',
+        }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---- Lineup tab ----
 function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
   const [side, setSide] = useState('away');
-
-  const awayId = game.visitor_team.id;
-  const homeId = game.home_team.id;
-  const players = side === 'away'
-    ? (allPlayers[awayId] || [])
-    : (allPlayers[homeId] || []);
+  const awayId   = game.visitor_team.id;
+  const homeId   = game.home_team.id;
+  const players  = side === 'away' ? (allPlayers[awayId] || []) : (allPlayers[homeId] || []);
   const starters = players.filter(p => p.starter);
   const bench    = players.filter(p => !p.starter);
 
   function renderGroup(label, group) {
     return (
       <>
-        <div style={{
-          fontFamily:T.font, fontSize:10, color:T.text3,
-          letterSpacing:1, padding:'8px 16px 4px',
-        }}>
-          {label}
-        </div>
+        <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, padding: '8px 16px 4px' }}>{label}</div>
         {group.map(p => (
           <div key={p.id}>
             <div
               onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
               style={{
-                display:'grid',
-                gridTemplateColumns:'18px 1fr 40px 40px 40px 40px',
-                gap:4, alignItems:'center',
-                padding:'10px 16px',
-                borderBottom:`1px solid ${T.border}`,
-                cursor:'pointer',
-                background: expandedId===p.id ? T.card2 : 'transparent',
+                display: 'grid', gridTemplateColumns: '18px 1fr 40px 40px 40px 40px',
+                gap: 4, alignItems: 'center', padding: '10px 16px',
+                borderBottom: `1px solid ${T.border}`, cursor: 'pointer',
+                background: expandedId === p.id ? T.card2 : 'transparent',
               }}
             >
-              <span style={{ fontFamily:T.font, fontSize:10, color:T.text3 }}>{playerPos(p)}</span>
-              <span style={{ fontFamily:T.font, fontSize:13, color:T.text, fontWeight:600 }}>{playerName(p)}</span>
-              {[
-                { v:fmtOne(p.ppg), l:'PPG' },
-                { v:fmtOne(p.rpg), l:'RPG' },
-                { v:fmtOne(p.apg), l:'APG' },
-                { v:fmtOne(p.mpg), l:'MPG' },
-              ].map(({ v, l }) => (
-                <div key={l} style={{ textAlign:'right' }}>
-                  <div style={{ fontFamily:T.font, fontSize:12, color:T.text, fontWeight:700 }}>{v}</div>
-                  <div style={{ fontFamily:T.font, fontSize:8, color:T.text3 }}>{l}</div>
+              <span style={{ fontSize: 10, color: T.text3 }}>{playerPos(p)}</span>
+              <span style={{ fontSize: 13, color: T.text,  fontWeight: 600 }}>{playerName(p)}</span>
+              {[{v:fmtOne(p.ppg),l:'PPG'},{v:fmtOne(p.rpg),l:'RPG'},{v:fmtOne(p.apg),l:'APG'},{v:fmtOne(p.mpg),l:'MPG'}].map(({ v, l }) => (
+                <div key={l} style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 12, color: T.text, fontWeight: 700 }}>{v}</div>
+                  <div style={{ fontSize: 8,  color: T.text3 }}>{l}</div>
                 </div>
               ))}
             </div>
             {expandedId === p.id && (
-              <div style={{ padding:'0 16px' }}>
+              <div style={{ padding: '0 16px' }}>
                 <PlayerDrawer player={p} logs={gameLogs[p.id] || []} />
               </div>
             )}
@@ -872,123 +678,51 @@ function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
 
   return (
     <div>
-      {/* Team toggle */}
-      <div style={{
-        display:'flex', gap:0, padding:'12px 16px 8px',
-        borderBottom:`1px solid ${T.border}`,
-      }}>
-        {[
-          { key:'away', label:`${game.visitor_team.abbreviation} (Away)` },
-          { key:'home', label:`${game.home_team.abbreviation} (Home)` },
-        ].map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setSide(key)}
-            style={{
-              flex:1, padding:'7px 0',
-              background: side===key ? T.blue : T.card3,
-              color: T.text,
-              border:'none', cursor:'pointer',
-              fontFamily:T.font, fontSize:11, fontWeight:700,
-              borderRadius: key==='away' ? '6px 0 0 6px' : '0 6px 6px 0',
-              letterSpacing:0.5,
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Column headers */}
-      <div style={{
-        display:'grid', gridTemplateColumns:'18px 1fr 40px 40px 40px 40px',
-        gap:4, padding:'6px 16px',
-        borderBottom:`1px solid ${T.border}`,
-      }}>
+      <TeamToggle game={game} side={side} setSide={setSide} />
+      <div style={{ display: 'grid', gridTemplateColumns: '18px 1fr 40px 40px 40px 40px', gap: 4, padding: '6px 16px', borderBottom: `1px solid ${T.border}` }}>
         {['','PLAYER','PPG','RPG','APG','MPG'].map(h => (
-          <div key={h} style={{ fontFamily:T.font, fontSize:9, color:T.text3, textAlign: h===''||h==='PLAYER' ? 'left' : 'right', letterSpacing:0.5 }}>
-            {h}
-          </div>
+          <div key={h} style={{ fontSize: 9, color: T.text3, textAlign: (h===''||h==='PLAYER') ? 'left' : 'right', letterSpacing: 0.5 }}>{h}</div>
         ))}
       </div>
-
       {renderGroup('STARTERS', starters)}
       {bench.length > 0 && renderGroup('BENCH', bench)}
     </div>
   );
 }
 
-// ---- MATCHUP TAB ----
+// ---- Matchup tab ----
 function MatchupTab({ game, allPlayers, matchups, gameLogs, intel }) {
   const [side, setSide] = useState('away');
-
-  const awayId = game.visitor_team.id;
-  const homeId = game.home_team.id;
-  const players = side === 'away'
-    ? (allPlayers[awayId] || [])
-    : (allPlayers[homeId] || []);
+  const awayId  = game.visitor_team.id;
+  const homeId  = game.home_team.id;
+  const players = side === 'away' ? (allPlayers[awayId] || []) : (allPlayers[homeId] || []);
 
   return (
     <div>
-      <div style={{ display:'flex', gap:0, padding:'12px 16px 8px', borderBottom:`1px solid ${T.border}` }}>
-        {[
-          { key:'away', label:`${game.visitor_team.abbreviation} (Away)` },
-          { key:'home', label:`${game.home_team.abbreviation} (Home)` },
-        ].map(({ key, label }) => (
-          <button key={key} onClick={() => setSide(key)} style={{
-            flex:1, padding:'7px 0',
-            background: side===key ? T.blue : T.card3,
-            color: T.text, border:'none', cursor:'pointer',
-            fontFamily:T.font, fontSize:11, fontWeight:700,
-            borderRadius: key==='away' ? '6px 0 0 6px' : '0 6px 6px 0',
-          }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ padding:'0 0 16px' }}>
+      <TeamToggle game={game} side={side} setSide={setSide} />
+      <div style={{ padding: '0 0 16px' }}>
         {players.map(p => {
-          const mu = matchups[p.id];
-          const logs = gameLogs[p.id] || [];
+          const mu    = matchups[p.id];
+          const logs  = gameLogs[p.id] || [];
           const score = calcMatchupScore(p, mu, intel, logs);
           const color = scoreColor(score);
           return (
-            <div key={p.id} style={{
-              padding:'12px 16px',
-              borderBottom:`1px solid ${T.border}`,
-            }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                    <span style={{ fontFamily:T.font, fontSize:13, fontWeight:700, color:T.text }}>{playerName(p)}</span>
+            <div key={p.id} style={{ padding: '12px 16px', borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{playerName(p)}</span>
                     <Badge>{playerPos(p)}</Badge>
                     {!p.starter && <Badge color={T.card3}>BENCH</Badge>}
                   </div>
-                  {mu && (
-                    <div style={{ fontFamily:T.font, fontSize:11, color:T.text2, marginTop:4 }}>
-                      vs {mu.defender} — {mu.role}
-                    </div>
-                  )}
-                  <div style={{ display:'flex', gap:12, marginTop:6 }}>
-                    <span style={{ fontFamily:T.font, fontSize:10, color:T.text3 }}>
-                      DEF RTG: <span style={{ color: mu ? scoreColor(mu.defenderRating) : T.text3, fontWeight:700 }}>
-                        {mu ? mu.defenderRating : '—'}
-                      </span>
-                    </span>
-                    <span style={{ fontFamily:T.font, fontSize:10, color:T.text3 }}>
-                      USG: <span style={{ color:T.text2, fontWeight:700 }}>
-                        {calcUsageRate(p.fga, p.fta, p.tov, p.mpg).toFixed(2)}
-                      </span>
-                    </span>
-                    <span style={{ fontFamily:T.font, fontSize:10, color:T.text3 }}>
-                      MPG: <span style={{ color: Number(p.mpg || 0) >= 20 ? T.text2 : T.red, fontWeight:700 }}>
-                        {fmtOne(p.mpg)}
-                      </span>
-                    </span>
+                  {mu && <div style={{ fontSize: 11, color: T.text2, marginTop: 4 }}>vs {mu.defender} — {mu.role}</div>}
+                  <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
+                    <span style={{ fontSize: 10, color: T.text3 }}>DEF RTG: <span style={{ color: mu ? scoreColor(mu.defenderRating) : T.text3, fontWeight: 700 }}>{mu ? mu.defenderRating : '—'}</span></span>
+                    <span style={{ fontSize: 10, color: T.text3 }}>USG: <span style={{ color: T.text2, fontWeight: 700 }}>{calcUsageRate(p.fga, p.fta, p.tov, p.mpg).toFixed(2)}</span></span>
+                    <span style={{ fontSize: 10, color: T.text3 }}>MPG: <span style={{ color: Number(p.mpg||0) >= 20 ? T.text2 : T.red, fontWeight: 700 }}>{fmtOne(p.mpg)}</span></span>
                   </div>
                 </div>
-                <div style={{ minWidth:64, textAlign:'center', marginLeft:12 }}>
+                <div style={{ minWidth: 60, textAlign: 'center', marginLeft: 12 }}>
                   <ScoreGauge score={score} />
                 </div>
               </div>
@@ -1000,288 +734,163 @@ function MatchupTab({ game, allPlayers, matchups, gameLogs, intel }) {
   );
 }
 
-// ---- INTEL TAB ----
+// ---- Intel tab ----
 function IntelTab({ game, intel }) {
   if (!intel) return (
-    <div style={{ padding:24, textAlign:'center', fontFamily:T.font, fontSize:12, color:T.text3 }}>
-      Intel unavailable
-    </div>
+    <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: T.text3 }}>Intel unavailable</div>
   );
-
   const aw = game.visitor_team;
   const hw = game.home_team;
 
-  function ATSRow({ label, ats }) {
-    return (
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:6 }}>
-        <span style={{ fontFamily:T.font, fontSize:11, color:T.text2, minWidth:40 }}>{label}</span>
-        {ats.map((r, i) => (
-          <span key={i} style={{
-            fontFamily:T.font, fontSize:11, fontWeight:700,
-            color: r==='W' ? T.green : T.red, width:18, textAlign:'center',
-          }}>{r}</span>
-        ))}
-      </div>
-    );
-  }
-
-  function OURow({ label, ou }) {
-    return (
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:6 }}>
-        <span style={{ fontFamily:T.font, fontSize:11, color:T.text2, minWidth:40 }}>{label}</span>
-        {ou.map((r, i) => (
-          <span key={i} style={{
-            fontFamily:T.font, fontSize:11, fontWeight:700,
-            color: r==='O' ? T.green : T.yellow, width:18, textAlign:'center',
-          }}>{r}</span>
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div style={{ padding:16 }}>
+    <div style={{ padding: 16 }}>
       {/* Pace */}
-      <div style={{ background:T.card2, borderRadius:8, padding:14, marginBottom:12, border:`1px solid ${T.border}` }}>
-        <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, letterSpacing:1, marginBottom:10 }}>PACE</div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, textAlign:'center' }}>
-          {[
-            { l:aw.abbreviation, v:intel.visitorPace },
-            { l:'AVG',           v:intel.avgPace },
-            { l:hw.abbreviation, v:intel.homePace },
-          ].map(({ l, v }) => (
-            <div key={l} style={{ background:T.card3, borderRadius:6, padding:'8px 4px' }}>
-              <div style={{ fontFamily:T.font, fontSize:9, color:T.text3 }}>{l}</div>
-              <div style={{ fontFamily:T.font, fontSize:16, fontWeight:700, color:T.text, marginTop:2 }}>
-                {fmtOne(v)}
-              </div>
-              <div style={{ fontFamily:T.font, fontSize:8, color:T.text3 }}>POSS/G</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Home/Away Splits */}
-      <div style={{ background:T.card2, borderRadius:8, padding:14, marginBottom:12, border:`1px solid ${T.border}` }}>
-        <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, letterSpacing:1, marginBottom:10 }}>HOME/AWAY SPLITS (PPG)</div>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-          {[
-            { label:`${aw.abbreviation} Away`, v: intel.visitorPPG?.away },
-            { label:`${aw.abbreviation} Home`, v: intel.visitorPPG?.home },
-            { label:`${hw.abbreviation} Home`, v: intel.homePPG?.home },
-            { label:`${hw.abbreviation} Away`, v: intel.homePPG?.away },
-          ].map(({ label, v }) => (
-            <div key={label} style={{ background:T.card3, borderRadius:6, padding:'8px 10px' }}>
-              <div style={{ fontFamily:T.font, fontSize:9, color:T.text3 }}>{label}</div>
-              <div style={{ fontFamily:T.font, fontSize:14, fontWeight:700, color:T.text, marginTop:2 }}>{v ?? '—'}</div>
+      <div style={{ background: T.card2, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>PACE</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, textAlign: 'center' }}>
+          {[{l:aw.abbreviation,v:intel.visitorPace},{l:'AVG',v:intel.avgPace},{l:hw.abbreviation,v:intel.homePace}].map(({l,v}) => (
+            <div key={l} style={{ background: T.card3, borderRadius: 7, padding: '8px 4px' }}>
+              <div style={{ fontSize: 9, color: T.text3 }}>{l}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: T.text, marginTop: 2 }}>{fmtOne(v)}</div>
+              <div style={{ fontSize: 8,  color: T.text3 }}>POSS/G</div>
             </div>
           ))}
         </div>
       </div>
 
       {/* ATS / O-U */}
-      <div style={{ background:T.card2, borderRadius:8, padding:14, marginBottom:12, border:`1px solid ${T.border}` }}>
-        <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, letterSpacing:1, marginBottom:6 }}>LAST 5 ATS</div>
-        <ATSRow label={aw.abbreviation} ats={intel.visitorATS} />
-        <ATSRow label={hw.abbreviation} ats={intel.homeATS} />
-        <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, letterSpacing:1, margin:'12px 0 6px' }}>LAST 5 O/U</div>
-        <OURow label={aw.abbreviation} ou={intel.visitorOU} />
-        <OURow label={hw.abbreviation} ou={intel.homeOU} />
-      </div>
-
-      {/* H2H */}
-      <div style={{ background:T.card2, borderRadius:8, padding:14, border:`1px solid ${T.border}` }}>
-        <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, letterSpacing:1, marginBottom:10 }}>HEAD TO HEAD</div>
-        {game.head_to_head.map((g, i) => (
-          <div key={i} style={{
-            display:'flex', justifyContent:'space-between',
-            padding:'6px 0', borderBottom: i < game.head_to_head.length-1 ? `1px solid ${T.border}` : 'none',
-          }}>
-            <span style={{ fontFamily:T.font, fontSize:11, color:T.text2 }}>{g.date}</span>
-            <span style={{ fontFamily:T.font, fontSize:11, color:T.text3 }}>{g.home} vs {g.away}</span>
-            <span style={{ fontFamily:T.font, fontSize:11, color:T.text, fontWeight:700 }}>{g.score}</span>
+      <div style={{ background: T.card2, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 6 }}>LAST 5 ATS</div>
+        {[{label:aw.abbreviation,ats:intel.visitorATS},{label:hw.abbreviation,ats:intel.homeATS}].map(({label,ats}) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+            <span style={{ fontSize: 11, color: T.text2, minWidth: 36 }}>{label}</span>
+            {(ats||[]).map((r,i) => (
+              <span key={i} style={{ fontSize: 11, fontWeight: 700, color: r==='W' ? T.green : T.red, width: 16, textAlign: 'center' }}>{r}</span>
+            ))}
+          </div>
+        ))}
+        <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, margin: '12px 0 6px' }}>LAST 5 O/U</div>
+        {[{label:aw.abbreviation,ou:intel.visitorOU},{label:hw.abbreviation,ou:intel.homeOU}].map(({label,ou}) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+            <span style={{ fontSize: 11, color: T.text2, minWidth: 36 }}>{label}</span>
+            {(ou||[]).map((r,i) => (
+              <span key={i} style={{ fontSize: 11, fontWeight: 700, color: r==='O' ? T.green : T.yellow, width: 16, textAlign: 'center' }}>{r}</span>
+            ))}
           </div>
         ))}
       </div>
+
+      {/* H2H */}
+      {game.head_to_head?.length > 0 && (
+        <div style={{ background: T.card2, borderRadius: 10, padding: 14, border: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>HEAD TO HEAD</div>
+          {game.head_to_head.map((g, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: i < game.head_to_head.length - 1 ? `1px solid ${T.border}` : 'none' }}>
+              <span style={{ fontSize: 11, color: T.text2 }}>{g.date}</span>
+              <span style={{ fontSize: 11, color: T.text3 }}>{g.home} vs {g.away}</span>
+              <span style={{ fontSize: 11, color: T.text,  fontWeight: 700 }}>{g.score}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-// ---- PROPS TAB ----
+// ---- Props tab ----
 function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
   const awayId = game.visitor_team.id;
   const homeId = game.home_team.id;
-  const allP = [...(allPlayers[awayId] || []), ...(allPlayers[homeId] || [])];
+  const allP   = [...(allPlayers[awayId] || []), ...(allPlayers[homeId] || [])];
   const playersById = new Map(allP.map(p => [String(p.id), p]));
   const propPlayerIds = Object.keys(props || {});
   const playersWithProps = propPlayerIds.map(id => {
     const firstProp = props[id]?.[0] || {};
-    return playersById.get(String(id)) || {
-      id,
-      team_id: null,
-      name: firstProp.player?.full_name,
-      full_name: firstProp.player?.full_name,
-      position: firstProp.player?.position,
-    };
+    return playersById.get(String(id)) || { id, team_id: null, name: firstProp.player?.full_name, full_name: firstProp.player?.full_name, position: firstProp.player?.position };
   });
 
-  if (playersWithProps.length === 0) {
-    return (
-      <div style={{ padding:24, textAlign:'center', fontFamily:T.font, fontSize:12, color:T.text3 }}>
-        No props available
-      </div>
-    );
-  }
+  if (!playersWithProps.length) return (
+    <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: T.text3 }}>No props available</div>
+  );
 
   return (
-    <div style={{ padding:'8px 0 16px' }}>
+    <div style={{ padding: '8px 0 16px' }}>
       {playersWithProps.map(p => {
-        const mu   = matchups[p.id];
-        const logs = gameLogs[p.id] || [];
-        const pLines = props[p.id] || [];
-        const topConfidence = pLines.reduce((best, prop) => {
-          const value = Number(prop.confidence_score ?? prop.confidence ?? 0);
-          return value > best ? value : best;
-        }, 0);
-        const score = IS_SANDBOX ? calcMatchupScore(p, mu, intel, logs) : topConfidence;
-        const color = scoreColor(score);
-        const teamAbbr = p.team_id === awayId
-          ? game.visitor_team.abbreviation
-          : p.team_id === homeId
-            ? game.home_team.abbreviation
-            : 'WNBA';
+        const mu      = matchups[p.id];
+        const logs    = gameLogs[p.id] || [];
+        const pLines  = props[p.id] || [];
+        const topConf = pLines.reduce((best, prop) => Math.max(best, Number(prop.confidence_score ?? 0)), 0);
+        const score   = IS_SANDBOX ? calcMatchupScore(p, mu, intel, logs) : topConf;
+        const color   = scoreColor(score);
+        const teamAbbr = p.team_id === awayId ? game.visitor_team.abbreviation
+                       : p.team_id === homeId  ? game.home_team.abbreviation
+                       : 'WNBA';
 
         return (
-          <div key={p.id} style={{
-            margin:'0 16px 12px',
-            background:T.card2,
-            border:`1px solid ${color}44`,
-            borderRadius:8, overflow:'hidden',
-          }}>
+          <div key={p.id} style={{ margin: '0 16px 12px', background: T.card2, border: `1px solid ${color}33`, borderRadius: 10, overflow: 'hidden' }}>
             {/* Player header */}
-            <div style={{
-              display:'flex', justifyContent:'space-between', alignItems:'center',
-              padding:'10px 12px',
-              background:T.card3,
-              borderBottom:`1px solid ${T.border}`,
-            }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: T.card3, borderBottom: `1px solid ${T.border}` }}>
               <div>
-                <div style={{ fontFamily:T.font, fontSize:13, fontWeight:700, color:T.text }}>{playerName(p)}</div>
-                <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, marginTop:2 }}>
-                  {teamAbbr} · {playerPos(p)} · {fmtOne(p.mpg)}mpg
-                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{playerName(p)}</div>
+                <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{teamAbbr} · {playerPos(p)} · {fmtOne(p.mpg)} mpg</div>
               </div>
               <ScoreGauge score={score} />
             </div>
 
             {/* Prop lines */}
-            <div style={{ padding:'8px 12px 10px' }}>
+            <div style={{ padding: '8px 12px 10px' }}>
               {pLines.map((prop, i) => {
-                // Recent hit rate vs line
-                const statKey = prop.type === 'PTS' ? 'pts' : prop.type === 'REB' ? 'reb' : 'ast';
-                const hits = logs.filter(g => g[statKey] > prop.line).length;
-                const hitRate = logs.length > 0 ? Math.round((hits / logs.length) * 100) : null;
                 const propScore = Number(prop.confidence_score ?? prop.confidence ?? score);
                 const propColor = scoreColor(propScore);
-                const recommendation = prop.recommendation || 'PASS';
-                const factors = Array.isArray(prop.key_factors) ? prop.key_factors : [];
-                const risks = Array.isArray(prop.risk_flags) ? prop.risk_flags : [];
+                const rec       = prop.recommendation || 'PASS';
+                const recBg     = rec === 'OVER'  ? T.greenDim : rec === 'UNDER' ? T.redDim : T.card3;
+                const recFg     = rec === 'OVER'  ? T.green    : rec === 'UNDER' ? T.red    : T.text3;
+                const factors   = Array.isArray(prop.key_factors) ? prop.key_factors : [];
+                const risks     = Array.isArray(prop.risk_flags)  ? prop.risk_flags  : [];
+                const type      = String(prop.type || prop.prop_type || '').toUpperCase();
 
                 return (
-                  <div key={prop.id || i} style={{
-                    padding:'7px 0',
-                    borderBottom: i < pLines.length-1 ? `1px solid ${T.border}` : 'none',
-                  }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                      <div style={{ display:'flex', gap:8, alignItems:'center', minWidth:0 }}>
-                        <Badge color={T.card3}>{prop.type}</Badge>
-                        <span style={{ fontFamily:T.font, fontSize:13, fontWeight:700, color:T.text }}>
-                          {fmtOne(prop.line)}
-                        </span>
-                        <span style={{ fontFamily:T.font, fontSize:10, color:T.text3 }}>line</span>
+                  <div key={prop.id || i} style={{ padding: '7px 0', borderBottom: i < pLines.length - 1 ? `1px solid ${T.border}` : 'none' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+                        <Badge color={T.card3}>{type}</Badge>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: T.text }}>{fmtOne(prop.line)}</span>
+                        <span style={{ fontSize: 10, color: T.text3 }}>line</span>
                       </div>
-                      <div style={{ display:'flex', gap:8, alignItems:'center', flexShrink:0 }}>
-                        <Badge color={recommendation === 'OVER' ? T.green : recommendation === 'UNDER' ? T.red : T.card3}>
-                          {recommendation}
-                        </Badge>
-                        <span style={{
-                          fontFamily:T.font, fontSize:10, fontWeight:700,
-                          color: propColor, background:`${propColor}22`,
-                          padding:'2px 8px', borderRadius:4,
-                        }}>
-                          {fmtOne(propScore)}
-                        </span>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                        <span style={{ background: recBg, color: recFg, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>{rec}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: propColor, background: `${propColor}1a`, padding: '2px 8px', borderRadius: 4 }}>{fmtOne(propScore)}</span>
                       </div>
                     </div>
 
                     {prop.correlated_opportunity && (
-                      <span style={{
-                        display:'inline-block',
-                        background:'#1a3a2a',
-                        color:T.green,
-                        border:`1px solid ${T.green}`,
-                        borderRadius:4,
-                        fontFamily:T.font,
-                        fontSize:10,
-                        padding:'2px 6px',
-                        marginTop:6,
-                        letterSpacing:'0.03em',
-                      }}>
+                      <span style={{ display: 'inline-block', background: T.greenDim, color: T.green, border: `1px solid ${T.green}`, borderRadius: 4, fontSize: 9, padding: '2px 6px', marginTop: 6, letterSpacing: 0.3 }}>
                         CORRELATED · {String(prop.correlated_props || '').toUpperCase()}
                       </span>
                     )}
 
-                    <div style={{
-                      display:'grid',
-                      gridTemplateColumns:'repeat(4, 1fr)',
-                      gap:6,
-                      marginTop:6,
-                    }}>
-                      {[
-                        { label:'PROJ', value:fmtOne(prop.projection) },
-                        { label:'L5', value:fmtOne(prop.l5_avg) },
-                        { label:'AVG', value:fmtOne(prop.season_avg) },
-                        { label:'GAP', value:fmtOne(prop.value_gap) },
-                      ].map(item => (
-                        <div key={item.label} style={{ background:T.card3, borderRadius:4, padding:'5px 4px', textAlign:'center' }}>
-                          <div style={{ fontFamily:T.font, fontSize:8, color:T.text3 }}>{item.label}</div>
-                          <div style={{ fontFamily:T.font, fontSize:11, color:T.text, fontWeight:700, marginTop:2 }}>{item.value}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginTop: 6 }}>
+                      {[{label:'PROJ',value:fmtOne(prop.projection)},{label:'L5',value:fmtOne(prop.l5_avg)},{label:'AVG',value:fmtOne(prop.season_avg)},{label:'GAP',value:fmtOne(prop.value_gap)}].map(item => (
+                        <div key={item.label} style={{ background: T.card3, borderRadius: 5, padding: '5px 4px', textAlign: 'center' }}>
+                          <div style={{ fontSize: 8,  color: T.text3 }}>{item.label}</div>
+                          <div style={{ fontSize: 11, color: T.text,  fontWeight: 700, marginTop: 2 }}>{item.value}</div>
                         </div>
                       ))}
                     </div>
 
-                    <div style={{ display:'flex', gap:8, alignItems:'center', marginTop:6, flexWrap:'wrap' }}>
-                      {hitRate !== null && IS_SANDBOX && (
-                        <span style={{
-                          fontFamily:T.font, fontSize:11, fontWeight:700,
-                          color: hitRate >= 60 ? T.green : hitRate >= 40 ? T.yellow : T.red,
-                        }}>
-                          {hitRate}% L5
-                        </span>
-                      )}
-                      {factors.slice(0, 2).map(factor => (
-                        <span key={factor} style={{ fontFamily:T.font, fontSize:9, color:T.text2 }}>
-                          {factor}
-                        </span>
-                      ))}
-                      {risks.slice(0, 1).map(risk => (
-                        <span key={risk} style={{ fontFamily:T.font, fontSize:9, color:T.red }}>
-                          {risk}
-                        </span>
-                      ))}
-                    </div>
+                    {(factors.length > 0 || risks.length > 0) && (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                        {factors.slice(0, 2).map(f => <span key={f} style={{ fontSize: 9, color: T.text2 }}>{f}</span>)}
+                        {risks.slice(0, 1).map(r   => <span key={r} style={{ fontSize: 9, color: T.red   }}>{r}</span>)}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
 
-            {/* Matchup note */}
             {mu && (
-              <div style={{
-                padding:'6px 12px',
-                borderTop:`1px solid ${T.border}`,
-                fontFamily:T.font, fontSize:10, color:T.text3,
-              }}>
+              <div style={{ padding: '6px 12px', borderTop: `1px solid ${T.border}`, fontSize: 10, color: T.text3 }}>
                 vs {mu.defender} · DEF {mu.defenderRating} · {mu.role}
               </div>
             )}
@@ -1292,253 +901,155 @@ function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
   );
 }
 
+// ---- GamePropsPanel (inline beneath SlateCard) ----
 function GamePropsPanel({ game, onOpenFull }) {
-  const [activeTab, setActiveTab] = useState('pts');
-  const [props, setProps] = useState([]);
+  const [activeTab, setActiveTab]     = useState('pts');
+  const [props, setProps]             = useState([]);
   const [firstBasket, setFirstBasket] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [fbLoading, setFbLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [fbError, setFbError] = useState(null);
+  const [loading, setLoading]         = useState(true);
+  const [fbLoading, setFbLoading]     = useState(false);
+  const [error, setError]             = useState(null);
+  const [fbError, setFbError]         = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-
-    async function loadProps() {
+    async function load() {
       try {
-        setLoading(true);
-        setError(null);
+        setLoading(true); setError(null);
         const grouped = await apiGetProps(game.id);
-        if (cancelled) return;
-        setProps(Object.values(grouped).flat());
-      } catch (err) {
-        if (!cancelled) {
-          setError('Failed to load props.');
-          setProps([]);
-        }
+        if (!cancelled) setProps(Object.values(grouped).flat());
+      } catch {
+        if (!cancelled) { setError('Failed to load props.'); setProps([]); }
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
-
-    loadProps();
+    load();
     return () => { cancelled = true; };
   }, [game.id]);
 
   useEffect(() => {
     if (activeTab !== 'fb') return undefined;
-
     let cancelled = false;
-
-    async function loadFirstBasket() {
+    async function loadFB() {
       try {
-        setFbLoading(true);
-        setFbError(null);
+        setFbLoading(true); setFbError(null);
         const rows = await apiGetFirstBasket(game.id);
         if (!cancelled) setFirstBasket(rows);
-      } catch (err) {
-        if (!cancelled) {
-          setFbError('Failed to load first basket.');
-          setFirstBasket([]);
-        }
+      } catch {
+        if (!cancelled) { setFbError('Failed to load first basket.'); setFirstBasket([]); }
       } finally {
         if (!cancelled) setFbLoading(false);
       }
     }
-
-    loadFirstBasket();
+    loadFB();
     return () => { cancelled = true; };
   }, [activeTab, game.id]);
 
   const visibleProps = props
-    .filter(prop => String(prop.prop_type || '').toLowerCase() === activeTab)
+    .filter(p => String(p.prop_type || '').toLowerCase() === activeTab)
     .sort((a, b) => Number(b.confidence_score || 0) - Number(a.confidence_score || 0))
     .slice(0, 5);
-  const showFirstBasket = activeTab === 'fb';
+  const showFB = activeTab === 'fb';
 
   return (
     <div style={{
-      margin:'-2px 6px 12px',
-      padding:'0 10px 10px',
-      borderLeft:`1px solid ${T.border}`,
-      borderRight:`1px solid ${T.border}`,
-      borderBottom:`1px solid ${T.border}`,
-      borderBottomLeftRadius:8,
-      borderBottomRightRadius:8,
-      background:T.card,
+      marginBottom: 10,
+      borderLeft:   `1px solid ${T.accent}`,
+      borderRight:  `1px solid ${T.accent}`,
+      borderBottom: `1px solid ${T.accent}`,
+      borderBottomLeftRadius:  10,
+      borderBottomRightRadius: 10,
+      background: T.card,
+      overflow: 'hidden',
     }}>
-      <TabBar tabs={['pts', 'reb', 'ast', 'pra', 'stl', 'blk', 'fg3m', 'fb']} active={activeTab} onSelect={setActiveTab} />
+      <GameTabBar tabs={['pts','reb','ast','pra','stl','blk','fg3m','fb']} active={activeTab} onSelect={setActiveTab} />
 
-      {!showFirstBasket && loading && (
-        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
-          Loading props...
-        </div>
-      )}
+      <div style={{ padding: '0 14px' }}>
+        {!showFB && loading && (
+          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>Loading props…</div>
+        )}
+        {!showFB && !loading && error && (
+          <div style={{ textAlign: 'center', padding: 18, color: T.red, fontSize: 12 }}>{error}</div>
+        )}
+        {!showFB && !loading && !error && visibleProps.length === 0 && (
+          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>No prop analysis yet.</div>
+        )}
 
-      {!showFirstBasket && !loading && error && (
-        <div style={{ textAlign:'center', padding:18, color:T.red, fontFamily:T.font, fontSize:12 }}>
-          {error}
-        </div>
-      )}
+        {!showFB && !loading && !error && visibleProps.map(prop => {
+          const player = prop.player || prop.players || {};
+          const rec    = prop.recommendation || 'PASS';
+          const type   = String(prop.prop_type || prop.type || '').toUpperCase();
+          const recBg  = rec === 'OVER'  ? T.greenDim : rec === 'UNDER' ? T.redDim : T.card3;
+          const recFg  = rec === 'OVER'  ? T.green    : rec === 'UNDER' ? T.red    : T.text3;
 
-      {!showFirstBasket && !loading && !error && visibleProps.length === 0 && (
-        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
-          No prop analysis available yet for this game.
-        </div>
-      )}
-
-      {!showFirstBasket && !loading && !error && visibleProps.map(prop => {
-        const player = prop.player || prop.players || {};
-        const rec = prop.recommendation || 'PASS';
-        const type = String(prop.prop_type || prop.type || '').toUpperCase();
-        const recColor = rec === 'OVER' ? T.green : rec === 'UNDER' ? T.red : T.card3;
-
-        return (
-          <div key={prop.id} style={{
-            display:'flex',
-            justifyContent:'space-between',
-            alignItems:'center',
-            gap:10,
-            padding:'8px 0',
-            borderBottom:`1px solid ${T.border}`,
-          }}>
-            <div style={{ minWidth:0 }}>
-              <div style={{
-                fontFamily:T.font,
-                fontSize:12,
-                fontWeight:700,
-                color:T.text,
-                whiteSpace:'nowrap',
-                overflow:'hidden',
-                textOverflow:'ellipsis',
-              }}>
-                {player.full_name || player.name || 'Unknown'}
+          return (
+            <div key={prop.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {player.full_name || player.name || 'Unknown'}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 9, color: T.text3 }}>{player.position || '—'}</span>
+                  <span style={{ fontSize: 10, color: T.text2 }}>{type} {rec === 'UNDER' ? 'U' : rec === 'OVER' ? 'O' : ''} {fmtOne(prop.line)}</span>
+                  {prop.correlated_opportunity && (
+                    <span style={{ background: T.greenDim, color: T.green, border: `1px solid ${T.green}`, borderRadius: 4, fontSize: 9, padding: '1px 5px' }}>CORR</span>
+                  )}
+                </div>
               </div>
-              <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, flexWrap:'wrap' }}>
-                <span style={{ fontFamily:T.font, fontSize:9, color:T.text3 }}>
-                  {player.position || '—'}
-                </span>
-                <span style={{ fontFamily:T.font, fontSize:10, color:T.text2 }}>
-                  {type} {rec === 'UNDER' ? 'U' : rec === 'OVER' ? 'O' : ''} {fmtOne(prop.line)}
-                </span>
-                {prop.correlated_opportunity && (
-                  <span style={{
-                    display:'inline-block',
-                    background:'#1a3a2a',
-                    color:T.green,
-                    border:`1px solid ${T.green}`,
-                    borderRadius:4,
-                    fontFamily:T.font,
-                    fontSize:9,
-                    padding:'1px 5px',
-                    letterSpacing:'0.03em',
-                  }}>
-                    CORRELATED · {String(prop.correlated_props || '').toUpperCase()}
-                  </span>
-                )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                <ConfidenceBar score={prop.confidence_score} />
+                <span style={{ background: recBg, color: recFg, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, letterSpacing: 0.3 }}>{rec}</span>
               </div>
             </div>
+          );
+        })}
 
-            <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
-              <ConfidenceBar score={prop.confidence_score} />
-              <Badge color={recColor}>{rec}</Badge>
-            </div>
-          </div>
-        );
-      })}
+        {showFB && fbLoading && (
+          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>Loading first basket…</div>
+        )}
+        {showFB && !fbLoading && fbError && (
+          <div style={{ textAlign: 'center', padding: 18, color: T.red, fontSize: 12 }}>{fbError}</div>
+        )}
+        {showFB && !fbLoading && !fbError && firstBasket.length === 0 && (
+          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>No first basket analysis yet.</div>
+        )}
+        {showFB && !fbLoading && !fbError && firstBasket.map(row => {
+          const player  = row.players || {};
+          const team    = player.teams || row.teams || {};
+          const signals = row.signals || {};
+          const rec     = row.recommendation === 'strong_look' ? 'STRONG LOOK' : 'VALUE LOOK';
+          const recColor = row.recommendation === 'strong_look' ? T.green : T.yellow;
+          const chips = [];
+          if (signals.starter_score      >= 80) chips.push('STARTER');
+          if (signals.usage_score        >= 65) chips.push('HIGH USAGE');
+          if (signals.pace_score         >= 65) chips.push('FAST PACE');
+          if (signals.q1_tendency_score  >= 65) chips.push('Q1 SCORER');
 
-      {showFirstBasket && fbLoading && (
-        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
-          Loading first basket...
-        </div>
-      )}
-
-      {showFirstBasket && !fbLoading && fbError && (
-        <div style={{ textAlign:'center', padding:18, color:T.red, fontFamily:T.font, fontSize:12 }}>
-          {fbError}
-        </div>
-      )}
-
-      {showFirstBasket && !fbLoading && !fbError && firstBasket.length === 0 && (
-        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
-          No first basket analysis available yet for this game.
-        </div>
-      )}
-
-      {showFirstBasket && !fbLoading && !fbError && firstBasket.map(row => {
-        const player = row.players || {};
-        const team = player.teams || row.teams || {};
-        const signals = row.signals || {};
-        const rec = row.recommendation === 'strong_look' ? 'STRONG LOOK' : 'VALUE LOOK';
-        const recColor = row.recommendation === 'strong_look' ? T.green : T.yellow;
-        const chips = [];
-        if (signals.starter_score >= 80) chips.push('STARTER');
-        if (signals.usage_score >= 65) chips.push('HIGH USAGE');
-        if (signals.pace_score >= 65) chips.push('FAST PACE');
-        if (signals.q1_tendency_score >= 65) chips.push('Q1 SCORER');
-
-        return (
-          <div key={row.id} style={{
-            display:'flex',
-            justifyContent:'space-between',
-            alignItems:'center',
-            gap:10,
-            padding:'8px 0',
-            borderBottom:`1px solid ${T.border}`,
-          }}>
-            <div style={{ minWidth:0 }}>
-              <div style={{
-                fontFamily:T.font,
-                fontSize:12,
-                fontWeight:700,
-                color:T.text,
-                whiteSpace:'nowrap',
-                overflow:'hidden',
-                textOverflow:'ellipsis',
-              }}>
-                {player.full_name || 'Unknown'}
+          return (
+            <div key={row.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${T.border}` }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {player.full_name || 'Unknown'}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 9, color: T.text3 }}>{team.abbreviation || '—'} · {player.position || '—'}</span>
+                  {chips.map(chip => (
+                    <span key={chip} style={{ border: `1px solid ${T.border}`, borderRadius: 4, color: T.text2, fontSize: 9, padding: '1px 5px' }}>{chip}</span>
+                  ))}
+                </div>
               </div>
-              <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, flexWrap:'wrap' }}>
-                <span style={{ fontFamily:T.font, fontSize:9, color:T.text3 }}>
-                  {team.abbreviation || '—'} · {player.position || '—'}
-                </span>
-                {chips.map(chip => (
-                  <span key={chip} style={{
-                    border:`1px solid ${T.border}`,
-                    borderRadius:4,
-                    color:T.text2,
-                    fontFamily:T.font,
-                    fontSize:9,
-                    padding:'1px 5px',
-                    letterSpacing:'0.03em',
-                  }}>
-                    {chip}
-                  </span>
-                ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                <ConfidenceBar score={row.first_basket_score} />
+                <span style={{ background: `${recColor}22`, color: recColor, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>{rec}</span>
               </div>
             </div>
+          );
+        })}
+      </div>
 
-            <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
-              <ConfidenceBar score={row.first_basket_score} />
-              <Badge color={recColor}>{rec}</Badge>
-            </div>
-          </div>
-        );
-      })}
-
-      <div style={{ textAlign:'right' }}>
-        <button
-          onClick={() => onOpenFull(game)}
-          style={{
-            background:'none',
-            border:'none',
-            color:T.blue,
-            fontFamily:T.font,
-            fontSize:11,
-            cursor:'pointer',
-            padding:'8px 0 0',
-          }}
-        >
+      <div style={{ textAlign: 'right', padding: '6px 14px 10px' }}>
+        <button onClick={() => onOpenFull(game)} style={{ background: 'none', border: 'none', color: T.accent, fontSize: 11, cursor: 'pointer', fontWeight: 700 }}>
           Full Analysis →
         </button>
       </div>
@@ -1546,54 +1057,37 @@ function GamePropsPanel({ game, onOpenFull }) {
   );
 }
 
-// ---- GAME CARD ----
-const TABS = ['overview', 'lineup', 'matchup', 'intel', 'props'];
+// ---- GameCard (full-screen drill-down) ----
+const GAME_TABS   = ['overview','lineup','matchup','intel','props'];
+const GAME_LABELS = { overview:'OVERVIEW', lineup:'LINEUP', matchup:'MATCHUP', intel:'INTEL', props:'PROPS' };
 
 function GameCard({ game, onClose }) {
-  const [activeTab, setActiveTab]     = useState('overview');
-  const [expandedId, setExpandedId]   = useState(null);
-  const [allPlayers, setAllPlayers]   = useState({});
-  const [gameLogs, setGameLogs]       = useState({});
-  const [odds, setOdds]               = useState(null);
-  const [matchups, setMatchups]       = useState({});
-  const [intel, setIntel]             = useState(null);
-  const [props, setProps]             = useState({});
-  const [loading, setLoading]         = useState(true);
+  const [activeTab, setActiveTab]   = useState('overview');
+  const [expandedId, setExpandedId] = useState(null);
+  const [allPlayers, setAllPlayers] = useState({});
+  const [gameLogs, setGameLogs]     = useState({});
+  const [odds, setOdds]             = useState(null);
+  const [matchups, setMatchups]     = useState({});
+  const [intel, setIntel]           = useState(null);
+  const [props, setProps]           = useState({});
+  const [loading, setLoading]       = useState(true);
 
-  // Hooks must be declared before any conditional returns
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [oddsData, matchupData, intelData, propsData] = await Promise.all([
-        apiGetOdds(game.id),
-        apiGetMatchups(game.id),
-        apiGetIntel(game.id),
-        apiGetProps(game.id),
+        apiGetOdds(game.id), apiGetMatchups(game.id), apiGetIntel(game.id), apiGetProps(game.id),
       ]);
-      setOdds(oddsData);
-      setMatchups(matchupData);
-      setIntel(intelData);
-      setProps(propsData);
+      setOdds(oddsData); setMatchups(matchupData); setIntel(intelData); setProps(propsData);
 
-      // Load players for both teams
-      const [awayPlayers, homePlayers] = await Promise.all([
-        apiGetPlayers(game.visitor_team.id),
-        apiGetPlayers(game.home_team.id),
-      ]);
+      const [awayPl, homePl] = await Promise.all([apiGetPlayers(game.visitor_team.id), apiGetPlayers(game.home_team.id)]);
+      const allFetched = [...awayPl, ...homePl];
+      const averages   = await apiGetSeasonAverages(allFetched.map(p => p.id));
+      const awayMerged = mergeSeasonAverages(awayPl, averages);
+      const homeMerged = mergeSeasonAverages(homePl, averages);
+      setAllPlayers({ [game.visitor_team.id]: awayMerged, [game.home_team.id]: homeMerged });
 
-      const allFetchedPlayers = [...awayPlayers, ...homePlayers];
-      const averages = await apiGetSeasonAverages(allFetchedPlayers.map(p => p.id));
-      const awayWithAverages = mergeSeasonAverages(awayPlayers, averages);
-      const homeWithAverages = mergeSeasonAverages(homePlayers, averages);
-
-      const pMap = {
-        [game.visitor_team.id]: awayWithAverages,
-        [game.home_team.id]:    homeWithAverages,
-      };
-      setAllPlayers(pMap);
-
-      // Load game logs for all players
-      const allP = [...awayWithAverages, ...homeWithAverages];
+      const allP = [...awayMerged, ...homeMerged];
       const logResults = await Promise.all(allP.map(p => apiGetGameLogs(p.id)));
       const logMap = {};
       allP.forEach((p, i) => { logMap[p.id] = logResults[i]; });
@@ -1603,94 +1097,380 @@ function GameCard({ game, onClose }) {
     }
   }, [game.id, game.visitor_team.id, game.home_team.id]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const aw = game.visitor_team;
   const hw = game.home_team;
 
   return (
-    <div style={{
-      position:'fixed', inset:0, zIndex:100,
-      background:T.bg, overflowY:'auto',
-      display:'flex', flexDirection:'column',
-    }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: T.bg, overflowY: 'auto', display: 'flex', flexDirection: 'column', fontFamily: T.font }}>
       {/* Header */}
-      <div style={{
-        background:T.card, borderBottom:`1px solid ${T.border}`,
-        padding:'12px 16px',
-        display:'flex', alignItems:'center', gap:12,
-        position:'sticky', top:0, zIndex:10,
-      }}>
-        <button
-          onClick={onClose}
-          style={{
-            background:T.card3, border:'none', color:T.text,
-            width:32, height:32, borderRadius:'50%',
-            cursor:'pointer', fontFamily:T.font, fontSize:18, lineHeight:1,
-            flexShrink:0,
-          }}
-        >
+      <div style={{ background: T.card, borderBottom: `1px solid ${T.border}`, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
+        <button onClick={onClose} style={{ background: T.card2, border: 'none', color: T.text, width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           ←
         </button>
-        <div style={{ flex:1 }}>
-          <div style={{ fontFamily:T.font, fontSize:15, fontWeight:700, color:T.text }}>
-            {aw.abbreviation} @ {hw.abbreviation}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{aw.abbreviation} @ {hw.abbreviation}</div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{IS_SANDBOX ? 'SANDBOX · ' : ''}{game.status}</div>
+        </div>
+        <StatusBadge status={game.status} />
+      </div>
+
+      {/* Inner tab bar */}
+      <div style={{ display: 'flex', background: T.card2, borderBottom: `1px solid ${T.border}`, overflowX: 'auto' }}>
+        {GAME_TABS.map(t => (
+          <button key={t} onClick={() => setActiveTab(t)} style={{
+            flex: '0 0 auto', background: 'none', border: 'none',
+            padding: '10px 14px', fontSize: 11, fontWeight: 700,
+            color: activeTab === t ? T.accent : T.text3,
+            borderBottom: activeTab === t ? `2px solid ${T.accent}` : '2px solid transparent',
+            cursor: 'pointer', letterSpacing: 0.3,
+          }}>
+            {GAME_LABELS[t]}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: T.text3 }}>Loading…</div>
+      ) : (
+        <div style={{ flex: 1 }}>
+          {activeTab === 'overview' && <OverviewTab game={game} odds={odds} />}
+          {activeTab === 'lineup'   && <LineupTab game={game} allPlayers={allPlayers} gameLogs={gameLogs} expandedId={expandedId} setExpandedId={setExpandedId} />}
+          {activeTab === 'matchup'  && <MatchupTab game={game} allPlayers={allPlayers} matchups={matchups} gameLogs={gameLogs} intel={intel} />}
+          {activeTab === 'intel'    && <IntelTab game={game} intel={intel} />}
+          {activeTab === 'props'    && <PropsTab game={game} allPlayers={allPlayers} matchups={matchups} intel={intel} gameLogs={gameLogs} props={props} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Top Picks tab ----
+function TopPicksTab({ picks, loading, error }) {
+  if (loading) return (
+    <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>Loading picks…</div>
+  );
+  if (error) return (
+    <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.red }}>{error}</div>
+  );
+  if (!picks?.length) return (
+    <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>
+      No picks available yet. Check back after the daily model run (runs at 12:30 AM ET).
+    </div>
+  );
+
+  return (
+    <div style={{ padding: '14px 14px 32px' }}>
+      <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 12 }}>
+        TODAY'S TOP PICKS · {picks.length} PROPS
+      </div>
+
+      {picks.map((pick, i) => {
+        const player  = pick.players || {};
+        const name    = playerName(player);
+        const pos     = player.position || '—';
+        const type    = String(pick.prop_type || '').toUpperCase();
+        const rec     = pick.recommendation || 'PASS';
+        const conf    = Number(pick.confidence_score || 0);
+        const color   = scoreColor(conf);
+        const recBg   = rec === 'OVER'  ? T.greenDim : rec === 'UNDER' ? T.redDim : T.card3;
+        const recFg   = rec === 'OVER'  ? T.green    : rec === 'UNDER' ? T.red    : T.text3;
+        const rank    = i + 1;
+        const isTop   = rank <= 3;
+        const factors = Array.isArray(pick.key_factors) ? pick.key_factors : [];
+
+        const matchupLabel = pick.home_team && pick.visitor_team
+          ? `${pick.visitor_team.abbreviation} @ ${pick.home_team.abbreviation}`
+          : null;
+
+        return (
+          <div key={pick.id || i} style={{
+            background:   T.card,
+            border:       `1px solid ${isTop ? `${T.accent}66` : T.border}`,
+            borderRadius: 12,
+            marginBottom: 10,
+            overflow:     'hidden',
+          }}>
+            {/* Rank + player header */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
+              background: isTop ? T.accentDim : 'transparent',
+              borderBottom: `1px solid ${T.border}`,
+            }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: '50%',
+                background: isTop ? T.accent : T.card3,
+                color: isTop ? '#fff' : T.text3,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 12, fontWeight: 900, flexShrink: 0,
+              }}>
+                {rank}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>
+                  {pos}{matchupLabel ? ` · ${matchupLabel}` : ''}
+                </div>
+              </div>
+              {/* Big confidence number */}
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontSize: 24, fontWeight: 900, color, lineHeight: 1 }}>{Math.round(conf)}</div>
+                <div style={{ fontSize: 8, color, letterSpacing: 1, marginTop: 1 }}>CONF</div>
+              </div>
+            </div>
+
+            {/* Prop detail */}
+            <div style={{ padding: '10px 14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <Badge color={T.card3}>{type}</Badge>
+                <span style={{ fontSize: 17, fontWeight: 900, color: T.text }}>{fmtOne(pick.line)}</span>
+                <span style={{ background: recBg, color: recFg, fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 5 }}>{rec}</span>
+                {pick.correlated_opportunity && (
+                  <span style={{ background: T.greenDim, color: T.green, border: `1px solid ${T.green}`, borderRadius: 4, fontSize: 9, padding: '2px 6px' }}>CORRELATED</span>
+                )}
+              </div>
+
+              {/* Stats row */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginTop: 10 }}>
+                {[{label:'PROJ',value:fmtOne(pick.projection)},{label:'L5',value:fmtOne(pick.l5_avg)},{label:'AVG',value:fmtOne(pick.season_avg)},{label:'GAP',value:fmtOne(pick.value_gap)}].map(item => (
+                  <div key={item.label} style={{ background: T.card2, borderRadius: 6, padding: '6px 4px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 8,  color: T.text3 }}>{item.label}</div>
+                    <div style={{ fontSize: 12, color: T.text,  fontWeight: 700, marginTop: 2 }}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Key factors */}
+              {factors.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 10, color: T.text2 }}>
+                  {factors.slice(0, 2).join(' · ')}
+                </div>
+              )}
+
+              {/* Confidence bar */}
+              <div style={{ marginTop: 10, height: 3, borderRadius: 2, background: T.card3, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${conf}%`, background: color, borderRadius: 2 }} />
+              </div>
+            </div>
           </div>
-          <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, marginTop:2 }}>
-            {game.status} · {IS_SANDBOX && <span style={{ color:T.yellow }}>SANDBOX</span>}
-          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---- Model tab ----
+function ModelTab() {
+  const signals = [
+    { name:'L5 Trend',         desc:'Last 5-game rolling average vs the betting line' },
+    { name:'Season Average',   desc:'Full-season baseline performance' },
+    { name:'Opponent Defense', desc:'How the opponent limits the targeted stat category' },
+    { name:'3PM Matchup',      desc:"Opponent's 3-point attempt rate — signal for fg3m props" },
+    { name:'Pace Rating',      desc:'Team possessions per game — more pace = more volume' },
+    { name:'Matchup Score',    desc:'Usage × opponent defense × minutes on court' },
+    { name:'Injury Context',   desc:'Teammate absences that expand the player\'s role' },
+    { name:'Referee Crew',     desc:'Per-official foul tendency ratings (pts & PRA only)' },
+  ];
+
+  return (
+    <div style={{ padding: '16px 14px 32px' }}>
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 8 }}>How the Model Works</div>
+        <div style={{ fontSize: 12, color: T.text2, lineHeight: 1.65 }}>
+          Every prop is scored 0–100 using a multi-signal confidence model. Signals are normalized to a common scale, weighted by predictive power, and combined into a single score. A score above 70 is favorable for a bet; below 40 is unfavorable.
         </div>
       </div>
 
-      {/* Tab bar */}
-      <TabBar tabs={TABS} active={activeTab} onSelect={setActiveTab} />
-
-      {/* Content */}
-      {loading ? (
-        <div style={{
-          flex:1, display:'flex', alignItems:'center', justifyContent:'center',
-          fontFamily:T.font, fontSize:12, color:T.text3,
-        }}>
-          Loading…
+      <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>MODEL SIGNALS</div>
+      {signals.map(({ name, desc }) => (
+        <div key={name} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: T.accent, flexShrink: 0, marginTop: 4 }} />
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{name}</div>
+            <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>{desc}</div>
+          </div>
         </div>
-      ) : (
-        <div style={{ flex:1 }}>
-          {activeTab === 'overview' && (
-            <OverviewTab game={game} odds={odds} />
+      ))}
+
+      <div style={{ background: T.accentDim, border: `1px solid ${T.accent}55`, borderRadius: 10, padding: 14, marginTop: 16 }}>
+        <div style={{ fontSize: 11, color: T.accent, fontWeight: 700, marginBottom: 6 }}>Data Sources</div>
+        <div style={{ fontSize: 11, color: T.text2, lineHeight: 1.65 }}>
+          Ball Don't Lie API (game logs), ESPN (box scores), stats.wnba.com (team opponent stats &amp; referee crews), and sportsbook odds via the Odds API.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Board tab ----
+const BOARD_STAT_TABS   = ['pts', 'reb', 'ast', 'fg3m'];
+const BOARD_STAT_LABELS = { pts:'POINTS', reb:'REBOUNDS', ast:'ASSISTS', fg3m:'3PM' };
+
+function BoardPlayerCard({ pick, rank }) {
+  const player  = pick.players || {};
+  const name    = playerName(player);
+  const pos     = player.position || '—';
+  const conf    = Math.round(Number(pick.confidence_score) || 0);
+  const color   = scoreColor(conf);
+  const rec     = pick.recommendation || 'PASS';
+  const recBg   = rec === 'OVER'  ? T.greenDim : rec === 'UNDER' ? T.redDim : T.card3;
+  const recFg   = rec === 'OVER'  ? T.green    : rec === 'UNDER' ? T.red    : T.text3;
+  const isTop   = rank <= 3;
+  const factors = Array.isArray(pick.key_factors) ? pick.key_factors : [];
+  const matchup = pick.home_team && pick.visitor_team
+    ? `${pick.visitor_team.abbreviation} @ ${pick.home_team.abbreviation}`
+    : null;
+  const hasProj = pick.projection != null;
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'stretch',
+      borderBottom: `1px solid ${T.border}`,
+      background: 'transparent',
+    }}>
+      {/* Left accent stripe for top 3 */}
+      <div style={{ width: 3, flexShrink: 0, background: isTop ? T.accent : 'transparent', borderRadius: '0 0 0 0' }} />
+
+      <div style={{ flex: 1, padding: '13px 14px 11px', minWidth: 0 }}>
+        {/* Row 1: rank + name + big conf number */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          {/* Rank bubble */}
+          <div style={{
+            width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
+            background: isTop ? T.accent : T.card3,
+            color: isTop ? '#fff' : T.text3,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11, fontWeight: 900, marginTop: 1,
+          }}>
+            {rank}
+          </div>
+
+          {/* Name + context */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {name}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 10, color: T.text3 }}>{pos}</span>
+              {matchup && <span style={{ fontSize: 10, color: T.text3 }}>· {matchup}</span>}
+              {pick.game_status && (
+                <span style={{ fontSize: 9, color: T.text3, background: T.card3, padding: '1px 6px', borderRadius: 3 }}>
+                  {String(pick.game_status).toUpperCase()}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Confidence score */}
+          <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 44 }}>
+            <div style={{ fontSize: 30, fontWeight: 900, color, lineHeight: 1 }}>{conf}</div>
+            <div style={{ fontSize: 7, color, letterSpacing: 1.2, marginTop: 1, textAlign: 'right' }}>CONF</div>
+          </div>
+        </div>
+
+        {/* Row 2: rec badge + line + proj */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, marginLeft: 34 }}>
+          <span style={{
+            background: recBg, color: recFg,
+            fontSize: 11, fontWeight: 800,
+            padding: '3px 10px', borderRadius: 5,
+          }}>
+            {rec}
+          </span>
+          <span style={{ fontSize: 15, fontWeight: 800, color: T.text }}>{fmtOne(pick.line)}</span>
+          <span style={{ fontSize: 10, color: T.text3 }}>line</span>
+          {hasProj && (
+            <>
+              <span style={{ fontSize: 10, color: T.border }}>·</span>
+              <span style={{ fontSize: 10, color: T.text3 }}>proj </span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: T.text2 }}>{fmtOne(pick.projection)}</span>
+            </>
           )}
-          {activeTab === 'lineup' && (
-            <LineupTab
-              game={game}
-              allPlayers={allPlayers}
-              gameLogs={gameLogs}
-              expandedId={expandedId}
-              setExpandedId={setExpandedId}
-            />
+          {pick.l5_avg != null && (
+            <>
+              <span style={{ fontSize: 10, color: T.border }}>·</span>
+              <span style={{ fontSize: 10, color: T.text3 }}>L5 </span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: T.text2 }}>{fmtOne(pick.l5_avg)}</span>
+            </>
           )}
-          {activeTab === 'matchup' && (
-            <MatchupTab
-              game={game}
-              allPlayers={allPlayers}
-              matchups={matchups}
-              gameLogs={gameLogs}
-              intel={intel}
-            />
-          )}
-          {activeTab === 'intel' && (
-            <IntelTab game={game} intel={intel} />
-          )}
-          {activeTab === 'props' && (
-            <PropsTab
-              game={game}
-              allPlayers={allPlayers}
-              matchups={matchups}
-              intel={intel}
-              gameLogs={gameLogs}
-              props={props}
-            />
-          )}
+        </div>
+
+        {/* Row 3: key factor */}
+        {factors.length > 0 && (
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 5, marginLeft: 34, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {factors[0]}
+          </div>
+        )}
+
+        {/* Row 4: confidence bar */}
+        <div style={{ marginTop: 7, marginLeft: 34, height: 2, borderRadius: 1, background: T.card3, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${conf}%`, background: color }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BoardTab({ picks, loading, error }) {
+  const [activeStat, setActiveStat] = useState('pts');
+
+  const filtered = (picks || [])
+    .filter(p => String(p.prop_type || '').toLowerCase() === activeStat)
+    .sort((a, b) => Number(b.confidence_score || 0) - Number(a.confidence_score || 0));
+
+  return (
+    <div>
+      {/* Stat sub-tabs */}
+      <div style={{
+        display: 'flex', background: T.card,
+        borderBottom: `1px solid ${T.border}`,
+        position: 'sticky', top: 0, zIndex: 5,
+      }}>
+        {BOARD_STAT_TABS.map(t => {
+          const count = (picks || []).filter(p => String(p.prop_type || '').toLowerCase() === t).length;
+          return (
+            <button key={t} onClick={() => setActiveStat(t)} style={{
+              flex: 1, background: 'none', border: 'none', padding: '11px 4px',
+              fontSize: 11, fontWeight: 800,
+              color: activeStat === t ? T.accent : T.text3,
+              borderBottom: activeStat === t ? `2px solid ${T.accent}` : '2px solid transparent',
+              cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
+            }}>
+              {BOARD_STAT_LABELS[t]}
+              {count > 0 && (
+                <span style={{
+                  marginLeft: 4, fontSize: 9, fontWeight: 700,
+                  color: activeStat === t ? T.accent : T.text3,
+                }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* List */}
+      {loading && (
+        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>Loading…</div>
+      )}
+      {!loading && error && (
+        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.red }}>{error}</div>
+      )}
+      {!loading && !error && filtered.length === 0 && (
+        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>
+          No {BOARD_STAT_LABELS[activeStat]} picks available yet for today.
+        </div>
+      )}
+      {!loading && !error && filtered.map((pick, i) => (
+        <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
+      ))}
+
+      {/* Footer note */}
+      {!loading && !error && filtered.length > 0 && (
+        <div style={{ padding: '12px 16px', fontSize: 10, color: T.text3, textAlign: 'center', borderTop: `1px solid ${T.border}` }}>
+          Ranked by confidence score · Updated daily at 12:30 AM ET
         </div>
       )}
     </div>
@@ -1700,190 +1480,203 @@ function GameCard({ game, onClose }) {
 // ============================================================
 // APP ROOT
 // ============================================================
+const NAV_TABS   = ['slate', 'board', 'picks', 'model'];
+const NAV_LABELS = { slate:'SLATE', board:'BOARD', picks:'PICKS', model:'MODEL' };
+
 export default function App() {
-  const [games, setGames]           = useState([]);
-  const [selectedGame, setSelected] = useState(null);
+  const [activeNav, setActiveNav]           = useState('slate');
+  const [games, setGames]                   = useState([]);
+  const [topPicks, setTopPicks]             = useState([]);
+  const [selectedGame, setSelectedGame]     = useState(null);
   const [expandedGameId, setExpandedGameId] = useState(null);
-  const [loadingSlate, setSlateLoad]= useState(true);
-  const [error, setError]           = useState(null);
-  const [selectedDate, setSelectedDate] = useState(today());
+  const [loadingSlate, setLoadingSlate]     = useState(true);
+  const [loadingPicks, setLoadingPicks]     = useState(true);
+  const [slateError, setSlateError]         = useState(null);
+  const [picksError, setPicksError]         = useState(null);
+  const [selectedDate, setSelectedDate]     = useState(today());
+
+  // Highest-confidence pick per game for SlateCard footer
+  const topPicksByGame = new Map();
+  for (const pick of topPicks) {
+    const cur = topPicksByGame.get(pick.game_id);
+    if (!cur || Number(pick.confidence_score) > Number(cur.confidence_score)) {
+      topPicksByGame.set(pick.game_id, pick);
+    }
+  }
 
   function shiftDate(days) {
     const d = new Date(selectedDate + 'T12:00:00');
     d.setDate(d.getDate() + days);
     const next = d.toISOString().slice(0, 10);
-    // Don't navigate past today
     if (next > today()) return;
     setSelectedDate(next);
-    setSelected(null);
+    setSelectedGame(null);
     setExpandedGameId(null);
   }
 
-  // Hooks before any conditional returns
   useEffect(() => {
-    async function loadSlate() {
+    let cancelled = false;
+
+    async function loadAll() {
+      setLoadingSlate(true); setLoadingPicks(true);
+      setSlateError(null);   setPicksError(null);
+
       try {
-        setSlateLoad(true);
-        setError(null);
         const data = await apiGetSlate(selectedDate);
-        setGames(data);
-      } catch (e) {
-        setError('Failed to load slate.');
-        console.error(e);
+        if (!cancelled) setGames(data);
+      } catch {
+        if (!cancelled) setSlateError('Failed to load slate.');
       } finally {
-        setSlateLoad(false);
+        if (!cancelled) setLoadingSlate(false);
+      }
+
+      try {
+        const data = await apiGetTopPicks(selectedDate);
+        if (!cancelled) setTopPicks(data);
+      } catch {
+        if (!cancelled) setPicksError('Failed to load picks.');
+      } finally {
+        if (!cancelled) setLoadingPicks(false);
       }
     }
-    loadSlate();
+
+    loadAll();
+    return () => { cancelled = true; };
   }, [selectedDate]);
 
-  const appStyle = {
-    background: T.bg,
-    minHeight: '100dvh',
-    maxWidth: 480,
-    margin: '0 auto',
-    fontFamily: T.font,
-    position: 'relative',
-  };
+  const isToday = selectedDate === today();
 
   return (
-    <div style={appStyle}>
-      {/* App bar */}
-      <div style={{
-        background: T.card,
-        borderBottom: `1px solid ${T.border}`,
-        padding: '14px 16px 12px',
-        position: 'sticky', top: 0, zIndex: 50,
-      }}>
-        <div style={{ display:'flex', alignItems:'baseline', gap:10 }}>
-          <div style={{ fontSize:17, fontWeight:700, color:T.text, letterSpacing:0.5 }}>
-            WNBA PROP SCOUT
+    <div style={{ background: T.bg, minHeight: '100dvh', maxWidth: 480, margin: '0 auto', fontFamily: T.font, color: T.text, position: 'relative' }}>
+
+      {/* ── App bar ── */}
+      <div style={{ background: T.card, borderBottom: `1px solid ${T.border}`, position: 'sticky', top: 0, zIndex: 50 }}>
+        {/* Logo row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px 10px' }}>
+          {/* Orange W badge */}
+          <div style={{ width: 32, height: 32, borderRadius: 9, background: T.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ fontSize: 17, fontWeight: 900, color: '#fff', lineHeight: 1 }}>W</span>
           </div>
-          {IS_SANDBOX && (
-            <span style={{
-              fontFamily:T.font, fontSize:9, fontWeight:700,
-              color:T.yellow, background:`${T.yellow}22`,
-              padding:'2px 6px', borderRadius:4, letterSpacing:1,
-            }}>
-              SANDBOX
-            </span>
-          )}
-        </div>
-
-        {/* Date navigator */}
-        <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:6 }}>
-          <button
-            onClick={() => shiftDate(-1)}
-            style={{
-              background:'none', border:'none', color:T.text3,
-              cursor:'pointer', fontFamily:T.font, fontSize:14,
-              padding:'0 4px', lineHeight:1,
-            }}
-          >←</button>
-          <label style={{ cursor:'pointer', position:'relative' }}>
-            <span style={{ fontFamily:T.font, fontSize:11, color:T.text2 }}>
-              {selectedDate === today()
-                ? 'Today · ' + new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })
-                : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })
-              }
-            </span>
-            <input
-              type="date"
-              value={selectedDate}
-              max={today()}
-              onChange={e => { if (e.target.value) { setSelectedDate(e.target.value); setSelected(null); setExpandedGameId(null); } }}
-              style={{
-                position:'absolute', opacity:0, width:'100%', height:'100%',
-                top:0, left:0, cursor:'pointer',
-              }}
-            />
-          </label>
-          <button
-            onClick={() => shiftDate(1)}
-            disabled={selectedDate >= today()}
-            style={{
-              background:'none', border:'none',
-              color: selectedDate >= today() ? T.card3 : T.text3,
-              cursor: selectedDate >= today() ? 'default' : 'pointer',
-              fontFamily:T.font, fontSize:14,
-              padding:'0 4px', lineHeight:1,
-            }}
-          >→</button>
-        </div>
-      </div>
-
-      {/* Slate */}
-      <div style={{ padding:'14px 14px 24px' }}>
-        <div style={{ fontFamily:T.font, fontSize:10, color:T.text3, letterSpacing:1, marginBottom:10 }}>
-          {selectedDate === today() ? "TODAY'S SLATE" : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' }).toUpperCase() + ' SLATE'}
-        </div>
-
-        {loadingSlate && (
-          <div style={{ textAlign:'center', padding:32, color:T.text3, fontSize:12 }}>
-            Loading games…
-          </div>
-        )}
-
-        {error && (
-          <div style={{ textAlign:'center', padding:32, color:T.red, fontSize:12 }}>
-            {error}
-          </div>
-        )}
-
-        {!loadingSlate && !error && games.length === 0 && (
-          <div style={{ textAlign:'center', padding:32, color:T.text3, fontSize:12 }}>
-            No games scheduled today.
-          </div>
-        )}
-
-        {games.map(g => (
-          <div key={g.id}>
-            <SlateCard
-              game={g}
-              isSelected={expandedGameId === g.id}
-              onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
-            />
-            {expandedGameId === g.id && (
-              <GamePropsPanel
-                game={g}
-                onOpenFull={setSelected}
-              />
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: T.text, letterSpacing: 0.2 }}>WNBA PROP SCOUT</div>
+            {IS_SANDBOX && (
+              <span style={{ fontSize: 9, fontWeight: 700, color: T.yellow, background: T.yellowDim, padding: '1px 5px', borderRadius: 3, letterSpacing: 0.8 }}>SANDBOX</span>
             )}
           </div>
-        ))}
 
-        {/* Legend */}
-        <div style={{
-          marginTop:20, padding:'10px 12px',
-          background:T.card, borderRadius:8, border:`1px solid ${T.border}`,
-        }}>
-          <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, letterSpacing:1, marginBottom:8 }}>
-            MATCHUP SCORE LEGEND
+          {/* Date navigator (right) */}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
+            <button onClick={() => shiftDate(-1)} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 18, padding: '0 5px', lineHeight: 1 }}>‹</button>
+            <label style={{ cursor: 'pointer', position: 'relative' }}>
+              <span style={{ fontSize: 12, color: T.text2, fontWeight: 600 }}>
+                {isToday ? 'Today' : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric' })}
+              </span>
+              <input
+                type="date"
+                value={selectedDate}
+                max={today()}
+                onChange={e => { if (e.target.value) { setSelectedDate(e.target.value); setSelectedGame(null); setExpandedGameId(null); } }}
+                style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', top: 0, left: 0, cursor: 'pointer' }}
+              />
+            </label>
+            <button
+              onClick={() => shiftDate(1)}
+              disabled={selectedDate >= today()}
+              style={{ background: 'none', border: 'none', color: selectedDate >= today() ? T.border : T.text3, cursor: selectedDate >= today() ? 'default' : 'pointer', fontSize: 18, padding: '0 5px', lineHeight: 1 }}
+            >›</button>
           </div>
-          <div style={{ display:'flex', gap:12 }}>
-            {[
-              { color:T.green,  label:'70–100', desc:'FAVORABLE' },
-              { color:T.yellow, label:'40–69',  desc:'NEUTRAL' },
-              { color:T.red,    label:'0–39',   desc:'UNFAVORABLE' },
-            ].map(({ color, label, desc }) => (
-              <div key={desc} style={{ display:'flex', alignItems:'center', gap:6 }}>
-                <div style={{ width:10, height:10, borderRadius:2, background:color }} />
-                <div>
-                  <div style={{ fontFamily:T.font, fontSize:9, color:T.text2 }}>{label}</div>
-                  <div style={{ fontFamily:T.font, fontSize:8, color:T.text3 }}>{desc}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+        </div>
+
+        {/* Nav tabs */}
+        <div style={{ display: 'flex', borderTop: `1px solid ${T.border}` }}>
+          {NAV_TABS.map(t => (
+            <button key={t} onClick={() => setActiveNav(t)} style={{
+              flex: 1, background: 'none', border: 'none', padding: '10px 0',
+              fontSize: 11, fontWeight: 800,
+              color: activeNav === t ? T.accent : T.text3,
+              borderBottom: activeNav === t ? `2px solid ${T.accent}` : '2px solid transparent',
+              cursor: 'pointer', letterSpacing: 0.8, transition: 'color 0.1s',
+            }}>
+              {NAV_LABELS[t]}
+              {t === 'board' && topPicks.length > 0 && (
+                <span style={{ marginLeft: 4, background: T.accent, color: '#fff', fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 10, verticalAlign: 'middle' }}>
+                  {topPicks.length}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Full-screen game card */}
+      {/* ── SLATE tab ── */}
+      {activeNav === 'slate' && (
+        <div style={{ padding: '14px 14px 32px' }}>
+          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 12 }}>
+            {isToday
+              ? "TODAY'S SLATE"
+              : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' }).toUpperCase() + ' SLATE'}
+          </div>
+
+          {loadingSlate && (
+            <div style={{ textAlign: 'center', padding: 40, color: T.text3, fontSize: 12 }}>Loading games…</div>
+          )}
+          {slateError && (
+            <div style={{ textAlign: 'center', padding: 40, color: T.red, fontSize: 12 }}>{slateError}</div>
+          )}
+          {!loadingSlate && !slateError && games.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 40, color: T.text3, fontSize: 12 }}>No games scheduled.</div>
+          )}
+
+          {games.map(g => (
+            <div key={g.id}>
+              <SlateCard
+                game={g}
+                isSelected={expandedGameId === g.id}
+                topPick={topPicksByGame.get(g.id) || null}
+                onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
+              />
+              {expandedGameId === g.id && (
+                <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
+              )}
+            </div>
+          ))}
+
+          {/* Confidence legend */}
+          {!loadingSlate && games.length > 0 && (
+            <div style={{ marginTop: 16, padding: '10px 14px', background: T.card, borderRadius: 10, border: `1px solid ${T.border}` }}>
+              <div style={{ fontSize: 9, color: T.text3, letterSpacing: 1, marginBottom: 8 }}>CONFIDENCE SCALE</div>
+              <div style={{ display: 'flex', gap: 16 }}>
+                {[{color:T.green,label:'70–100',desc:'FAVORABLE'},{color:T.yellow,label:'40–69',desc:'NEUTRAL'},{color:T.red,label:'0–39',desc:'UNFAV.'}].map(({ color, label, desc }) => (
+                  <div key={desc} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: 9, color: T.text2 }}>{label}</div>
+                      <div style={{ fontSize: 8, color: T.text3 }}>{desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── BOARD tab ── */}
+      {activeNav === 'board' && (
+        <BoardTab picks={topPicks} loading={loadingPicks} error={picksError} />
+      )}
+
+      {/* ── PICKS tab ── */}
+      {activeNav === 'picks' && (
+        <TopPicksTab picks={topPicks} loading={loadingPicks} error={picksError} />
+      )}
+
+      {/* ── MODEL tab ── */}
+      {activeNav === 'model' && <ModelTab />}
+
+      {/* ── Full-screen GameCard ── */}
       {selectedGame && (
-        <GameCard
-          game={selectedGame}
-          onClose={() => setSelected(null)}
-        />
+        <GameCard game={selectedGame} onClose={() => setSelectedGame(null)} />
       )}
     </div>
   );
