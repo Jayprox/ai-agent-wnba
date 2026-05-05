@@ -30,6 +30,152 @@ const T = {
   font:      "system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
 };
 
+const RESPONSIVE_CSS = `
+  html, body, #root { min-height: 100%; background: ${T.bg}; }
+  body { margin: 0; }
+  * { box-sizing: border-box; }
+  .ps-app {
+    min-height: 100dvh;
+    background:
+      radial-gradient(circle at 18% -10%, rgba(249,115,22,0.12), transparent 32%),
+      linear-gradient(180deg, #0e1430 0%, ${T.bg} 42%, #080d1f 100%);
+    color: ${T.text};
+    font-family: ${T.font};
+  }
+  .ps-shell {
+    width: min(calc(100% - 32px), 1180px);
+    margin: 0 auto;
+  }
+  .ps-appbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(12, 17, 36, 0.9);
+    border-bottom: 1px solid ${T.border};
+    backdrop-filter: blur(14px);
+  }
+  .ps-appbar-top {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 18px 0 12px;
+  }
+  .ps-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 220px;
+  }
+  .ps-date-nav {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: ${T.card};
+    border: 1px solid ${T.border};
+    border-radius: 9px;
+    padding: 6px 8px;
+  }
+  .ps-nav {
+    display: flex;
+    gap: 8px;
+    padding: 0 0 14px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ps-nav::-webkit-scrollbar { display: none; }
+  .ps-page {
+    padding: 18px 0 40px;
+  }
+  .ps-daily-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 38px;
+    padding: 0 14px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(249,115,22,0.35);
+    background: rgba(249,115,22,0.08);
+    color: ${T.accent};
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+  }
+  .ps-slate-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+    gap: 14px;
+    align-items: start;
+  }
+  .ps-empty-state {
+    min-height: 260px;
+    display: grid;
+    place-items: center;
+    border: 1px solid ${T.border};
+    border-radius: 12px;
+    background: rgba(20, 29, 56, 0.62);
+    color: ${T.text3};
+    font-size: 13px;
+  }
+  .ps-legend {
+    max-width: 560px;
+  }
+  .ps-panel {
+    border: 1px solid ${T.border};
+    border-radius: 12px;
+    background: rgba(20, 29, 56, 0.72);
+    overflow: hidden;
+  }
+  .ps-subnav {
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    background: rgba(27, 38, 72, 0.62);
+    border-bottom: 1px solid ${T.border};
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ps-subnav::-webkit-scrollbar { display: none; }
+  .ps-subnav > button {
+    flex: 0 0 auto;
+    border-radius: 8px !important;
+  }
+  .ps-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 720px) {
+    .ps-shell { width: 100%; }
+    .ps-appbar-top { padding: 13px 16px 10px; gap: 10px; }
+    .ps-brand { min-width: 0; }
+    .ps-date-nav { border: 0; background: transparent; padding: 0; }
+    .ps-nav {
+      gap: 8px;
+      padding: 0 16px 14px;
+      border-top: 0;
+      background: transparent;
+    }
+    .ps-nav > button {
+      flex: 0 0 auto;
+      border-radius: 8px !important;
+    }
+    .ps-page { padding: 14px 14px 32px; }
+    .ps-slate-grid { display: block; }
+    .ps-legend { max-width: none; }
+    .ps-panel {
+      border-left: 0;
+      border-right: 0;
+      border-radius: 0;
+      margin-left: -14px;
+      margin-right: -14px;
+    }
+    .ps-subnav { padding: 10px 14px; }
+    .ps-card-grid { display: block; }
+  }
+`;
+
 const TEAM_VENUES = {
   ATL: 'Gateway Center Arena',  CHI: 'Wintrust Arena',
   CON: 'Mohegan Sun Arena',     DAL: 'College Park Center',
@@ -502,14 +648,14 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
 function GameTabBar({ tabs, active, onSelect }) {
   const labels = { pts:'PTS', reb:'REB', ast:'AST', pra:'PRA', stl:'STL', blk:'BLK', fg3m:'3PM', fb:'FB' };
   return (
-    <div style={{ display: 'flex', background: T.card2, borderBottom: `1px solid ${T.border}`, overflowX: 'auto' }}>
+    <div className="ps-subnav">
       {tabs.map(t => (
         <button key={t} onClick={() => onSelect(t)} style={{
-          flex: '0 0 auto', background: 'none', border: 'none',
-          padding: '10px 13px', fontSize: 11, fontWeight: 700,
-          color: active === t ? T.accent : T.text3,
-          borderBottom: active === t ? `2px solid ${T.accent}` : '2px solid transparent',
-          cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
+          background: active === t ? T.accent : T.card,
+          border: `1px solid ${active === t ? T.accent : T.border}`,
+          padding: '8px 13px', fontSize: 11, fontWeight: 800,
+          color: active === t ? '#fff' : T.text3,
+          cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s, background 0.1s, border-color 0.1s',
         }}>
           {labels[t] || t.toUpperCase()}
         </button>
@@ -1149,23 +1295,28 @@ function GameCard({ game, onClose }) {
 // ---- Top Picks tab ----
 function TopPicksTab({ picks, loading, error }) {
   if (loading) return (
-    <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>Loading picks…</div>
+    <div className="ps-empty-state">Loading picks…</div>
   );
   if (error) return (
-    <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.red }}>{error}</div>
+    <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>
   );
   if (!picks?.length) return (
-    <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>
+    <div className="ps-empty-state">
       No picks available yet. Check back after the daily model run (runs at 12:30 AM ET).
     </div>
   );
 
   return (
-    <div style={{ padding: '14px 14px 32px' }}>
+    <div>
+      <div className="ps-daily-card">
+        <span>↯ TOP PICKS</span>
+        <span style={{ color: T.text3 }}>{picks.length} PROPS</span>
+      </div>
       <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 12 }}>
         TODAY'S TOP PICKS · {picks.length} PROPS
       </div>
 
+      <div className="ps-card-grid">
       {picks.map((pick, i) => {
         const player  = pick.players || {};
         const name    = playerName(player);
@@ -1189,7 +1340,6 @@ function TopPicksTab({ picks, loading, error }) {
             background:   T.card,
             border:       `1px solid ${isTop ? `${T.accent}66` : T.border}`,
             borderRadius: 12,
-            marginBottom: 10,
             overflow:     'hidden',
           }}>
             {/* Rank + player header */}
@@ -1256,6 +1406,7 @@ function TopPicksTab({ picks, loading, error }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -1274,7 +1425,11 @@ function ModelTab() {
   ];
 
   return (
-    <div style={{ padding: '16px 14px 32px' }}>
+    <div>
+      <div className="ps-daily-card">
+        <span>↯ MODEL</span>
+        <span style={{ color: T.text3 }}>SIGNALS</span>
+      </div>
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 8 }}>How the Model Works</div>
         <div style={{ fontSize: 12, color: T.text2, lineHeight: 1.65 }}>
@@ -1283,15 +1438,17 @@ function ModelTab() {
       </div>
 
       <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>MODEL SIGNALS</div>
-      {signals.map(({ name, desc }) => (
-        <div key={name} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: `1px solid ${T.border}` }}>
-          <div style={{ width: 8, height: 8, borderRadius: '50%', background: T.accent, flexShrink: 0, marginTop: 4 }} />
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{name}</div>
-            <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>{desc}</div>
+      <div className="ps-card-grid">
+        {signals.map(({ name, desc }) => (
+          <div key={name} style={{ display: 'flex', gap: 12, padding: 14, border: `1px solid ${T.border}`, borderRadius: 12, background: T.card }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: T.accent, flexShrink: 0, marginTop: 5 }} />
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{name}</div>
+              <div style={{ fontSize: 11, color: T.text3, marginTop: 2, lineHeight: 1.45 }}>{desc}</div>
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
 
       <div style={{ background: T.accentDim, border: `1px solid ${T.accent}55`, borderRadius: 10, padding: 14, marginTop: 16 }}>
         <div style={{ fontSize: 11, color: T.accent, fontWeight: 700, marginBottom: 6 }}>Data Sources</div>
@@ -1421,20 +1578,22 @@ function BoardTab({ picks, loading, error }) {
 
   return (
     <div>
+      <div className="ps-daily-card">
+        <span>↯ PROP BOARD</span>
+        <span style={{ color: T.text3 }}>{(picks || []).length} PICKS</span>
+      </div>
+
       {/* Stat sub-tabs */}
-      <div style={{
-        display: 'flex', background: T.card,
-        borderBottom: `1px solid ${T.border}`,
-        position: 'sticky', top: 0, zIndex: 5,
-      }}>
+      <div className="ps-subnav" style={{ marginBottom: 12, border: `1px solid ${T.border}`, borderRadius: 12 }}>
         {BOARD_STAT_TABS.map(t => {
           const count = (picks || []).filter(p => String(p.prop_type || '').toLowerCase() === t).length;
           return (
             <button key={t} onClick={() => setActiveStat(t)} style={{
-              flex: 1, background: 'none', border: 'none', padding: '11px 4px',
+              background: activeStat === t ? T.accent : T.card,
+              border: `1px solid ${activeStat === t ? T.accent : T.border}`,
+              padding: '8px 14px',
               fontSize: 11, fontWeight: 800,
-              color: activeStat === t ? T.accent : T.text3,
-              borderBottom: activeStat === t ? `2px solid ${T.accent}` : '2px solid transparent',
+              color: activeStat === t ? '#fff' : T.text3,
               cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
             }}>
               {BOARD_STAT_LABELS[t]}
@@ -1453,19 +1612,23 @@ function BoardTab({ picks, loading, error }) {
 
       {/* List */}
       {loading && (
-        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>Loading…</div>
+        <div className="ps-empty-state">Loading…</div>
       )}
       {!loading && error && (
-        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.red }}>{error}</div>
+        <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>
       )}
       {!loading && !error && filtered.length === 0 && (
-        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: T.text3 }}>
+        <div className="ps-empty-state">
           No {BOARD_STAT_LABELS[activeStat]} picks available yet for today.
         </div>
       )}
-      {!loading && !error && filtered.map((pick, i) => (
-        <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
-      ))}
+      {!loading && !error && filtered.length > 0 && (
+        <div className="ps-panel">
+          {filtered.map((pick, i) => (
+            <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
+          ))}
+        </div>
+      )}
 
       {/* Footer note */}
       {!loading && !error && filtered.length > 0 && (
@@ -1547,25 +1710,29 @@ export default function App() {
   const isToday = selectedDate === today();
 
   return (
-    <div style={{ background: T.bg, minHeight: '100dvh', maxWidth: 480, margin: '0 auto', fontFamily: T.font, color: T.text, position: 'relative' }}>
+    <div className="ps-app" style={{ position: 'relative' }}>
+      <style>{RESPONSIVE_CSS}</style>
 
       {/* ── App bar ── */}
-      <div style={{ background: T.card, borderBottom: `1px solid ${T.border}`, position: 'sticky', top: 0, zIndex: 50 }}>
+      <div className="ps-appbar">
         {/* Logo row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px 10px' }}>
+        <div className="ps-shell ps-appbar-top">
           {/* Orange W badge */}
-          <div style={{ width: 32, height: 32, borderRadius: 9, background: T.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <span style={{ fontSize: 17, fontWeight: 900, color: '#fff', lineHeight: 1 }}>W</span>
-          </div>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: T.text, letterSpacing: 0.2 }}>WNBA PROP SCOUT</div>
-            {IS_SANDBOX && (
-              <span style={{ fontSize: 9, fontWeight: 700, color: T.yellow, background: T.yellowDim, padding: '1px 5px', borderRadius: 3, letterSpacing: 0.8 }}>SANDBOX</span>
-            )}
+          <div className="ps-brand">
+            <div style={{ width: 34, height: 34, borderRadius: 9, background: T.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 8px 22px rgba(249,115,22,0.24)' }}>
+              <span style={{ fontSize: 18, fontWeight: 900, color: '#fff', lineHeight: 1 }}>W</span>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, letterSpacing: 2.2, lineHeight: 1 }}>WNBA</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: T.text, letterSpacing: 0.1, lineHeight: 1.1 }}>Prop Scout</div>
+              {IS_SANDBOX && (
+                <span style={{ fontSize: 9, fontWeight: 700, color: T.yellow, background: T.yellowDim, padding: '1px 5px', borderRadius: 3, letterSpacing: 0.8 }}>SANDBOX</span>
+              )}
+            </div>
           </div>
 
           {/* Date navigator (right) */}
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
+          <div className="ps-date-nav">
             <button onClick={() => shiftDate(-1)} style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', fontSize: 18, padding: '0 5px', lineHeight: 1 }}>‹</button>
             <label style={{ cursor: 'pointer', position: 'relative' }}>
               <span style={{ fontSize: 12, color: T.text2, fontWeight: 600 }}>
@@ -1588,18 +1755,20 @@ export default function App() {
         </div>
 
         {/* Nav tabs */}
-        <div style={{ display: 'flex', borderTop: `1px solid ${T.border}` }}>
+        <div className="ps-shell ps-nav">
           {NAV_TABS.map(t => (
             <button key={t} onClick={() => setActiveNav(t)} style={{
-              flex: 1, background: 'none', border: 'none', padding: '10px 0',
+              background: activeNav === t ? T.accent : T.card,
+              border: `1px solid ${activeNav === t ? T.accent : T.border}`,
+              borderRadius: 8,
+              padding: '9px 18px',
               fontSize: 11, fontWeight: 800,
-              color: activeNav === t ? T.accent : T.text3,
-              borderBottom: activeNav === t ? `2px solid ${T.accent}` : '2px solid transparent',
-              cursor: 'pointer', letterSpacing: 0.8, transition: 'color 0.1s',
+              color: activeNav === t ? '#fff' : T.text3,
+              cursor: 'pointer', letterSpacing: 0.8, transition: 'color 0.1s, background 0.1s, border-color 0.1s',
             }}>
               {NAV_LABELS[t]}
               {t === 'board' && topPicks.length > 0 && (
-                <span style={{ marginLeft: 4, background: T.accent, color: '#fff', fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 10, verticalAlign: 'middle' }}>
+                <span style={{ marginLeft: 6, background: activeNav === t ? '#fff' : T.accent, color: activeNav === t ? T.accent : '#fff', fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 10, verticalAlign: 'middle' }}>
                   {topPicks.length}
                 </span>
               )}
@@ -1610,11 +1779,16 @@ export default function App() {
 
       {/* ── SLATE tab ── */}
       {activeNav === 'slate' && (
-        <div style={{ padding: '14px 14px 32px' }}>
-          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 12 }}>
+        <div className="ps-shell ps-page">
+          <div className="ps-daily-card">
+            <span>↯ DAILY CARD</span>
+            <span style={{ color: T.text3 }}>▾</span>
+          </div>
+
+          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1.2, marginBottom: 12 }}>
             {isToday
-              ? "TODAY'S SLATE"
-              : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' }).toUpperCase() + ' SLATE'}
+              ? `TODAY'S SLATE — ${games.length} GAME${games.length === 1 ? '' : 'S'}`
+              : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' }).toUpperCase() + ` SLATE — ${games.length} GAME${games.length === 1 ? '' : 'S'}`}
           </div>
 
           {loadingSlate && (
@@ -1624,26 +1798,30 @@ export default function App() {
             <div style={{ textAlign: 'center', padding: 40, color: T.red, fontSize: 12 }}>{slateError}</div>
           )}
           {!loadingSlate && !slateError && games.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 40, color: T.text3, fontSize: 12 }}>No games scheduled.</div>
+            <div className="ps-empty-state">No games scheduled.</div>
           )}
 
-          {games.map(g => (
-            <div key={g.id}>
-              <SlateCard
-                game={g}
-                isSelected={expandedGameId === g.id}
-                topPick={topPicksByGame.get(g.id) || null}
-                onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
-              />
-              {expandedGameId === g.id && (
-                <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
-              )}
+          {games.length > 0 && (
+            <div className="ps-slate-grid">
+              {games.map(g => (
+                <div key={g.id}>
+                  <SlateCard
+                    game={g}
+                    isSelected={expandedGameId === g.id}
+                    topPick={topPicksByGame.get(g.id) || null}
+                    onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
+                  />
+                  {expandedGameId === g.id && (
+                    <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
 
           {/* Confidence legend */}
           {!loadingSlate && games.length > 0 && (
-            <div style={{ marginTop: 16, padding: '10px 14px', background: T.card, borderRadius: 10, border: `1px solid ${T.border}` }}>
+            <div className="ps-legend" style={{ marginTop: 16, padding: '10px 14px', background: T.card, borderRadius: 10, border: `1px solid ${T.border}` }}>
               <div style={{ fontSize: 9, color: T.text3, letterSpacing: 1, marginBottom: 8 }}>CONFIDENCE SCALE</div>
               <div style={{ display: 'flex', gap: 16 }}>
                 {[{color:T.green,label:'70–100',desc:'FAVORABLE'},{color:T.yellow,label:'40–69',desc:'NEUTRAL'},{color:T.red,label:'0–39',desc:'UNFAV.'}].map(({ color, label, desc }) => (
@@ -1663,16 +1841,24 @@ export default function App() {
 
       {/* ── BOARD tab ── */}
       {activeNav === 'board' && (
-        <BoardTab picks={topPicks} loading={loadingPicks} error={picksError} />
+        <div className="ps-shell ps-page">
+          <BoardTab picks={topPicks} loading={loadingPicks} error={picksError} />
+        </div>
       )}
 
       {/* ── PICKS tab ── */}
       {activeNav === 'picks' && (
-        <TopPicksTab picks={topPicks} loading={loadingPicks} error={picksError} />
+        <div className="ps-shell ps-page">
+          <TopPicksTab picks={topPicks} loading={loadingPicks} error={picksError} />
+        </div>
       )}
 
       {/* ── MODEL tab ── */}
-      {activeNav === 'model' && <ModelTab />}
+      {activeNav === 'model' && (
+        <div className="ps-shell ps-page">
+          <ModelTab />
+        </div>
+      )}
 
       {/* ── Full-screen GameCard ── */}
       {selectedGame && (

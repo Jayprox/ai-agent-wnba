@@ -3188,3 +3188,60 @@ node scripts/ingest-referee-crews.js --season=2025 --backfill=true
 node scripts/ingest-referee-crews.js --season=2024 --backfill=true
 ```
 Each full season loop takes ~25 min at the 6s throttle (≈150 game days).
+
+---
+
+### UI Responsive Polish — WNBA / MLB Visual Parity (done by Codex, 2026-05-05)
+
+**Goal:** Make WNBA Prop Scout feel production-ready and visually consistent with the MLB Prop Scout app across desktop and mobile.
+
+**File changed:**
+- `wnba-prop-scout.jsx`
+
+**What changed:**
+- Removed the mobile-only `maxWidth: 480` shell.
+- Added a responsive app shell:
+  - desktop width up to `1180px`
+  - mobile remains full-width and compact
+  - shared dark navy/orange visual language
+- Added `RESPONSIVE_CSS` with reusable classes:
+  - `.ps-app`
+  - `.ps-shell`
+  - `.ps-appbar`
+  - `.ps-nav`
+  - `.ps-page`
+  - `.ps-daily-card`
+  - `.ps-slate-grid`
+  - `.ps-empty-state`
+  - `.ps-panel`
+  - `.ps-subnav`
+  - `.ps-card-grid`
+- Slate page:
+  - desktop now uses a wide shell and auto-fit card grid
+  - mobile stays one-column
+  - `Daily Card` row added and kept visible on both desktop/mobile
+  - empty state upgraded from floating text to a framed panel
+- Top navigation:
+  - desktop and mobile now both use pill-style tabs
+  - removed the mobile-only underline tab treatment
+- Board tab:
+  - stat sub-tabs converted from underline tabs to pill-style tabs
+  - added matching `PROP BOARD` daily-card header
+  - list wrapped in a consistent panel
+  - empty/loading/error states use shared framed style
+- Picks tab:
+  - added matching `TOP PICKS` daily-card header
+  - cards use responsive grid on desktop, one-column on mobile
+- Model tab:
+  - added matching `MODEL` daily-card header
+  - signal list converted to responsive card grid
+- Inline `GamePropsPanel`:
+  - inner prop tabs converted to pill-style tabs for consistency
+
+**Verification:**
+- `npm run build` passed after the responsive shell update.
+- `npm run build` passed again after the consistency pass across Board/Picks/Model/GamePropsPanel.
+
+**Notes / limitations:**
+- No backend or data changes.
+- Browser visual inspection was limited by local tool permissions, but the user reviewed screenshots in-browser and confirmed the direction looked good before this handoff update.
