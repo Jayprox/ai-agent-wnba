@@ -50,6 +50,10 @@ function formatTeam(team) {
   };
 }
 
+function toNullableNumber(value) {
+  return value == null ? null : Number(value);
+}
+
 function formatPlayer(player) {
   return {
     id: player.id,
@@ -140,6 +144,78 @@ app.get('/api/wnba/games', async (req, res) => {
         home_team: formatTeam(teamsById.get(game.home_team_id)),
         visitor_team: formatTeam(teamsById.get(game.visitor_team_id)),
       })),
+    });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * GET /api/wnba/slate?date=YYYY-MM-DD
+ * Returns games for a date with latest game-level odds merged inline.
+ */
+app.get('/api/wnba/slate', async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+
+    const [teamsById, { data: games, error: gamesError }] = await Promise.all([
+      getTeamsById(),
+      supabase
+        .from('games')
+        .select('*')
+        .eq('game_date', date)
+        .order('id', { ascending: true }),
+    ]);
+
+    if (gamesError) throw gamesError;
+    if (!games?.length) return res.json({ data: [] });
+
+    const gameIds = games.map(game => game.id);
+    const { data: oddsRows, error: oddsError } = await supabase
+      .from('odds_snapshots')
+      .select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at')
+      .in('game_id', gameIds)
+      .is('player_id', null)
+      .in('prop_type', ['spread', 'total', 'moneyline'])
+      .order('snapshot_at', { ascending: false });
+
+    if (oddsError) throw oddsError;
+
+    const oddsByGame = new Map();
+    for (const row of oddsRows || []) {
+      if (!oddsByGame.has(row.game_id)) oddsByGame.set(row.game_id, {});
+      const byType = oddsByGame.get(row.game_id);
+      if (!byType[row.prop_type]) byType[row.prop_type] = row;
+    }
+
+    res.json({
+      data: games.map(game => {
+        const odds = oddsByGame.get(game.id) || {};
+
+        return {
+          id: game.id,
+          bdl_id: game.bdl_id,
+          date: game.game_date,
+          game_date: game.game_date,
+          status: game.status,
+          home_team_score: game.home_team_score,
+          visitor_team_score: game.visitor_team_score,
+          home_score: game.home_team_score,
+          away_score: game.visitor_team_score,
+          season: game.season,
+          postseason: game.postseason,
+          period: game.period,
+          time: game.time,
+          home_team: formatTeam(teamsById.get(game.home_team_id)),
+          visitor_team: formatTeam(teamsById.get(game.visitor_team_id)),
+          spread: odds.spread ? toNullableNumber(odds.spread.line) : null,
+          total: odds.total ? toNullableNumber(odds.total.line) : null,
+          // ingest-odds stores h2h over_odds as home and under_odds as away.
+          home_ml: odds.moneyline ? toNullableNumber(odds.moneyline.over_odds) : null,
+          away_ml: odds.moneyline ? toNullableNumber(odds.moneyline.under_odds) : null,
+          odds_sportsbook: odds.spread?.sportsbook || odds.total?.sportsbook || odds.moneyline?.sportsbook || null,
+        };
+      }),
     });
   } catch (e) {
     handleError(res, e);
@@ -370,6 +446,33 @@ app.get('/api/wnba/props', async (req, res) => {
       `)
       .eq('game_id', gameId)
       .order('confidence_score', { ascending: false });
+
+    if (error) throw error;
+    res.json({ data: data || [] });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * GET /api/wnba/first-basket?gameId=X
+ * Returns first basket recommendations for a game.
+ */
+app.get('/api/wnba/first-basket', async (req, res) => {
+  try {
+    const { gameId } = req.query;
+    if (!gameId) return res.status(400).json({ error: 'gameId required' });
+
+    const { data, error } = await supabase
+      .from('first_basket_results')
+      .select(`
+        *,
+        players(id, full_name, first_name, last_name, position, team_id, teams(id, name, abbreviation))
+      `)
+      .eq('game_id', gameId)
+      .neq('recommendation', 'pass')
+      .order('first_basket_score', { ascending: false })
+      .limit(10);
 
     if (error) throw error;
     res.json({ data: data || [] });

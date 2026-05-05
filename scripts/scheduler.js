@@ -12,7 +12,10 @@ const { ingestInjuries } = require('./ingest-injuries');
 const { calcMetrics } = require('./calc-metrics');
 const { calcMatchupRatings } = require('./calc-matchup-ratings');
 const { calcPaceRatings } = require('./calc-pace-ratings');
+const { ingestWnbaStats } = require('./ingest-wnba-stats');
+const { ingestRefereeCrew } = require('./ingest-referee-crews');
 const { calcConfidence } = require('./calc-confidence');
+const { calcFirstBasket } = require('./calc-first-basket');
 
 const TIMEZONE = 'America/New_York';
 
@@ -46,6 +49,7 @@ function startScheduler() {
   schedule('midday odds + injuries', '0 12 * * *', async () => {
     await ingestOdds();
     await ingestInjuries();
+    await ingestRefereeCrew(); // crew assignments post at 9am ET; fetch at noon
   });
 
   schedule('daytime odds refresh', '0 12-23/4 * * *', () => ingestOdds());
@@ -57,7 +61,9 @@ function startScheduler() {
     await calcMetrics();
     await calcMatchupRatings();
     await calcPaceRatings();
+    await ingestWnbaStats();
     await calcConfidence();   // generate prop recommendations from updated metrics
+    await calcFirstBasket();
   });
 
   console.log(`[scheduler] Running indefinitely as of ${timestamp()}`);

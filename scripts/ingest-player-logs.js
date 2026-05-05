@@ -6,6 +6,7 @@ require('dotenv').config();
  *
  * Usage:
  *   node scripts/ingest-player-logs.js
+ *   node scripts/ingest-player-logs.js --season=2025 --force
  */
 
 const { supabase } = require('../lib/supabase');
@@ -13,6 +14,18 @@ const { supabase } = require('../lib/supabase');
 const ESPN_SUMMARY = 'https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/summary';
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function getArg(name) {
+  const flag = `--${name}`;
+  const i = process.argv.indexOf(flag);
+  if (i !== -1) return process.argv[i + 1];
+  const inline = process.argv.find(arg => arg.startsWith(`${flag}=`));
+  return inline ? inline.slice(flag.length + 1) : null;
+}
+
+function hasFlag(name) {
+  return process.argv.includes(`--${name}`);
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -57,35 +70,90 @@ function getNum(stats, names, label) {
   return Number.isFinite(n) ? n : null;
 }
 
+function extractQ1Points(summary) {
+  const plays = summary?.plays || [];
+  const q1Map = new Map();
+
+  for (const play of plays) {
+    if (play.period?.number !== 1) continue;
+    if (!play.scoringPlay) continue;
+
+    const points = Number(play.scoreValue);
+    if (!Number.isFinite(points) || points <= 0) continue;
+
+    const athleteId = String(
+      play.participants?.[0]?.athlete?.id ||
+      play.athleteId ||
+      ''
+    );
+    if (!athleteId) continue;
+
+    q1Map.set(athleteId, (q1Map.get(athleteId) || 0) + points);
+  }
+
+  return q1Map;
+}
+
 // ─── ESPN fetch ──────────────────────────────────────────────────────────────
 
 async function espnSummary(espnId) {
-  const r = await fetch(`${ESPN_SUMMARY}?event=${espnId}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  });
-  if (!r.ok) throw new Error(`ESPN summary ${r.status} for event=${espnId}`);
-  return r.json();
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch(`${ESPN_SUMMARY}?event=${espnId}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      if (!r.ok) throw new Error(`ESPN summary ${r.status} for event=${espnId}`);
+      return r.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await sleep(1000 * attempt);
+    }
+  }
+
+  throw lastError;
 }
 
 // ─── Supabase queries ────────────────────────────────────────────────────────
 
-async function getGamesNeedingLogs() {
-  const [{ data: finalGames, error: gErr }, { data: logged, error: lErr }] = await Promise.all([
-    supabase
-      .from('games')
-      .select('id, espn_id, bdl_id, game_date')
-      .eq('status', 'final')
-      .not('espn_id', 'is', null)
-      .order('game_date', { ascending: true }),
+async function fetchAll(query, batchSize = 1000) {
+  const rows = [];
+  for (let from = 0; ; from += batchSize) {
+    const { data, error } = await query.range(from, from + batchSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < batchSize) break;
+  }
+  return rows;
+}
+
+async function getGamesNeedingLogs({ season = null, force = false } = {}) {
+  let gamesQuery = supabase
+    .from('games')
+    .select('id, espn_id, bdl_id, game_date, season')
+    .eq('status', 'final')
+    .not('espn_id', 'is', null)
+    .order('game_date', { ascending: true })
+    .order('id', { ascending: true });
+
+  if (season) gamesQuery = gamesQuery.eq('season', Number(season));
+
+  const finalGames = await fetchAll(gamesQuery);
+  if (force) return finalGames;
+
+  const gameIds = finalGames.map(game => game.id);
+  if (!gameIds.length) return [];
+
+  const logged = await fetchAll(
     supabase
       .from('player_game_logs')
-      .select('game_id'),
-  ]);
-  if (gErr) throw gErr;
-  if (lErr) throw lErr;
+      .select('game_id')
+      .in('game_id', gameIds)
+  );
 
   const loggedIds = new Set((logged || []).map(r => r.game_id));
-  return (finalGames || []).filter(g => !loggedIds.has(g.id));
+  return finalGames.filter(g => !loggedIds.has(g.id));
 }
 
 async function buildLookups() {
@@ -144,8 +212,9 @@ function resolvePlayer(espnDisplayName, { playersByName }) {
 
 // ─── Stat mapping ────────────────────────────────────────────────────────────
 
-function mapAthleteToLog(athlete, names, gameId, teamId, playerId) {
+function mapAthleteToLog(athlete, names, gameId, teamId, playerId, q1Map) {
   const stats = athlete.stats || [];
+  const espnAthleteId = String(athlete.athlete?.id || '');
 
   const [fgm, fga]   = parseFraction(stats[idx(names, 'FG')]);
   const [fg3m, fg3a] = parseFraction(stats[idx(names, '3PT')]);
@@ -175,6 +244,7 @@ function mapAthleteToLog(athlete, names, gameId, teamId, playerId) {
     fta,
     ft_pct:      fta ? Number((ftm / fta).toFixed(3)) : null,
     plus_minus:  getNum(stats, names, '+/-'),
+    q1_pts:      espnAthleteId ? (q1Map.get(espnAthleteId) ?? null) : null,
     starter:     athlete.starter ?? false,
     dnp:         !!athlete.didNotPlay,
     dnp_reason:  null,
@@ -184,9 +254,12 @@ function mapAthleteToLog(athlete, names, gameId, teamId, playerId) {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
-async function ingestPlayerLogs() {
+async function ingestPlayerLogs(opts = {}) {
+  const season = opts.season ?? getArg('season') ?? null;
+  const force = opts.force ?? hasFlag('force');
+
   const [games, lookups] = await Promise.all([
-    getGamesNeedingLogs(),
+    getGamesNeedingLogs({ season, force }),
     buildLookups(),
   ]);
 
@@ -195,7 +268,8 @@ async function ingestPlayerLogs() {
     return { fetched: 0, upserted: 0 };
   }
 
-  console.log(`[ingest-player-logs] Processing ${games.length} games via ESPN...`);
+  const scope = season ? `season ${season}` : 'all seasons';
+  console.log(`[ingest-player-logs] Processing ${games.length} games via ESPN (${scope}${force ? ', force' : ''})...`);
 
   let fetched = 0;
   let upserted = 0;
@@ -204,6 +278,7 @@ async function ingestPlayerLogs() {
   for (const game of games) {
     try {
       const summary = await espnSummary(game.espn_id);
+      const q1Map = extractQ1Points(summary);
       const teamSections = summary.boxscore?.players || [];
       const rows = [];
 
@@ -232,7 +307,7 @@ async function ingestPlayerLogs() {
             continue;
           }
 
-          rows.push(mapAthleteToLog(athlete, labels, game.id, teamId, playerId));
+          rows.push(mapAthleteToLog(athlete, labels, game.id, teamId, playerId, q1Map));
         }
       }
 
@@ -272,4 +347,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingestPlayerLogs };
+module.exports = { ingestPlayerLogs, extractQ1Points };

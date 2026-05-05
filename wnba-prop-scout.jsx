@@ -27,6 +27,25 @@ const T = {
   font:    "'Courier New', Courier, monospace",
 };
 
+const TEAM_VENUES = {
+  ATL: 'Gateway Center Arena',
+  CHI: 'Wintrust Arena',
+  CON: 'Mohegan Sun Arena',
+  DAL: 'College Park Center',
+  IND: 'Gainbridge Fieldhouse',
+  LV:  'Michelob ULTRA Arena',
+  LA:  'Crypto.com Arena',
+  MIN: 'Target Center',
+  NY:  'Barclays Center',
+  PHX: 'Footprint Center',
+  SEA: 'Climate Pledge Arena',
+  WSH: 'Entertainment & Sports Arena',
+  GS:  'Chase Center',
+  GSV: 'Chase Center',
+  TOR: 'Scotiabank Arena',
+  POR: 'Moda Center',
+};
+
 // ============================================================
 // SANDBOX DATA
 // ============================================================
@@ -302,6 +321,28 @@ function fmtOne(value) {
   return isNumber(value) ? Number(value).toFixed(1) : '—';
 }
 
+function fmtDate(value) {
+  if (!value) return 'TBA';
+  return new Date(value + 'T12:00:00').toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function fmtML(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '—';
+  const num = Number(value);
+  return num > 0 ? `+${num}` : String(num);
+}
+
+function fmtGameSpread(teamAbbr, spread) {
+  if (spread == null || !Number.isFinite(Number(spread))) return '—';
+  const num = Number(spread);
+  const signed = num > 0 ? `+${fmtOne(num)}` : fmtOne(num);
+  return `${teamAbbr} ${signed}`;
+}
+
 function fmtPlain(value) {
   return isNumber(value) ? value : '—';
 }
@@ -324,6 +365,14 @@ function today() {
 async function apiGetGames(date) {
   if (IS_SANDBOX) return SANDBOX.games;
   const r = await fetch(`${API_BASE}/api/wnba/games?date=${date}`);
+  const d = await r.json();
+  return d.data || [];
+}
+
+async function apiGetSlate(date) {
+  if (IS_SANDBOX) return SANDBOX.games;
+  const r = await fetch(`${API_BASE}/api/wnba/slate?date=${date}`);
+  if (!r.ok) throw new Error(`slate fetch failed: ${r.status}`);
   const d = await r.json();
   return d.data || [];
 }
@@ -436,6 +485,14 @@ async function apiGetProps(gameId) {
   return grouped;
 }
 
+async function apiGetFirstBasket(gameId) {
+  if (IS_SANDBOX) return [];
+  const r = await fetch(`${API_BASE}/api/wnba/first-basket?gameId=${gameId}`);
+  if (!r.ok) return [];
+  const d = await r.json();
+  return d.data || [];
+}
+
 // ============================================================
 // COMPONENTS
 // ============================================================
@@ -510,10 +567,34 @@ function ScoreGauge({ score }) {
   );
 }
 
+function ConfidenceBar({ score }) {
+  const safeScore = Number.isFinite(Number(score)) ? Math.max(0, Math.min(100, Number(score))) : 0;
+  const color = scoreColor(safeScore);
+  return (
+    <div style={{ width:70 }}>
+      <div style={{
+        height:4,
+        borderRadius:2,
+        background:T.card3,
+        overflow:'hidden',
+      }}>
+        <div style={{ height:'100%', width:`${safeScore}%`, background:color }} />
+      </div>
+      <div style={{ fontFamily:T.font, fontSize:9, color, fontWeight:700, marginTop:3, textAlign:'right' }}>
+        {fmtOne(safeScore)}
+      </div>
+    </div>
+  );
+}
+
 // ---- Slate card ----
 function SlateCard({ game, isSelected, onClick }) {
-  const aw = game.visitor_team.abbreviation;
-  const hw = game.home_team.abbreviation;
+  const aw = game.visitor_team?.abbreviation || 'AWAY';
+  const hw = game.home_team?.abbreviation || 'HOME';
+  const venue = TEAM_VENUES[hw] ?? 'TBA';
+  const moneyline = game.home_ml == null && game.away_ml == null
+    ? '—'
+    : `${hw} ${fmtML(game.home_ml)} / ${aw} ${fmtML(game.away_ml)}`;
   return (
     <div
       onClick={onClick}
@@ -529,23 +610,54 @@ function SlateCard({ game, isSelected, onClick }) {
         <div style={{ fontFamily:T.font, fontSize:15, fontWeight:700, color:T.text }}>
           {aw} <span style={{ color:T.text3, fontWeight:400 }}>@</span> {hw}
         </div>
-        <div style={{ fontFamily:T.font, fontSize:11, color:T.text3 }}>{game.status}</div>
+        <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, textTransform:'uppercase' }}>{game.status}</div>
       </div>
-      <div style={{ display:'flex', gap:12, marginTop:8, alignItems:'center' }}>
-        <div style={{ fontFamily:T.font, fontSize:11, color:T.text2 }}>
-          {game.visitor_team.name.split(' ').pop()} ({game.visitor_record})
-        </div>
-        <div style={{ color:T.text3, fontSize:11 }}>vs</div>
-        <div style={{ fontFamily:T.font, fontSize:11, color:T.text2 }}>
-          {game.home_team.name.split(' ').pop()} ({game.home_record})
-        </div>
+      <div style={{ fontFamily:T.font, fontSize:11, color:T.text2, marginTop:6 }}>
+        {venue} <span style={{ color:T.text3 }}>·</span> {fmtDate(game.game_date || game.date)}
       </div>
+
+      <div style={{ height:1, background:T.border, margin:'10px 0 9px' }} />
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 0.8fr 1.7fr', gap:10 }}>
+        {[
+          { label:'SPREAD', value:fmtGameSpread(hw, game.spread) },
+          { label:'O/U', value:game.total == null ? '—' : fmtOne(game.total) },
+          { label:'ML', value:moneyline },
+        ].map(item => (
+          <div key={item.label} style={{ minWidth:0 }}>
+            <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, letterSpacing:0.6 }}>{item.label}</div>
+            <div style={{
+              fontFamily:T.font, fontSize:12, color:T.text, fontWeight:700,
+              marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+            }}>
+              {item.value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {game.odds_sportsbook && (
+        <div style={{ fontFamily:T.font, fontSize:9, color:T.text3, marginTop:8 }}>
+          {game.odds_sportsbook}
+        </div>
+      )}
     </div>
   );
 }
 
 // ---- Tab bar ----
 function TabBar({ tabs, active, onSelect }) {
+  const labels = {
+    pts: 'POINTS',
+    reb: 'REBOUNDS',
+    ast: 'ASSISTS',
+    pra: 'PRA',
+    stl: 'STEALS',
+    blk: 'BLOCKS',
+    fg3m: '3PM',
+    fb: 'FIRST BASKET',
+  };
+
   return (
     <div style={{
       display:'flex', background:T.card2,
@@ -567,7 +679,7 @@ function TabBar({ tabs, active, onSelect }) {
             transition:'color 0.1s',
           }}
         >
-          {t.toUpperCase()}
+          {labels[t] || t.toUpperCase()}
         </button>
       ))}
     </div>
@@ -1102,6 +1214,23 @@ function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
                       </div>
                     </div>
 
+                    {prop.correlated_opportunity && (
+                      <span style={{
+                        display:'inline-block',
+                        background:'#1a3a2a',
+                        color:T.green,
+                        border:`1px solid ${T.green}`,
+                        borderRadius:4,
+                        fontFamily:T.font,
+                        fontSize:10,
+                        padding:'2px 6px',
+                        marginTop:6,
+                        letterSpacing:'0.03em',
+                      }}>
+                        CORRELATED · {String(prop.correlated_props || '').toUpperCase()}
+                      </span>
+                    )}
+
                     <div style={{
                       display:'grid',
                       gridTemplateColumns:'repeat(4, 1fr)',
@@ -1159,6 +1288,260 @@ function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function GamePropsPanel({ game, onOpenFull }) {
+  const [activeTab, setActiveTab] = useState('pts');
+  const [props, setProps] = useState([]);
+  const [firstBasket, setFirstBasket] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fbLoading, setFbLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [fbError, setFbError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProps() {
+      try {
+        setLoading(true);
+        setError(null);
+        const grouped = await apiGetProps(game.id);
+        if (cancelled) return;
+        setProps(Object.values(grouped).flat());
+      } catch (err) {
+        if (!cancelled) {
+          setError('Failed to load props.');
+          setProps([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadProps();
+    return () => { cancelled = true; };
+  }, [game.id]);
+
+  useEffect(() => {
+    if (activeTab !== 'fb') return undefined;
+
+    let cancelled = false;
+
+    async function loadFirstBasket() {
+      try {
+        setFbLoading(true);
+        setFbError(null);
+        const rows = await apiGetFirstBasket(game.id);
+        if (!cancelled) setFirstBasket(rows);
+      } catch (err) {
+        if (!cancelled) {
+          setFbError('Failed to load first basket.');
+          setFirstBasket([]);
+        }
+      } finally {
+        if (!cancelled) setFbLoading(false);
+      }
+    }
+
+    loadFirstBasket();
+    return () => { cancelled = true; };
+  }, [activeTab, game.id]);
+
+  const visibleProps = props
+    .filter(prop => String(prop.prop_type || '').toLowerCase() === activeTab)
+    .sort((a, b) => Number(b.confidence_score || 0) - Number(a.confidence_score || 0))
+    .slice(0, 5);
+  const showFirstBasket = activeTab === 'fb';
+
+  return (
+    <div style={{
+      margin:'-2px 6px 12px',
+      padding:'0 10px 10px',
+      borderLeft:`1px solid ${T.border}`,
+      borderRight:`1px solid ${T.border}`,
+      borderBottom:`1px solid ${T.border}`,
+      borderBottomLeftRadius:8,
+      borderBottomRightRadius:8,
+      background:T.card,
+    }}>
+      <TabBar tabs={['pts', 'reb', 'ast', 'pra', 'stl', 'blk', 'fg3m', 'fb']} active={activeTab} onSelect={setActiveTab} />
+
+      {!showFirstBasket && loading && (
+        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
+          Loading props...
+        </div>
+      )}
+
+      {!showFirstBasket && !loading && error && (
+        <div style={{ textAlign:'center', padding:18, color:T.red, fontFamily:T.font, fontSize:12 }}>
+          {error}
+        </div>
+      )}
+
+      {!showFirstBasket && !loading && !error && visibleProps.length === 0 && (
+        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
+          No prop analysis available yet for this game.
+        </div>
+      )}
+
+      {!showFirstBasket && !loading && !error && visibleProps.map(prop => {
+        const player = prop.player || prop.players || {};
+        const rec = prop.recommendation || 'PASS';
+        const type = String(prop.prop_type || prop.type || '').toUpperCase();
+        const recColor = rec === 'OVER' ? T.green : rec === 'UNDER' ? T.red : T.card3;
+
+        return (
+          <div key={prop.id} style={{
+            display:'flex',
+            justifyContent:'space-between',
+            alignItems:'center',
+            gap:10,
+            padding:'8px 0',
+            borderBottom:`1px solid ${T.border}`,
+          }}>
+            <div style={{ minWidth:0 }}>
+              <div style={{
+                fontFamily:T.font,
+                fontSize:12,
+                fontWeight:700,
+                color:T.text,
+                whiteSpace:'nowrap',
+                overflow:'hidden',
+                textOverflow:'ellipsis',
+              }}>
+                {player.full_name || player.name || 'Unknown'}
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, flexWrap:'wrap' }}>
+                <span style={{ fontFamily:T.font, fontSize:9, color:T.text3 }}>
+                  {player.position || '—'}
+                </span>
+                <span style={{ fontFamily:T.font, fontSize:10, color:T.text2 }}>
+                  {type} {rec === 'UNDER' ? 'U' : rec === 'OVER' ? 'O' : ''} {fmtOne(prop.line)}
+                </span>
+                {prop.correlated_opportunity && (
+                  <span style={{
+                    display:'inline-block',
+                    background:'#1a3a2a',
+                    color:T.green,
+                    border:`1px solid ${T.green}`,
+                    borderRadius:4,
+                    fontFamily:T.font,
+                    fontSize:9,
+                    padding:'1px 5px',
+                    letterSpacing:'0.03em',
+                  }}>
+                    CORRELATED · {String(prop.correlated_props || '').toUpperCase()}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+              <ConfidenceBar score={prop.confidence_score} />
+              <Badge color={recColor}>{rec}</Badge>
+            </div>
+          </div>
+        );
+      })}
+
+      {showFirstBasket && fbLoading && (
+        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
+          Loading first basket...
+        </div>
+      )}
+
+      {showFirstBasket && !fbLoading && fbError && (
+        <div style={{ textAlign:'center', padding:18, color:T.red, fontFamily:T.font, fontSize:12 }}>
+          {fbError}
+        </div>
+      )}
+
+      {showFirstBasket && !fbLoading && !fbError && firstBasket.length === 0 && (
+        <div style={{ textAlign:'center', padding:18, color:T.text3, fontFamily:T.font, fontSize:12 }}>
+          No first basket analysis available yet for this game.
+        </div>
+      )}
+
+      {showFirstBasket && !fbLoading && !fbError && firstBasket.map(row => {
+        const player = row.players || {};
+        const team = player.teams || row.teams || {};
+        const signals = row.signals || {};
+        const rec = row.recommendation === 'strong_look' ? 'STRONG LOOK' : 'VALUE LOOK';
+        const recColor = row.recommendation === 'strong_look' ? T.green : T.yellow;
+        const chips = [];
+        if (signals.starter_score >= 80) chips.push('STARTER');
+        if (signals.usage_score >= 65) chips.push('HIGH USAGE');
+        if (signals.pace_score >= 65) chips.push('FAST PACE');
+        if (signals.q1_tendency_score >= 65) chips.push('Q1 SCORER');
+
+        return (
+          <div key={row.id} style={{
+            display:'flex',
+            justifyContent:'space-between',
+            alignItems:'center',
+            gap:10,
+            padding:'8px 0',
+            borderBottom:`1px solid ${T.border}`,
+          }}>
+            <div style={{ minWidth:0 }}>
+              <div style={{
+                fontFamily:T.font,
+                fontSize:12,
+                fontWeight:700,
+                color:T.text,
+                whiteSpace:'nowrap',
+                overflow:'hidden',
+                textOverflow:'ellipsis',
+              }}>
+                {player.full_name || 'Unknown'}
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, flexWrap:'wrap' }}>
+                <span style={{ fontFamily:T.font, fontSize:9, color:T.text3 }}>
+                  {team.abbreviation || '—'} · {player.position || '—'}
+                </span>
+                {chips.map(chip => (
+                  <span key={chip} style={{
+                    border:`1px solid ${T.border}`,
+                    borderRadius:4,
+                    color:T.text2,
+                    fontFamily:T.font,
+                    fontSize:9,
+                    padding:'1px 5px',
+                    letterSpacing:'0.03em',
+                  }}>
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+              <ConfidenceBar score={row.first_basket_score} />
+              <Badge color={recColor}>{rec}</Badge>
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ textAlign:'right' }}>
+        <button
+          onClick={() => onOpenFull(game)}
+          style={{
+            background:'none',
+            border:'none',
+            color:T.blue,
+            fontFamily:T.font,
+            fontSize:11,
+            cursor:'pointer',
+            padding:'8px 0 0',
+          }}
+        >
+          Full Analysis →
+        </button>
+      </div>
     </div>
   );
 }
@@ -1320,9 +1703,10 @@ function GameCard({ game, onClose }) {
 export default function App() {
   const [games, setGames]           = useState([]);
   const [selectedGame, setSelected] = useState(null);
+  const [expandedGameId, setExpandedGameId] = useState(null);
   const [loadingSlate, setSlateLoad]= useState(true);
   const [error, setError]           = useState(null);
-  const [selectedDate, setSelectedDate] = useState('2025-07-17');
+  const [selectedDate, setSelectedDate] = useState(today());
 
   function shiftDate(days) {
     const d = new Date(selectedDate + 'T12:00:00');
@@ -1332,6 +1716,7 @@ export default function App() {
     if (next > today()) return;
     setSelectedDate(next);
     setSelected(null);
+    setExpandedGameId(null);
   }
 
   // Hooks before any conditional returns
@@ -1340,7 +1725,7 @@ export default function App() {
       try {
         setSlateLoad(true);
         setError(null);
-        const data = await apiGetGames(selectedDate);
+        const data = await apiGetSlate(selectedDate);
         setGames(data);
       } catch (e) {
         setError('Failed to load slate.');
@@ -1406,7 +1791,7 @@ export default function App() {
               type="date"
               value={selectedDate}
               max={today()}
-              onChange={e => { if (e.target.value) { setSelectedDate(e.target.value); setSelected(null); } }}
+              onChange={e => { if (e.target.value) { setSelectedDate(e.target.value); setSelected(null); setExpandedGameId(null); } }}
               style={{
                 position:'absolute', opacity:0, width:'100%', height:'100%',
                 top:0, left:0, cursor:'pointer',
@@ -1452,12 +1837,19 @@ export default function App() {
         )}
 
         {games.map(g => (
-          <SlateCard
-            key={g.id}
-            game={g}
-            isSelected={selectedGame?.id === g.id}
-            onClick={() => setSelected(g)}
-          />
+          <div key={g.id}>
+            <SlateCard
+              game={g}
+              isSelected={expandedGameId === g.id}
+              onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
+            />
+            {expandedGameId === g.id && (
+              <GamePropsPanel
+                game={g}
+                onOpenFull={setSelected}
+              />
+            )}
+          </div>
         ))}
 
         {/* Legend */}

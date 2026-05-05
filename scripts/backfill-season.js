@@ -19,9 +19,13 @@ const { ingestPlayerLogs } = require('./ingest-player-logs');
 const { calcMetrics } = require('./calc-metrics');
 const { calcMatchupRatings } = require('./calc-matchup-ratings');
 const { calcPaceRatings } = require('./calc-pace-ratings');
+const { ingestWnbaStats } = require('./ingest-wnba-stats');
+const { ingestRefereeCrew } = require('./ingest-referee-crews');
+const { calcFirstBasket } = require('./calc-first-basket');
 
 // WNBA regular seasons run roughly mid-May through mid-September.
 const SEASON_WINDOWS = {
+  2026: { start: '2026-05-16', end: '2026-09-20' },  // end date estimated; update if needed
   2025: { start: '2025-05-16', end: '2025-09-19' },
   2024: { start: '2024-05-14', end: '2024-09-19' },
   2023: { start: '2023-05-19', end: '2023-09-17' },
@@ -47,7 +51,7 @@ function dateRange(start, end) {
 }
 
 async function backfill() {
-  const season = Number(getArgValue('season') || 2025);
+  const season = Number(getArgValue('season') || new Date().getFullYear());
   const window = SEASON_WINDOWS[season];
 
   if (!window) {
@@ -97,7 +101,7 @@ async function backfill() {
     console.error(`[backfill] calcMetrics failed: ${err.message}`);
   }
 
-  console.log(`[backfill] Step 5/6: calculating matchup ratings for season ${season}...`);
+  console.log(`[backfill] Step 5/8: calculating matchup ratings for season ${season}...`);
 
   try {
     const result = await calcMatchupRatings({ season });
@@ -106,13 +110,40 @@ async function backfill() {
     console.error(`[backfill] calcMatchupRatings failed: ${err.message}`);
   }
 
-  console.log(`[backfill] Step 6/6: calculating pace ratings for season ${season}...`);
+  console.log(`[backfill] Step 6/8: calculating pace ratings for season ${season}...`);
 
   try {
     const result = await calcPaceRatings({ season });
     console.log(`[backfill] Pace ratings done — upserted ${result.upserted}`);
   } catch (err) {
     console.error(`[backfill] calcPaceRatings failed: ${err.message}`);
+  }
+
+  console.log(`[backfill] Step 7/8: ingesting WNBA Stats opponent context for season ${season}...`);
+
+  try {
+    const result = await ingestWnbaStats({ season });
+    console.log(`[backfill] WNBA Stats done — upserted ${result.upserted}, failed ${result.failed}`);
+  } catch (err) {
+    console.error(`[backfill] ingestWnbaStats failed: ${err.message}`);
+  }
+
+  console.log(`[backfill] Step 8/9: ingesting referee crews for season ${season}...`);
+
+  try {
+    const result = await ingestRefereeCrew({ season, backfill: true });
+    console.log(`[backfill] Referee crews done — upserted ${result.upserted}, ratings ${result.ratings}, failed ${result.failed}`);
+  } catch (err) {
+    console.error(`[backfill] ingestRefereeCrew failed: ${err.message}`);
+  }
+
+  console.log(`[backfill] Step 9/9: calculating first basket results for season ${season}...`);
+
+  try {
+    const result = await calcFirstBasket({ season });
+    console.log(`[backfill] First basket done — upserted ${result.upserted}, failed ${result.failed}`);
+  } catch (err) {
+    console.error(`[backfill] calcFirstBasket failed: ${err.message}`);
   }
 
   console.log(`[backfill] Complete for ${season} season.`);

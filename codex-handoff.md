@@ -1,6 +1,6 @@
 # WNBA Prop Scout — Codex Handoff Document
 
-**Last updated:** 2026-04-30  
+**Last updated:** 2026-05-04  
 **Prepared by:** Claude (Cowork)  
 **For:** OpenAI Codex
 
@@ -1121,6 +1121,1729 @@ If adding to metrics: add `avg_q1_pts DECIMAL(5,2)` column to `player_research_m
 - The `--force` flag approach is preferred over nulling all rows, as it avoids data loss if the script fails partway through
 - ESPN occasionally omits `plays[]` for older or low-priority games — handle gracefully with `q1_pts = null` rather than erroring
 
+### Completion note — 2026-05-03
+
+Task G completed by Codex. Migration applied and backfill run by user.
+
+Files changed:
+- `scripts/ingest-player-logs.js`
+- `db/004_create_player_game_logs.sql`
+
+What changed:
+- Added `extractQ1Points(summary)` — parses `plays[]` array from ESPN summary, filters to `period.number === 1` and `scoringPlay === true`, sums `scoreValue` by ESPN athlete ID. Returns a `Map<espnAthleteId, q1pts>`. Handles missing `plays[]` gracefully (returns empty map).
+- `q1_pts` wired into `mapAthleteToLog` via ESPN athlete ID lookup. Null when athlete had no Q1 scoring plays or when `plays[]` is absent.
+- `--season` and `--force` CLI flags added. `--force` bypasses the already-logged skip check, enabling re-processing of existing games. Both flags also accepted as programmatic `opts` for caller scripts.
+- `fetchAll()` pagination helper added — fixes a latent Supabase 1000-row truncation bug in `getGamesNeedingLogs`. Now correctly handles full 500+ game seasons.
+- `espnSummary()` upgraded with 3-attempt retry + exponential backoff (1s, 2s). Defensive against transient ESPN 5xx during long backfills.
+- `extractQ1Points` exported for future use in `calc-first-basket.js`.
+- `db/004_create_player_game_logs.sql` updated with `q1_pts DECIMAL(5,1)` column and a comment noting the `ALTER TABLE` needed for existing projects.
+
+Verification:
+- `node --check scripts/ingest-player-logs.js` passed.
+- Unit test of `extractQ1Points`: player with 2+3 Q1 baskets → 5 pts ✅, Q2 plays excluded ✅, non-scoring plays excluded ✅, empty summary → empty map ✅.
+- `ALTER TABLE player_game_logs ADD COLUMN IF NOT EXISTS q1_pts DECIMAL(5,1)` applied in Supabase SQL editor ✅.
+- `node scripts/ingest-player-logs.js --season=2025 --force` completed, no errors ✅.
+- `node scripts/ingest-player-logs.js --season=2024 --force` completed, no errors ✅.
+
+Data foundation for First Basket tab is now complete. `calc-first-basket.js` can use `q1_pts` from `player_game_logs` for first-quarter scoring tendency signal.
+
+### Completion note
+
+Completed by Codex on 2026-05-03.
+
+Files changed:
+- `scripts/ingest-player-logs.js`
+- `db/004_create_player_game_logs.sql`
+
+Implemented:
+- Added `extractQ1Points(summary)` to parse ESPN summary `plays[]`.
+- Q1 parser filters:
+  - `period.number === 1`
+  - `scoringPlay === true`
+  - positive numeric `scoreValue`
+- Q1 parser maps points by ESPN athlete ID from `participants[0].athlete.id` or `athleteId`.
+- `mapAthleteToLog()` now writes `q1_pts` using the ESPN athlete ID from the box score row.
+- Added `--season` and `--force` support:
+  - `node scripts/ingest-player-logs.js --season=2025 --force`
+  - `node scripts/ingest-player-logs.js --season=2024 --force`
+- Improved game/log pagination so the skip-check is not limited by Supabase's 1,000-row default.
+- Added `q1_pts DECIMAL(5,1)` to the fresh setup schema in `db/004_create_player_game_logs.sql`.
+- Added an ALTER TABLE note for existing Supabase projects.
+- Added a 3-attempt ESPN summary retry loop after one transient 2024 fetch failure.
+
+Verification completed:
+- `node --check scripts/ingest-player-logs.js` passed.
+- User applied the live Supabase schema update successfully:
+  ```sql
+  ALTER TABLE player_game_logs ADD COLUMN IF NOT EXISTS q1_pts DECIMAL(5,1);
+  ```
+- Backfill completed:
+  - `node scripts/ingest-player-logs.js --season=2025 --force`
+    - games processed: `298`
+    - rows fetched/upserted: `5,663`
+  - `node scripts/ingest-player-logs.js --season=2024 --force`
+    - games processed: `239`
+    - final rows fetched/upserted after retry-enabled rerun: `4,505`
+- Live ESPN parser spot check passed for event `401736354` (`2025-08-26`):
+  - IND Q1 line score: `26`
+  - SEA Q1 line score: `20`
+  - combined Q1 line score: `46`
+  - summed parsed player Q1 points: `46`
+  - result matched exactly.
+- Stored DB spot check passed for game `245`, ESPN event `401736354`:
+  - DB sum of `player_game_logs.q1_pts`: `46`
+  - ESPN combined Q1 line score: `46`
+  - match: `true`
+- Coverage after backfill:
+  - 2025: `5,663` player log rows, `3,066` rows with non-null `q1_pts`, `2,597` null rows for non-Q1 scorers/no Q1 scoring record.
+  - 2024: `4,505` player log rows, `2,382` rows with non-null `q1_pts`, `2,123` null rows for non-Q1 scorers/no Q1 scoring record.
+- The previously failed 2024 ESPN event `401620421` (`2024-09-06`) succeeded on retry-enabled rerun:
+  - rows: `18`
+  - non-null `q1_pts` rows: `10`
+  - Q1 total: `46`
+
+---
+
+## UI Backlog — Slate Page MLB Prop Scout Parity
+
+**Status:** Backlog item added 2026-05-02. Do not implement until the user gives the exact design/details for each tab.
+
+**Goal:** Bring the WNBA Prop Scout slate page closer to the MLB Prop Scout look and information density.
+
+### Slate Game Cards
+
+Each slate card should eventually show:
+- Game time
+- Game location / venue
+- Default sportsbook odds
+- O/U points
+- Moneyline (ML)
+- Point spread
+
+Implementation notes:
+- Current `games` API response may need venue fields if not already stored/displayed.
+- Odds should use the default sportsbook once that product decision is finalized.
+- Keep the card compact and scannable, matching MLB Prop Scout's slate-card feel rather than adding a large marketing-style layout.
+- Visual reference from MLB Prop Scout screenshot:
+  - Dark, dense slate screen with compact cards and subtle borders.
+  - Active primary nav tab is bright green; inactive nav tabs are small dark pill buttons.
+  - Slate section has a compact "Daily Card" selector row above the game list.
+  - Each game card shows matchup on the left, then time and venue directly underneath.
+  - Right side of each card has a sportsbook badge, O/U line, green/red odds movement or price text, and small ML/spread lines.
+  - Lower-left card chips show contextual signals like temperature/weather and model edge tags.
+  - Cards should prioritize scanning/comparison over decorative layout.
+
+### Top Prop Tabs
+
+Add top-level slate tabs for:
+- Points
+- Assists
+- Rebounds
+- 3 Pointers
+- Steals
+- Blocks
+- Combo
+- Double-Doubles
+- First Basket
+
+Notes:
+- The user will specify later what each tab should contain.
+- Combo should expose sub-tabs/options for:
+  - Pts/Ast
+  - Pts/Reb
+  - Ast/Reb
+  - Pts/Ast/Reb
+- First Basket depends on the Task G Q1/player scoring foundation and likely a future first-basket scoring worker/API.
+- Do not build these tab bodies yet; capture the navigation/design structure when the detailed spec arrives.
+
+---
+
+## Task H — Algorithm Refinements: Confidence Cap, Implied Team Total, Blowout Modifier
+
+**Goal:** Three targeted improvements to `calc-confidence.js` using data already in `odds_snapshots`. No new tables, no new ingestion scripts. All signals are derivable from spread and total lines already being fetched by `ingest-odds.js`.
+
+**Source doc:** WNBA Prop Scout Scoring Algorithm Design Brief (from MLB Prop Scout architecture sessions).
+
+---
+
+### Part 1 — Cap confidence display at 80
+
+**Why:** Basketball has significantly higher per-game variance than baseball. A .300 hitter's hit line is stable; a 20 PPG scorer can go for 8 or 38. The MLB app caps at 95; the basketball equivalent should cap at 80 to avoid overclaiming certainty.
+
+**Change:** In `calc-confidence.js`, after computing the weighted confidence score, clamp the stored value at 80:
+
+```js
+const confidence = Math.min(80, round(
+  sProjEdge  * WEIGHTS.projectionEdge  +
+  sHitRate   * WEIGHTS.hitRate         +
+  // ... etc
+));
+```
+
+Also update the recommendation threshold logic — since max is now 80, recalibrate:
+- `>= 68` → OVER/UNDER (was 62 at 0–100 scale, proportionally equivalent)
+- Keep the `|valueGap| >= 0.5` requirement unchanged
+
+Update `prop_analysis_results` stored scores accordingly when re-running confidence. The frontend confidence display should reflect the 0–80 scale with updated tier labels:
+- **70–80:** High Confidence
+- **58–69:** Value Look  
+- **< 58:** Speculative / PASS
+
+---
+
+### Part 2 — Implied team total modifier
+
+**Why:** Vegas sets an implied points total per team (game total split by spread). A team implied at 90 vs league average 82 means more counting stats are available across that roster — boosts points, assists, rebounds, and 3PM props. The market is slow to price individual players up when team totals shift.
+
+**Formula:**
+```
+implied_team_total = (game_total / 2) ± (spread / 2)
+// home team: total/2 + spread/2  (if home favored, spread is negative)
+// away team: total/2 - spread/2
+league_avg_implied = ~82 points per team per game (WNBA 2024–2025)
+```
+
+**Data source:** Query `odds_snapshots` for the game's total and spread:
+```js
+async function getGameOddsContext(gameId) {
+  const { data } = await supabase
+    .from('odds_snapshots')
+    .select('prop_type, line, sportsbook, is_opening')
+    .eq('game_id', gameId)
+    .is('player_id', null)  // game-level odds only
+    .order('snapshot_at', { ascending: false });
+
+  const total  = data?.find(r => r.prop_type === 'total')?.line ?? null;
+  const spread = data?.find(r => r.prop_type === 'spread')?.line ?? null;
+  return { total, spread };
+}
+```
+
+**Scoring:**
+```js
+function scoreImpliedTotal(impliedTeamTotal) {
+  const leagueAvg = 82;
+  if (!impliedTeamTotal) return 50; // neutral if no odds data
+  const delta = impliedTeamTotal - leagueAvg;
+  // +1 point of confidence per point above league avg, capped at ±15
+  return clamp(50 + delta, 35, 65);
+}
+```
+
+**Wire in:** Pass `gameOddsContext` into `analyzePlayerProp`. Compute `impliedTeamTotal` based on whether the player is on the home or away team. Add `sImpliedTotal` as a signal that nudges the `projectionEdge` component rather than as a separate weighted component (avoids re-balancing WEIGHTS):
+
+```js
+// Apply as a pre-multiplier on the projection itself
+const impliedBoost = impliedTeamTotal ? (impliedTeamTotal - 82) / 82 * 0.05 : 0;
+const adjustedProj = proj * (1 + impliedBoost);
+const valueGap = round(adjustedProj - line);
+```
+
+Add to `key_factors` when meaningful:
+```js
+if (impliedTeamTotal && impliedTeamTotal > 86) {
+  keyFactors.push(`Team implied at ${round(impliedTeamTotal, 1)} pts (above avg) — favorable scoring environment`);
+}
+if (impliedTeamTotal && impliedTeamTotal < 78) {
+  keyFactors.push(`Team implied at ${round(impliedTeamTotal, 1)} pts (below avg) — suppressed scoring environment`);
+}
+```
+
+---
+
+### Part 3 — Blowout risk modifier
+
+**Why:** Heavy favorites (−12 or more) risk having starters pulled in Q4. A player who averages 34 minutes may only play 26 in a blowout win. This is a real downward risk on **favored team players only** — underdog players on the losing side typically play through.
+
+**Data source:** Same `getGameOddsContext()` spread data from Part 2.
+
+**Scoring:**
+```js
+function scoreBlowoutRisk(spread, playerIsOnFavoredTeam) {
+  // spread is from the home team's perspective (negative = home favored)
+  if (!spread || !playerIsOnFavoredTeam) return 50; // neutral
+  const absSpread = Math.abs(spread);
+  if (absSpread >= 15) return 30;  // heavy favorite, meaningful blowout risk
+  if (absSpread >= 12) return 38;  // moderate blowout risk
+  if (absSpread >= 8)  return 45;  // slight risk
+  return 50; // neutral
+}
+```
+
+**Wire in:** Determine if the player is on the favored team by comparing spread sign to home/away:
+```js
+const homeSpread = gameOddsContext.spread ?? 0;
+const playerIsHome = player.team_id === game.home_team_id;
+const playerIsOnFavoredTeam =
+  (playerIsHome && homeSpread < -7) ||
+  (!playerIsHome && homeSpread > 7);
+
+const sBlowout = scoreBlowoutRisk(homeSpread, playerIsOnFavoredTeam);
+```
+
+Add `sBlowout` as a small modifier on `minuteStability` component (multiply rather than add to WEIGHTS, since it's a risk flag not an independent signal):
+```js
+const sMinStabAdjusted = sMinStab * (sBlowout / 50);
+```
+
+Add to `risk_flags` when triggered:
+```js
+if (sBlowout < 40) riskFlags.push('blowout_risk');
+```
+
+And to `key_factors`:
+```js
+if (sBlowout < 40) {
+  keyFactors.push(`Blowout risk — favored by ${Math.abs(homeSpread)} (starters may sit Q4)`);
+}
+```
+
+---
+
+### Acceptance criteria
+- `confidence_score` in `prop_analysis_results` never exceeds 80 after re-run
+- OVER/UNDER threshold updated to 68 (from 62)
+- Games with `odds_snapshots` total/spread data show non-neutral implied total and blowout scores in `key_factors`
+- Games without odds data fall back gracefully to neutral (no crashes)
+- `node --check scripts/calc-confidence.js` passes
+- Re-run `node scripts/calc-confidence.js --season=2025` and confirm row count unchanged (~23,470)
+
+### Completion note — 2026-05-03
+
+Task H completed by Codex. Only `scripts/calc-confidence.js` was changed.
+
+What changed:
+- Final stored `confidence_score` is now capped at 80.
+- Recommendation threshold is now `>= 68` with the existing `|valueGap| >= 0.5` requirement unchanged.
+- Summary tier labels now use the 0–80 scale:
+  - `70–80` = High Confidence
+  - `58–69` = Value Look
+  - `<58` = Speculative / PASS
+- Added `getGameOddsContext(gameId)` to read game-level `total` and `spread` rows from `odds_snapshots` where `player_id IS NULL`.
+- Added implied team total projection nudge before `value_gap` is calculated, with neutral fallback when game-level odds are missing.
+- Added `Team implied at ... pts` key factors when implied totals are meaningfully above/below 82.
+- Added blowout risk scoring from the same spread context.
+- Blowout risk now adjusts the minutes stability component via multiplier and adds `blowout_risk` plus a descriptive key factor when triggered.
+
+Verification:
+- `node --check scripts/calc-confidence.js` passed.
+- `node scripts/calc-confidence.js --season=2025` completed successfully.
+- 2025 prop rows upserted: `23,470`.
+- Post-run 2025 `prop_analysis_results` count: `23,470`.
+- Observed max 2025 `confidence_score`: `75.07`.
+- Rows with `confidence_score > 80`: `0`.
+- Spot checks confirmed implied-total key factors and blowout-risk key factors/risk flags on games with total/spread odds data.
+
+---
+
+## Task I — Prop-Specific Scoring Functions
+
+**Goal:** Refactor `scripts/calc-confidence.js` to replace the single generic `analyzePlayerProp` function with per-prop scoring logic. Each prop type gets its own baseline, signal weights, and confidence cap. No new tables, no new ingestion scripts, no frontend changes.
+
+**Scope:** `scripts/calc-confidence.js` only. All other files unchanged.
+
+---
+
+### Background
+
+The current model uses a single `WEIGHTS` block and a single `analyzePlayerProp(player, logs, game, field, ...)` function for all prop types. This works adequately for points but produces poor signal quality for assists (no ball-handler gate), rebounds (raw RPG weighted same as points), and steals/blocks (high-variance events treated like stable counting stats).
+
+The MLB Prop Scout design uses dedicated scoring functions per prop type. This task ports that architecture to basketball, keeping the same component names and DB schema — only the weights and baselines change per prop.
+
+---
+
+### Part 1 — Per-prop WEIGHTS and baselines
+
+Replace the single `WEIGHTS` block and `BASELINE` constant with a `PROP_CONFIG` map keyed by prop type:
+
+```js
+const PROP_CONFIG = {
+  pts: {
+    baseline:   50,
+    cap:        80,
+    weights: {
+      projectionEdge:  0.28,
+      hitRate:         0.22,
+      recentForm:      0.17,
+      minuteStability: 0.10,
+      restContext:     0.06,
+      matchup:         0.05,
+      pace:            0.07,
+      oddsMovement:    0.05,
+    },
+  },
+  reb: {
+    baseline:   45,
+    cap:        80,
+    weights: {
+      projectionEdge:  0.25,
+      hitRate:         0.20,
+      recentForm:      0.15,
+      minuteStability: 0.12,
+      restContext:     0.05,
+      matchup:         0.10,  // rebounding matchup matters more than for pts
+      pace:            0.08,  // pace-adjusted rebounding rate
+      oddsMovement:    0.05,
+    },
+  },
+  ast: {
+    baseline:   45,
+    cap:        80,
+    weights: {
+      projectionEdge:  0.25,
+      hitRate:         0.20,
+      recentForm:      0.15,
+      minuteStability: 0.10,
+      restContext:     0.05,
+      matchup:         0.08,
+      pace:            0.07,
+      oddsMovement:    0.05,
+      ballHandlerRole: 0.05,  // new gate signal — see Part 2
+    },
+  },
+  pra: {
+    baseline:   50,
+    cap:        80,
+    weights: {
+      projectionEdge:  0.28,
+      hitRate:         0.22,
+      recentForm:      0.17,
+      minuteStability: 0.10,
+      restContext:     0.06,
+      matchup:         0.05,
+      pace:            0.07,
+      oddsMovement:    0.05,
+    },
+  },
+  stl: {
+    baseline:   35,
+    cap:        72,  // high-variance event — never overclaim
+    weights: {
+      projectionEdge:  0.30,
+      hitRate:         0.25,
+      recentForm:      0.15,
+      minuteStability: 0.12,
+      restContext:     0.05,
+      matchup:         0.08,  // opponent turnover rate proxy
+      pace:            0.05,
+      oddsMovement:    0.00,  // steals market rarely has odds movement
+    },
+  },
+  blk: {
+    baseline:   35,
+    cap:        72,
+    weights: {
+      projectionEdge:  0.30,
+      hitRate:         0.25,
+      recentForm:      0.15,
+      minuteStability: 0.12,
+      restContext:     0.05,
+      matchup:         0.08,  // opponent rim attack rate proxy
+      pace:            0.05,
+      oddsMovement:    0.00,
+    },
+  },
+};
+```
+
+Weights within each prop type must sum to 1.0. The `stl` and `blk` weights intentionally omit `oddsMovement` (set to 0.00) since those markets rarely price movement.
+
+---
+
+### Part 2 — Ball-handler gate for assists
+
+Assists require ball-handler role detection. A player who scores 20 PPG off-ball will almost never rack up assists — their assist line is a bad bet regardless of pace or matchup.
+
+**Proxy available now (no new data):** Use `avg_ast` from `player_research_metrics`. Players averaging < 2.0 APG are off-ball scorers. Players averaging ≥ 4.0 APG are primary playmakers.
+
+```js
+function scoreBallHandlerRole(avgAst) {
+  if (avgAst == null) return 50;
+  if (avgAst >= 5.0) return 85;  // primary PG/creator
+  if (avgAst >= 4.0) return 70;
+  if (avgAst >= 3.0) return 55;
+  if (avgAst >= 2.0) return 42;
+  return 25;                     // off-ball scorer — strong down-signal
+}
+```
+
+Wire as the `ballHandlerRole` component in the `ast` config. For all other prop types that don't have `ballHandlerRole` in their weights, skip the computation (or hardcode 50 as neutral — it contributes 0 to those configs anyway).
+
+---
+
+### Part 3 — Refactor analyzePlayerProp
+
+Pull the prop config at the top of `analyzePlayerProp`:
+
+```js
+function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupRatings, paceRatings, oddsContext, gameOddsContext) {
+  const config = PROP_CONFIG[field];
+  if (!config) throw new Error(`No prop config for field: ${field}`);
+  const { baseline, cap, weights } = config;
+  // ... rest of function uses weights.projectionEdge etc. instead of WEIGHTS.projectionEdge
+```
+
+The baseline is used only as a reference for documentation — the actual confidence is computed as a weighted sum of component scores (each 0–100), so the baseline concept from the MLB app manifests as the neutral starting point of each component score (most default to 50 when data is absent).
+
+The cap replaces the hard-coded `Math.min(80, ...)` — use `Math.min(cap, ...)`.
+
+---
+
+### Part 4 — stl and blk props
+
+Add `'stl'` and `'blk'` to the `PROP_TYPES` array:
+
+```js
+const PROP_TYPES = ['pts', 'reb', 'ast', 'pra', 'stl', 'blk'];
+```
+
+Apply the same synthetic line fallback already used for pts/reb/ast: `synthLine(seasonAvg)`. Skip players where `avg_stl < 0.5` or `avg_blk < 0.5` (negligible averages — same `< 1.0` guard already exists for pts, set to 0.5 for these lower-volume stats).
+
+The `matchup` signal for steals proxies **opponent turnover rate**: teams that turn the ball over more create more steal opportunities. The current `matchupRatings` map doesn't have a steal-specific rating, so fall back to 50 (neutral) for now and note in a comment that a steal-specific matchup signal would come from a future WNBA Stats API integration.
+
+Same pattern for blocks — `matchup` proxies **opponent rim attack rate**; fall back to 50 with a comment.
+
+---
+
+### Part 5 — Update key_factors strings
+
+The key_factors array in `analyzePlayerProp` already generates most of the right strings. Add two new ones:
+
+```js
+// After computing sBallHandler (for ast prop only):
+if (field === 'ast' && avgAst < 2.0) {
+  keyFactors.push(`Off-ball scorer — low assist ceiling (season avg ${round(avgAst, 1)} APG)`);
+}
+if (field === 'ast' && avgAst >= 4.0) {
+  keyFactors.push(`Primary playmaker — high assist floor (season avg ${round(avgAst, 1)} APG)`);
+}
+
+// For stl/blk, replace the generic matchup key_factor with:
+if (field === 'stl') keyFactors.push(`Steal-opportunity matchup — fallback neutral (upgrade pending WNBA Stats API)`);
+if (field === 'blk') keyFactors.push(`Block-opportunity matchup — fallback neutral (upgrade pending WNBA Stats API)`);
+```
+
+Only add the stl/blk matchup string if sMatchup === 50 (i.e., no real data); suppress if a real matchup signal is present.
+
+---
+
+### Acceptance criteria
+
+- `PROP_TYPES` includes `stl` and `blk`
+- Each prop type uses its own weights from `PROP_CONFIG`
+- `stl` and `blk` confidence scores are capped at 72, not 80
+- `ast` props include `ballHandlerRole` signal; off-ball scorers (< 2 APG) score materially lower than primary PGs
+- Re-running `node scripts/calc-confidence.js --season=2025` produces ~30–35% more rows than before (from the added stl/blk props) and completes without errors
+- `node --check scripts/calc-confidence.js` passes
+- No changes to DB schema, no new migrations needed
+- No changes to `server.js`, `wnba-prop-scout.jsx`, or any other file
+
+### Completion note
+
+Task I completed by Codex on 2026-05-03.
+
+Files changed:
+- `scripts/calc-confidence.js`
+
+What changed:
+- Replaced the single global `WEIGHTS` block with `PROP_CONFIG` for `pts`, `reb`, `ast`, `pra`, `stl`, and `blk`.
+- Added `stl` and `blk` to `PROP_TYPES`.
+- Confidence caps now come from prop config:
+  - `pts`, `reb`, `ast`, `pra` cap at `80`
+  - `stl`, `blk` cap at `72`
+- Added `scoreBallHandlerRole(avgAst)` and wired it into the `ast` scoring config.
+- `stl` and `blk` use neutral matchup fallback (`50`) with comments noting future WNBA Stats API upgrades for opponent turnover rate / rim attack rate.
+- Added assist role key factors:
+  - off-ball scorer for `< 2.0 APG`
+  - primary playmaker for `>= 4.0 APG`
+- Added stl/blk neutral matchup key factors.
+
+Verification:
+- `node --check scripts/calc-confidence.js` passed.
+- `node scripts/calc-confidence.js --season=2025` completed successfully.
+- Row count before Task I (after Task H): `23,470`.
+- Row count after Task I: `29,313`.
+- Added rows: `5,843` (`+24.9%`).
+- By prop type after rerun:
+  - `pts`: `6,533`, max confidence `73.03`
+  - `reb`: `5,886`, max confidence `68.52`
+  - `ast`: `4,288`, max confidence `73.69`
+  - `pra`: `6,763`, max confidence `75.07`
+  - `stl`: `4,192`, max confidence `67.74`
+  - `blk`: `1,651`, max confidence `67.46`
+- Rows with `stl confidence_score > 72`: `0`.
+- Rows with `blk confidence_score > 72`: `0`.
+
+Edge cases / notes:
+- The final row increase was below Cowork's rough `30–35%` expectation because the spec skips low-volume defensive props where `avg_stl < 0.5` or `avg_blk < 0.5`. This especially limits `blk` rows.
+- Spot checks confirmed off-ball assist and primary-playmaker key factors are present.
+- Spot checks confirmed stl/blk fallback matchup key factors are present.
+
+---
+
+## Backlog — Algorithm: Correlated Prop Flagging
+
+**Status:** Frontend feature, no new data needed. Do not implement until directed.
+
+**What:** When the algorithm likes 2+ props for the same player on the same night, surface a "correlated opportunity" callout on the card. Known correlations in basketball:
+- Points + Assists (ball-handlers) — positively correlated
+- Points + Rebounds (big men) — positively correlated
+- Points + 3PM (shooters) — positively correlated
+- Steals + Blocks (defensive specialists) — moderately correlated
+
+**Implementation:** After `calc-confidence.js` runs for a game, group `prop_analysis_results` by player. If a player has 2+ props with `recommendation IN ('OVER', 'UNDER')` and `confidence_score >= 65`, write a `correlated_opportunity` flag to their rows. Frontend surfaces this as a badge on the player card.
+
+---
+
+## Task J — WNBA Stats API Investigation
+
+**Goal:** Research whether `stats.wnba.com` is accessible and useful enough to replace or supplement the current BDL + ESPN data stack. **No ingestion scripts, no DB changes, no code changes.** Research and report only.
+
+**Why it matters:** Two signals in `calc-confidence.js` currently fall back to neutral (50) because we lack the underlying data:
+- `stl` matchup — needs opponent turnover rate
+- `blk` matchup — needs opponent rim attack rate (FGA% at rim)
+
+The WNBA Stats API is the most likely free source for both. It may also cover pace-adjusted stats, positional defensive ratings, and usage rate — all of which would upgrade existing signals.
+
+---
+
+### What to investigate
+
+**Step 1 — Confirm accessibility**
+
+The NBA Stats API (`stats.nba.com`) requires spoofed headers to avoid 403s. Test whether the WNBA equivalent behaves the same way. Try this endpoint first with and without headers:
+
+```
+GET https://stats.wnba.com/stats/leaguegamelog?Season=2025-26&SeasonType=Regular+Season&LeagueID=10
+```
+
+Required headers for NBA Stats API (try these if bare request 403s):
+```
+Referer: https://www.wnba.com/
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+Accept: application/json, text/plain, */*
+Accept-Language: en-US,en;q=0.9
+Origin: https://www.wnba.com
+```
+
+Report: does it return 200 with headers? Without? Returns 403 or CORS error?
+
+---
+
+**Step 2 — Probe key endpoints**
+
+If the API is accessible, probe these endpoints (adapt NBA Stats API patterns with `LeagueID=10` for WNBA):
+
+| Endpoint | What it returns | Why we care |
+|---|---|---|
+| `leaguegamelog` | Per-game box scores for all players | Could supplement or replace ESPN box score parsing |
+| `leaguedashteamstats` | Team-level pace, ORtg, DRtg, TOV% | Direct source for opponent turnover rate (stl signal) |
+| `leaguedashptdefend` | Positional defensive stats (pts allowed by position) | Could replace our `team_defensive_ratings` calc |
+| `leaguedashplayerstats` | Player-level usage rate, pace-adjusted stats | Could enrich `player_research_metrics` |
+| `teamdashptshots` | Shot location distribution (rim%, midrange%, 3P%) | Opponent rim attack rate for blk signal |
+
+For each endpoint that returns 200, report:
+1. The full URL you used
+2. The top-level response shape (what keys are in the JSON)
+3. Whether it uses the `resultSets[0].headers` / `resultSets[0].rowSet` pattern (standard NBA Stats API format)
+4. A sample of 2–3 rows from `rowSet` so we can see real field names and values
+
+---
+
+**Step 3 — Compare vs current stack**
+
+After probing, answer these questions:
+
+1. **Player game logs:** Does `leaguegamelog` cover stl and blk per game? If so, is it richer or equivalent to ESPN box score parsing? (ESPN is working fine — only worth switching if there's a meaningful data quality improvement.)
+
+2. **Opponent turnover rate:** Is there a field that gives us TOV% or turnovers per game per team, filterable by opponent? This is what we need for the `stl` matchup signal.
+
+3. **Rim attack rate:** Is there a shot-location breakdown that gives us what % of a team's FGA come at the rim? This is the `blk` matchup signal.
+
+4. **Positional defensive ratings:** Does `leaguedashptdefend` give pts/reb/ast allowed by position (G/F/C) the same way our `calc-matchup-ratings.js` currently computes from box scores? If so, it could replace the manual calculation.
+
+5. **Data freshness:** How quickly does the API update after games complete? Same-night or next-day?
+
+---
+
+**Step 4 — Recommendation**
+
+Based on findings, make one of these recommendations:
+
+- **Full adoption:** The API covers our key gaps cleanly. Propose which endpoints to ingest and which existing scripts they'd replace.
+- **Partial adoption:** The API covers stl/blk matchup signals but not enough to replace other sources. Propose a targeted ingestion for those specific fields only.
+- **Not viable:** The API is inaccessible, too unstable, or doesn't cover what we need. Note what's missing and suggest alternatives.
+
+---
+
+### Acceptance criteria
+
+- Report covers all four steps above
+- At least one successful API response is shown (even if partial endpoints are accessible)
+- Explicit recommendation made (full adoption / partial / not viable)
+- No code written, no scripts created, no DB changes made
+
+### Completion note
+
+Completed 2026-05-03. Read-only investigation only; no code, scripts, or DB objects were changed.
+
+Accessibility findings:
+- Bare `curl` and bare Node `fetch` to `stats.wnba.com` did not return a clean 403; they stalled/aborted with no JSON response.
+- Node `fetch` returned HTTP 200 when using browser/NBA-style headers:
+  - `Referer: https://www.wnba.com/`
+  - browser `User-Agent`
+  - `Accept: application/json, text/plain, */*`
+  - `Accept-Language: en-US,en;q=0.9`
+  - `Origin: https://www.wnba.com`
+  - `x-nba-stats-origin: stats`
+  - `x-nba-stats-token: true`
+- Successful response shape is generally NBA Stats style: top-level `resource`, `parameters`, `resultSets`; most endpoints use `resultSets[0].headers` + `resultSets[0].rowSet`.
+
+Endpoints probed:
+- `leaguegamelog` player logs worked:
+  - URL: `https://stats.wnba.com/stats/leaguegamelog?Counter=0&DateFrom=&DateTo=&Direction=ASC&LeagueID=10&PlayerOrTeam=P&Season=2025&SeasonType=Regular%20Season&Sorter=DATE`
+  - 200 response, 5,407 rows for 2025.
+  - Headers include `PLAYER_ID`, `PLAYER_NAME`, `TEAM_ID`, `GAME_ID`, `GAME_DATE`, `MIN`, `REB`, `AST`, `STL`, `BLK`, `TOV`, `PTS`, `FANTASY_PTS`.
+  - Sample rows included Azura Stevens with `STL=4`, `BLK=2`, `PTS=11`; Arike Ogunbowale with `STL=1`, `BLK=0`, `PTS=16`.
+- `leaguedashteamstats` advanced worked:
+  - URL: `https://stats.wnba.com/stats/leaguedashteamstats?...&LeagueID=10&MeasureType=Advanced&PerMode=PerGame&Season=2025&SeasonType=Regular%20Season`
+  - 200 response, 13 rows.
+  - Headers include `OFF_RATING`, `DEF_RATING`, `TM_TOV_PCT`, `PACE`, `POSS`.
+- `leaguedashteamstats` four factors worked:
+  - URL: `https://stats.wnba.com/stats/leaguedashteamstats?...&LeagueID=10&MeasureType=Four%20Factors&PerMode=PerGame&Season=2025&SeasonType=Regular%20Season`
+  - 200 response, 13 rows.
+  - Headers include `EFG_PCT`, `FTA_RATE`, `TM_TOV_PCT`, `OREB_PCT`, `OPP_EFG_PCT`, `OPP_FTA_RATE`, `OPP_TOV_PCT`, `OPP_OREB_PCT`.
+- `leaguedashplayerstats` usage worked:
+  - URL: `https://stats.wnba.com/stats/leaguedashplayerstats?...&LeagueID=10&MeasureType=Usage&PerMode=PerGame&Season=2025&SeasonType=Regular%20Season`
+  - 200 response, 182 rows.
+  - Headers include `USG_PCT`, `PCT_FGA`, `PCT_AST`, `PCT_TOV`, `PCT_STL`, `PCT_BLK`, `PCT_PTS`.
+- `leaguedashptdefend` worked with a minimal parameter set:
+  - URL: `https://stats.wnba.com/stats/leaguedashptdefend?LeagueID=10&Season=2025&SeasonType=Regular%20Season&PerMode=PerGame&DefenseCategory=Overall&TeamID=0`
+  - 200 response, 180 rows.
+  - Headers include `CLOSE_DEF_PERSON_ID`, `PLAYER_NAME`, `PLAYER_LAST_TEAM_ID`, `PLAYER_POSITION`, `FREQ`, `D_FGM`, `D_FGA`, `D_FG_PCT`, `NORMAL_FG_PCT`, `PCT_PLUSMINUS`.
+  - This is player shot-defense data, not direct G/F/C points/rebounds/assists allowed by position.
+- `teamdashptshots` was not useful in the tested form:
+  - Full-filter query for LAS returned 200 but 0 rows.
+  - Minimal query returned HTTP 500 HTML.
+- Equivalent shot-location endpoint `leaguedashteamshotlocations` worked:
+  - URL: `https://stats.wnba.com/stats/leaguedashteamshotlocations?...&LeagueID=10&MeasureType=Base&PerMode=PerGame&Season=2025&SeasonType=Regular%20Season&DistanceRange=By%20Zone`
+  - 200 response, 13 rows.
+  - Response uses `resultSets` as an object, not an array. It has grouped `headers` for shot categories and a `rowSet`.
+  - Categories include `Restricted Area`, `In The Paint (Non-RA)`, `Mid-Range`, `Left Corner 3`, `Right Corner 3`, `Above the Break 3`, `Backcourt`, `Corner 3`, each with `FGM/FGA/FG_PCT`.
+  - This can provide opponent rim attack rate via restricted-area FGA divided by total FGA across zones.
+
+Comparison vs current BDL + ESPN stack:
+- Player game logs: `leaguegamelog` covers per-game `STL` and `BLK`, and is cleaner than ESPN box-score parsing because fields are already tabular. It is equivalent for core box score stats, but switching fully is not necessary while ESPN ingestion is working.
+- Opponent turnover rate for steals: yes. `leaguedashteamstats` provides `TM_TOV_PCT` and `OPP_TOV_PCT`, plus raw game logs include team `TOV`. This is enough to replace the current neutral `stl` matchup fallback with a real opponent turnover signal.
+- Rim attack rate for blocks: yes, via `leaguedashteamshotlocations`. Use `Restricted Area FGA / total zone FGA` as the rim attack proxy for the opposing team. `teamdashptshots` itself looked unreliable, but the league shot-location endpoint provides the needed data.
+- Positional defensive ratings: partial/no. `leaguedashptdefend` gives close-defender shot defense by player and `PLAYER_POSITION`, but it does not directly return points/rebounds/assists allowed to G/F/C the way `calc-matchup-ratings.js` currently computes. It could supplement shot-quality defense, not replace the existing positional matchup calc.
+- Data freshness: not proven in this probe because the test used historical 2025 data. Treat freshness as an open validation item during live 2026 games before relying on same-night updates.
+
+Recommendation: **Partial adoption.** Keep ESPN/BDL as the current ingestion backbone, and add a targeted WNBA Stats ingestion later for matchup upgrades only:
+- `leaguedashteamstats` advanced/four-factors for pace, TOV%, OPP_TOV%, ORtg/DRtg.
+- `leaguedashteamshotlocations` for restricted-area FGA rate to power the `blk` matchup signal.
+- Optionally `leaguedashplayerstats` usage as a cleaner usage-rate source.
+
+Do not fully replace ESPN box-score ingestion yet; WNBA Stats has header/transport quirks, one shot endpoint was unreliable, and live data freshness still needs validation.
+
+---
+
+## Task K — WNBA Stats Ingestion: stl/blk Matchup Signals
+
+**Goal:** Replace the two neutral-fallback matchup signals in `calc-confidence.js` (`stl` and `blk` both default to 50) with real opponent data from the WNBA Stats API. Requires a new ingestion script, one new DB table, and a targeted update to the confidence script.
+
+**Files to create/change:**
+- `scripts/ingest-wnba-stats.js` (new)
+- `db/012_create_team_opponent_stats.sql` (new)
+- `scripts/calc-confidence.js` (targeted update only)
+- `scripts/scheduler.js` (add new script to post-game job)
+- `scripts/backfill-season.js` (add new script to backfill steps)
+
+---
+
+### Part 1 — Shared WNBA Stats API headers
+
+All WNBA Stats API requests require browser-spoofed headers. Define them once at the top of `ingest-wnba-stats.js` and reuse for every fetch:
+
+```js
+const WNBA_STATS_HEADERS = {
+  'Referer':             'https://www.wnba.com/',
+  'User-Agent':          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept':              'application/json, text/plain, */*',
+  'Accept-Language':     'en-US,en;q=0.9',
+  'Origin':              'https://www.wnba.com',
+  'x-nba-stats-origin':  'stats',
+  'x-nba-stats-token':   'true',
+};
+```
+
+Use Node's built-in `fetch` (Node 18+) for all requests. No new npm dependencies needed.
+
+---
+
+### Part 2 — New DB table
+
+Create `db/012_create_team_opponent_stats.sql`:
+
+```sql
+CREATE TABLE IF NOT EXISTS team_opponent_stats (
+  id               SERIAL PRIMARY KEY,
+  team_id          INTEGER NOT NULL REFERENCES teams(id),
+  season           INTEGER NOT NULL,
+  opp_tov_pct      DECIMAL(6,4),   -- opponent turnover rate (0–1); source: leaguedashteamstats Advanced OPP_TOV_PCT
+  rim_fga_rate     DECIMAL(6,4),   -- fraction of opp FGA that come at rim; source: leaguedashteamshotlocations
+  as_of_date       DATE NOT NULL DEFAULT CURRENT_DATE,
+  UNIQUE(team_id, season, as_of_date)
+);
+
+GRANT ALL ON TABLE team_opponent_stats TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE team_opponent_stats_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+Apply in Supabase SQL editor before running the script.
+
+---
+
+### Part 3 — Ingestion script
+
+`scripts/ingest-wnba-stats.js` fetches both endpoints for a given season and upserts to `team_opponent_stats`.
+
+**Endpoint 1 — Opponent TOV%:**
+```
+GET https://stats.wnba.com/stats/leaguedashteamstats?Conference=&DateFrom=&DateTo=&Division=&GameScope=&GameSegment=&Height=&LastNGames=0&LeagueID=10&Location=&MeasureType=Advanced&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season={season}&SeasonSegment=&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=
+```
+
+From the response, extract per-team `TEAM_ID` and `OPP_TOV_PCT`. Store as a decimal (e.g. `0.1432` not `14.32`).
+
+**Endpoint 2 — Rim FGA rate:**
+```
+GET https://stats.wnba.com/stats/leaguedashteamshotlocations?Conference=&DateFrom=&DateTo=&Division=&GameScope=&GameSegment=&LastNGames=0&LeagueID=10&Location=&MeasureType=Base&Month=0&OpponentTeamID=0&Outcome=&PORound=0&PerMode=PerGame&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N&Season={season}&SeasonSegment=&SeasonType=Regular%20Season&ShotClockRange=&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=&DistanceRange=By%20Zone
+```
+
+This endpoint returns a nested response — `resultSets` is an object, not an array. The row headers are grouped by zone. Parse the `Restricted Area` FGA columns:
+
+```js
+// resultSets.headers is an array like:
+// [{ name: 'Restricted Area', columnNames: ['FGM', 'FGA', 'FG_PCT'] }, ...]
+// resultSets.rowSet has one row per team
+
+// For each team row:
+//   find 'Restricted Area' header group → get FGA column index
+//   find 'Above the Break 3', 'Mid-Range', etc. → sum all zone FGAs for total
+// rim_fga_rate = restricted_area_fga / total_zone_fga
+```
+
+**Team ID mapping:** WNBA Stats API uses its own numeric `TEAM_ID` values. These should match the `espn_id` stored on the `teams` table (or the BDL `id`). Verify the mapping works by checking a known team. If WNBA Stats `TEAM_ID` doesn't match either stored ID, build a fallback name-match lookup using `TEAM_NAME` / `TEAM_ABBREVIATION` from the response against `teams.abbreviation` in the DB.
+
+**Script structure:**
+```
+Usage:
+  node scripts/ingest-wnba-stats.js              # current season (2026)
+  node scripts/ingest-wnba-stats.js --season=2025
+```
+
+Log format:
+```
+[ingest-wnba-stats] Fetching leaguedashteamstats Advanced for season 2025
+[ingest-wnba-stats] Fetching leaguedashteamshotlocations for season 2025
+[ingest-wnba-stats] Done — 12 rows upserted, 0 failed
+```
+
+---
+
+### Part 4 — Wire into calc-confidence.js
+
+After `team_opponent_stats` is populated, replace the neutral fallbacks in `analyzePlayerProp`:
+
+**Load opponent stats alongside matchup and pace ratings:**
+```js
+async function getOpponentStats(season) {
+  const { data, error } = await supabase
+    .from('team_opponent_stats')
+    .select('team_id, opp_tov_pct, rim_fga_rate, as_of_date')
+    .eq('season', season)
+    .order('as_of_date', { ascending: false });
+
+  if (error || !data) return new Map();
+
+  const map = new Map();
+  for (const row of data) {
+    if (!map.has(row.team_id)) map.set(row.team_id, row);
+  }
+  return map;
+}
+```
+
+Add to the `Promise.all` in `calcConfidence`:
+```js
+const [{ bestLines, oddsContext }, gameOddsContext, matchupRatings, paceRatings, opponentStats] = await Promise.all([
+  getOddsData(game.id),
+  getGameOddsContext(game.id),
+  getMatchupRatings(teamIds, gameSzn),
+  getPaceRatings(gameSzn),
+  getOpponentStats(gameSzn),
+]);
+```
+
+Pass `opponentStats` into `analyzePlayerProp` and replace the stl/blk matchup overrides:
+
+```js
+// stl matchup — opponent turnover rate
+// league avg OPP_TOV_PCT ≈ 0.145 for WNBA; normalize to 0–100
+if (field === 'stl') {
+  const oppStats = opponentStats.get(oppId);
+  if (oppStats?.opp_tov_pct != null) {
+    const leagueAvgTov = 0.145;
+    matchupRating = clamp(50 + (oppStats.opp_tov_pct - leagueAvgTov) / leagueAvgTov * 100);
+    // Remove the "fallback neutral" key factor; replace with real signal
+  }
+  // else: neutral fallback stays, key factor string stays
+}
+
+// blk matchup — opponent rim attack rate
+// league avg rim FGA rate ≈ 0.35 (Restricted Area FGA / total zone FGA)
+if (field === 'blk') {
+  const oppStats = opponentStats.get(oppId);
+  if (oppStats?.rim_fga_rate != null) {
+    const leagueAvgRim = 0.35;
+    matchupRating = clamp(50 + (oppStats.rim_fga_rate - leagueAvgRim) / leagueAvgRim * 100);
+  }
+}
+```
+
+Update the stl/blk key factor strings to use the real signal when data is present:
+```js
+if (field === 'stl') {
+  const oppStats = opponentStats.get(oppId);
+  if (oppStats?.opp_tov_pct != null) {
+    keyFactors.push(`Opponent TOV% ${(oppStats.opp_tov_pct * 100).toFixed(1)}% (matchup rating: ${round(matchupRating, 0)}/100)`);
+  } else {
+    keyFactors.push('Steal-opportunity matchup — fallback neutral (no opponent stats available)');
+  }
+}
+if (field === 'blk') {
+  const oppStats = opponentStats.get(oppId);
+  if (oppStats?.rim_fga_rate != null) {
+    keyFactors.push(`Opponent rim FGA rate ${(oppStats.rim_fga_rate * 100).toFixed(1)}% (matchup rating: ${round(matchupRating, 0)}/100)`);
+  } else {
+    keyFactors.push('Block-opportunity matchup — fallback neutral (no opponent stats available)');
+  }
+}
+```
+
+---
+
+### Part 5 — Add to scheduler and backfill
+
+**`scripts/scheduler.js`:** Add `ingest-wnba-stats.js` to the post-game nightly job, after `calcPaceRatings` and before `calcConfidence`. It only needs to run once per day (league-wide stats, not per-game):
+
+```js
+// After calcPaceRatings step:
+await run('node scripts/ingest-wnba-stats.js');
+```
+
+**`scripts/backfill-season.js`:** Add `ingest-wnba-stats` to the backfill step order, after `calcPaceRatings`:
+
+```js
+{ label: 'ingestWnbaStats', fn: () => runScript('scripts/ingest-wnba-stats.js', [`--season=${season}`]) },
+```
+
+---
+
+### Acceptance criteria
+
+- `db/012_create_team_opponent_stats.sql` exists with GRANT statements
+- `node scripts/ingest-wnba-stats.js --season=2025` upserts 12 rows (one per team) without error
+- Re-running produces 12 upserted rows (idempotent via UNIQUE constraint)
+- `stl` and `blk` matchup scores in `prop_analysis_results` are no longer always 50 after re-running `calc-confidence.js --season=2025`
+- `key_factors` for stl/blk props show real TOV% and rim FGA rate strings, not "fallback neutral"
+- Graceful fallback to 50 + "fallback neutral" key factor when `team_opponent_stats` has no row for that opponent (e.g. newly added team, missing season)
+- `node --check scripts/calc-confidence.js` passes
+- `node --check scripts/ingest-wnba-stats.js` passes
+
+### Completion note
+
+In progress by Codex on 2026-05-03.
+
+Files changed:
+- `db/012_create_team_opponent_stats.sql`
+- `scripts/ingest-wnba-stats.js`
+- `scripts/calc-confidence.js`
+- `scripts/scheduler.js`
+- `scripts/backfill-season.js`
+
+Implemented:
+- Added `team_opponent_stats` migration with the required GRANT statements.
+- Added `scripts/ingest-wnba-stats.js` with shared WNBA Stats browser headers and Node built-in `fetch`.
+- Added parsing for:
+  - `leaguedashteamstats` Advanced
+  - `leaguedashteamshotlocations`
+- Wired `scripts/scheduler.js` to run WNBA Stats ingestion after pace ratings and before confidence.
+- Wired `scripts/backfill-season.js` to run WNBA Stats ingestion after pace ratings.
+- Wired `scripts/calc-confidence.js` to read latest `team_opponent_stats` rows by season and use:
+  - opponent team `opp_tov_pct` for `stl` matchup scoring
+  - opponent team `rim_fga_rate` for `blk` matchup scoring
+- Updated stl/blk key factors to show real opponent TOV% / rim FGA rate when present, with graceful fallback text when missing.
+
+Verification completed:
+- `node --check scripts/ingest-wnba-stats.js` passed.
+- `node --check scripts/calc-confidence.js` passed.
+- `node --check scripts/scheduler.js` passed.
+- `node --check scripts/backfill-season.js` passed.
+- Live WNBA Stats parser check for 2025 succeeded:
+  - turnover rows fetched: `13`
+  - shot-location rows fetched: `13`
+  - sample TOV row: Atlanta Dream `TM_TOV_PCT = 0.161`
+  - sample rim row: Atlanta Dream `rim_fga_rate = 0.2992`
+
+Important team ID mapping note:
+- Cowork's warning was correct: WNBA Stats `TEAM_ID` values do **not** match local `teams.id` or `teams.bdl_id`.
+- Example: Atlanta Dream returned WNBA Stats `TEAM_ID = 1611661330`; local `teams.id = 4`, `bdl_id = 4`.
+- The ingestion script therefore falls back to normalized team-name matching, with abbreviation aliases as a backup.
+- Test run logged mapping modes as `{"name":26}` for the 13 TOV rows + 13 rim rows. No unmatched teams were observed.
+
+Important API/spec mismatch:
+- The handoff said `leaguedashteamstats` Advanced would provide `OPP_TOV_PCT`; the live endpoint did **not** include that field.
+- Advanced did include `TM_TOV_PCT`.
+- Because `calc-confidence.js` looks up the opponent team's row (`opponentStats.get(oppId)`), the correct steal-opportunity signal is the opponent offense's own `TM_TOV_PCT`. The script stores that value in `team_opponent_stats.opp_tov_pct`.
+- Observed 2025 average `TM_TOV_PCT`: `0.1761`, noticeably above the baked-in `0.145` normalization baseline.
+
+Important shot-location note:
+- `leaguedashteamshotlocations` does use the non-standard object-shaped `resultSets` response.
+- Parser handles grouped shot category headers and computes:
+  - `rim_fga_rate = Restricted Area FGA / sum(all zone FGA)`
+- Observed 2025 average `rim_fga_rate`: `0.2608`, noticeably below the baked-in `0.35` normalization baseline.
+
+Blocked verification:
+- Applying the migration to Supabase is currently blocked from this environment.
+  - `node scripts/migrate.js` failed on direct Postgres DNS: `getaddrinfo ENOTFOUND db.qwswytnvbfnhtjbojdxb.supabase.co`
+  - RPC fallback failed because `public.exec_sql(sql)` is not installed.
+  - Supabase REST confirmed `team_opponent_stats` does not yet exist.
+- Because the table does not exist yet, `node scripts/ingest-wnba-stats.js --season=2025` reaches the upsert step and fails with: `Could not find the table 'public.team_opponent_stats' in the schema cache`.
+- Therefore the final acceptance checks are still pending:
+  - actual 2025 upsert row count
+  - idempotent rerun row count
+  - rerun `node scripts/calc-confidence.js --season=2025`
+  - confirm stl/blk matchup scores are no longer always 50
+  - sample before/after matchup scores and key factors
+
+Post-migration verification (completed by user + Cowork):
+- `node scripts/ingest-wnba-stats.js --season=2025` → 13 rows upserted ✅
+- Second run → 13 rows upserted (idempotent) ✅
+- `node scripts/calc-confidence.js --season=2025` → 29,313 rows, 0 errors ✅
+- Baseline calibration fix applied by Cowork directly to `scripts/calc-confidence.js`:
+  - `getOpponentStats()` now computes `_leagueAvgTov` and `_leagueAvgRim` dynamically from loaded DB rows instead of using hardcoded `0.145` / `0.35`
+  - Actual 2025 WNBA averages: `opp_tov_pct = 0.1761`, `rim_fga_rate = 0.2608`
+  - Fallback constants (`0.145` / `0.35`) retained for the case where the table is empty
+  - This ensures stl/blk matchup scores are properly centered at 50 for an average team regardless of season
+
+---
+
+## Task L — Correlated Prop Flagging
+
+**Goal:** When the algorithm likes 2+ props for the same player on the same night, surface a `correlated_opportunity` flag in `prop_analysis_results` and expose it through the existing API + frontend. No new tables, no new ingestion scripts. Pure post-processing pass at the end of `calc-confidence.js` plus a small UI badge.
+
+**Files to change:**
+- `scripts/calc-confidence.js` (add correlation pass after upsert loop)
+- `server.js` (include `correlated_opportunity` in props API response)
+- `wnba-prop-scout.jsx` (render badge on player cards)
+
+---
+
+### Background
+
+Certain basketball prop combinations are naturally correlated — a ball-handler who scores 25 almost certainly had assists too; a rim-protecting big who blocks 3 shots probably grabbed boards. When the algorithm independently likes multiple props for the same player, that convergence is a stronger signal than any single prop in isolation. The MLB app surfaces this as a callout; this task ports the same concept to the WNBA app.
+
+Known correlated pairs:
+- **pts + ast** (ball-handlers) — positively correlated
+- **pts + reb** (big men) — positively correlated
+- **pts + pra** (any scorer) — structurally correlated (pra includes pts)
+- **stl + blk** (defensive specialists) — moderately correlated
+- **pts + stl** (high-usage guards) — moderately correlated
+
+---
+
+### Part 1 — Correlation pass in calc-confidence.js
+
+After the per-game upsert loop completes, add a correlation pass that groups rows by `(game_id, player_id)` and flags players with 2+ active recommendations:
+
+```js
+async function flagCorrelatedProps(gameId, rows) {
+  // rows = the analyzePlayerProp output objects for one game, already upserted
+
+  // Group by player
+  const byPlayer = new Map();
+  for (const row of rows) {
+    if (row.recommendation === 'PASS') continue;
+    if (!byPlayer.has(row.player_id)) byPlayer.set(row.player_id, []);
+    byPlayer.get(row.player_id).push(row);
+  }
+
+  const updates = [];
+  for (const [playerId, playerRows] of byPlayer) {
+    if (playerRows.length < 2) continue;
+
+    // Only flag if at least 2 props meet the confidence threshold
+    const qualified = playerRows.filter(r => r.confidence_score >= 65);
+    if (qualified.length < 2) continue;
+
+    const propTypes = qualified.map(r => r.prop_type).sort().join('+');
+    updates.push({ player_id: playerId, game_id: gameId, prop_types: propTypes });
+  }
+
+  if (!updates.length) return;
+
+  // Stamp correlated_opportunity = true on all qualifying rows for this player+game
+  for (const { player_id, game_id, prop_types } of updates) {
+    const { error } = await supabase
+      .from('prop_analysis_results')
+      .update({
+        correlated_opportunity: true,
+        correlated_props: prop_types,   // e.g. "ast+pts" or "blk+stl"
+      })
+      .eq('player_id', player_id)
+      .eq('game_id', game_id)
+      .gte('confidence_score', 65)
+      .neq('recommendation', 'PASS');
+
+    if (error) {
+      console.warn(`[calc-confidence] correlated prop flag failed player ${player_id} game ${game_id}: ${error.message}`);
+    }
+  }
+}
+```
+
+Call `flagCorrelatedProps(game.id, rows)` immediately after the upsert for each game, before moving to the next game in the loop.
+
+---
+
+### Part 2 — DB column additions
+
+`prop_analysis_results` needs two new columns. Add them with `ALTER TABLE` — no migration file needed since the table already exists; just run these in Supabase SQL editor:
+
+```sql
+ALTER TABLE prop_analysis_results
+  ADD COLUMN IF NOT EXISTS correlated_opportunity BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS correlated_props       VARCHAR(50);
+```
+
+Run this before executing the updated `calc-confidence.js`.
+
+---
+
+### Part 3 — server.js
+
+The `/api/wnba/props` endpoint already returns all `prop_analysis_results` columns via `select('*')`. No change needed — `correlated_opportunity` and `correlated_props` will be included automatically once the columns exist.
+
+Verify by checking the existing query in `server.js`. If it uses an explicit column list instead of `*`, add `correlated_opportunity, correlated_props` to it.
+
+---
+
+### Part 4 — Frontend badge in wnba-prop-scout.jsx
+
+In the Props tab player card, add a small badge when `correlated_opportunity === true`:
+
+```jsx
+{prop.correlated_opportunity && (
+  <span className="correlated-badge">
+    🔗 Correlated — {prop.correlated_props?.toUpperCase()}
+  </span>
+)}
+```
+
+Style as a subtle pill badge alongside the existing confidence bar. The badge should appear on **all** qualifying props for that player (e.g. both the pts card and the ast card both get the badge when they're correlated), not just one of them.
+
+Add CSS:
+```css
+.correlated-badge {
+  display: inline-block;
+  background: #1a3a2a;
+  color: #4ade80;
+  border: 1px solid #4ade80;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  margin-top: 4px;
+  letter-spacing: 0.03em;
+}
+```
+
+---
+
+### Acceptance criteria
+
+- `ALTER TABLE` applied in Supabase SQL editor before running
+- `node scripts/calc-confidence.js --season=2025` completes without errors
+- At least some `prop_analysis_results` rows have `correlated_opportunity = true` after the run (check with a Supabase query: `SELECT player_id, game_id, correlated_props FROM prop_analysis_results WHERE correlated_opportunity = true LIMIT 10`)
+- Badge renders correctly in the Props tab for a player with correlated props
+- Players without correlated props show no badge
+- `node --check scripts/calc-confidence.js` passes
+- No changes to any ingestion scripts, DB schema beyond the two new columns, or scheduler
+
+### Completion note
+
+Completed by Codex on 2026-05-03.
+
+Files changed:
+- `scripts/calc-confidence.js`
+- `wnba-prop-scout.jsx`
+
+Files checked, no change needed:
+- `server.js` already returns `prop_analysis_results` via `select('*')`, so `correlated_opportunity` and `correlated_props` are included automatically.
+
+DB status:
+- The two required columns already existed in Supabase:
+  - `correlated_opportunity`
+  - `correlated_props`
+- No migration file was created for Task L, per handoff instructions.
+
+Implementation:
+- Added `flagCorrelatedProps(gameId, rows)` in `scripts/calc-confidence.js`.
+- The pass runs immediately after each game upsert.
+- It groups non-PASS rows by `(game_id, player_id)`.
+- It flags players with at least 2 recommendations where `confidence_score >= 65`.
+- It stamps all qualifying rows for that player/game with:
+  - `correlated_opportunity = true`
+  - `correlated_props = sorted prop string`, e.g. `blk+pts`
+- It resets existing correlation flags for that game before re-flagging, so stale badges do not linger after reruns.
+- Added a subtle `CORRELATED · PROP+PROP` badge in the Props tab for rows where `correlated_opportunity === true`.
+
+Verification:
+- `node --check scripts/calc-confidence.js` passed.
+- `npm run build` passed.
+- `node scripts/calc-confidence.js --season=2025` completed successfully.
+- 2025 props analyzed/upserted: `29,313`.
+- Correlated player-games flagged: `11`.
+- Correlated rows flagged: `22`.
+- Supabase verification query returned `22` rows where `correlated_opportunity = true`.
+
+Sample correlated rows:
+- Kamilla Cardoso, game `5`: `blk+pts`
+  - `blk` OVER, confidence `68.96`
+  - `pts` OVER, confidence `69.16`
+- Maddy Siegrist, game `34`: `pts+stl`
+  - `pts` OVER, confidence `72.41`
+  - `stl` OVER, confidence `68.39`
+
+Observed `correlated_props` strings:
+- `blk+pts`
+- `pts+stl`
+
+Edge cases / notes:
+- Most correlated opportunities came from defensive/scoring overlaps under the current 0–80 confidence cap and `>=65` correlation threshold.
+- No browser visual screenshot was captured in this pass, but the frontend build succeeded and live API rows now include the badge-driving fields.
+
+---
+
+## Backlog — Data: Referee Crew Foul Tendency
+
+**Status:** On hold pending data source confirmation. Do not implement until directed.
+
+**What:** Some referee crews call significantly more fouls than others. High-foul crews mean more free throw attempts, which benefits high-FTA players on points props and increases scoring environment generally. This is the basketball equivalent of MLB umpire tendency — one of the highest-signal inputs in the MLB app.
+
+### Source research note — 2026-05-03
+
+Codex researched available WNBA referee assignment and tendency sources. No files or code were changed as part of the research pass.
+
+**Recommended source stack:**
+
+1. **Official NBA/WNBA assignments page — primary daily crew source**
+   - URL: `https://official.nba.com/referee-assignments/`
+   - The official page says referee assignments are posted at approximately 9:00am ET each game day.
+   - It exposes game, crew chief, referee, umpire, and sometimes alternate.
+   - WNBA official communications also state that individual WNBA game assignments are posted at NBA.com/official around 9:00am ET on game day and that each crew has three on-court officials plus one on-site alternate.
+   - Use this as the source of truth for same-day crew assignments.
+
+2. **RefMetrics WNBA — best historical foul tendency source**
+   - URLs:
+     - `https://www.refmetrics.com/wnba`
+     - `https://www.refmetrics.com/wnba/todays-games`
+     - `https://www.refmetrics.com/wnba/foul-leaders`
+     - `https://www.refmetrics.com/wnba/game-leaders`
+   - Public pages show WNBA referee assignment pages, foul leaders, total fouls, home fouls, away fouls, foul differential, total games, and role/game-count history.
+   - Some rows/details are subscription-gated, but this is the cleanest reference for referee-level foul tendency analytics.
+   - Treat as validation/reference unless we confirm terms allow automated ingestion.
+
+3. **Covers WNBA referees — secondary betting-stats reference**
+   - URL: `https://www.covers.com/sport/basketball/wnba/referees`
+   - Referee profile pages expose betting-style records such as games officiated, home ATS, home W/L, average home score, average road score, average total score, and over/under record by season.
+   - Useful as a cross-check for scoring environment and over/under tendency, but less direct for foul-rate modeling than RefMetrics.
+
+**Implementation recommendation when this backlog item is promoted:**
+
+- Ingest same-day crew assignments from `official.nba.com/referee-assignments/` once per game day after 9:00am ET.
+- Store crew names/roles by `game_id`.
+- Compute foul tendencies internally from stored historical box scores/team logs where possible:
+  - `team_game_logs.pf` provides personal fouls by team/game.
+  - Crew game foul total = home PF + away PF.
+  - Referee tendency can be derived from historical games worked by each official once assignments are stored.
+- Use RefMetrics/Covers as validation/reference sources, not as the first automated dependency, unless subscription/terms/access are clarified.
+
+**Status update 2026-05-03:** Source strategy confirmed — see research note above. The remaining open question before building is whether `official.nba.com/referee-assignments/` returns parseable server-side HTML or requires a JS runtime. Promote to a real task after Task O (First Basket) is complete.
+
+**When data source is confirmed:** Build `scripts/ingest-referee-crews.js`, add a `referee_crews` table, and wire a `score_referee` signal into `calc-confidence.js` as a small modifier on points, FTA-heavy player props.
+
+**Schema sketch:**
+```sql
+CREATE TABLE IF NOT EXISTS referee_crews (
+  id          SERIAL PRIMARY KEY,
+  game_id     INTEGER NOT NULL REFERENCES games(id),
+  referee_name VARCHAR(100) NOT NULL,
+  foul_rate   DECIMAL(5,2),   -- fouls per 40 min, season average
+  crew_rating VARCHAR(10),    -- 'whistle_heavy', 'neutral', 'let_play'
+  source      VARCHAR(50),
+  UNIQUE(game_id, referee_name)
+);
+```
+
+---
+
+## Task N — Additional Prop Tabs: 3PM, Steals, Blocks, PRA
+
+**Goal:** Expand `GamePropsPanel` in `wnba-prop-scout.jsx` to show four additional prop tabs — Steals, Blocks, PRA, and 3-Pointers Made (3PM). Steals, Blocks, and PRA already exist in `prop_analysis_results` and require only frontend tab additions. 3PM requires a backend addition to `calc-confidence.js` (new `fg3m` prop type) plus the frontend tab.
+
+**Files to change:**
+- `scripts/calc-confidence.js` — add `fg3m` to `PROP_TYPES` and `PROP_CONFIG`, update `getSeasonLogs` query to include `fg3m`
+- `wnba-prop-scout.jsx` — add four tabs to `GamePropsPanel`
+
+No new DB tables. No schema changes. No changes to `server.js`, `scheduler.js`, or any other file.
+
+---
+
+### Part 1 — Add `fg3m` prop type to `calc-confidence.js`
+
+**Step 1a — Add `fg3m` to the `PROP_CONFIG` map:**
+
+```js
+fg3m: {
+  baseline: 35,
+  cap:      72,   // high-variance shooting event — same cap tier as stl/blk
+  weights: {
+    projectionEdge:  0.28,
+    hitRate:         0.22,
+    recentForm:      0.17,
+    minuteStability: 0.10,
+    restContext:     0.05,
+    matchup:         0.06,  // opponent 3PA allowed rate (neutral fallback for now)
+    pace:            0.07,
+    oddsMovement:    0.05,
+  },
+},
+```
+
+Weights sum to 1.00. Cap at 72 — 3PM is a high-variance shooting outcome, same tier as stl/blk.
+
+**Step 1b — Add `'fg3m'` to `PROP_TYPES`:**
+
+```js
+const PROP_TYPES = ['pts', 'reb', 'ast', 'pra', 'stl', 'blk', 'fg3m'];
+```
+
+**Step 1c — Update `getSeasonLogs` query to include `fg3m`:**
+
+The current query selects `pts, reb, ast, stl, blk, min, dnp` from `player_game_logs`. Add `fg3m`:
+
+```js
+.select('player_id, game_id, team_id, pts, reb, ast, stl, blk, fg3m, min, dnp')
+```
+
+Also add `fg3m` passthrough in the enriched log object (no derived computation needed — it's a raw stat like stl/blk):
+
+```js
+const enriched = {
+  ...log,
+  pra: (Number(log.pts) || 0) + (Number(log.reb) || 0) + (Number(log.ast) || 0),
+  // fg3m already present via spread
+  ...
+};
+```
+
+And update the recent-form and rolling window log query (the L5/L10 fetch) the same way — add `fg3m` to that select too.
+
+**Step 1d — Skip low-volume shooters:**
+
+Apply the same minimum-average guard as stl/blk. Skip players where `avg_fg3m < 0.5`:
+
+```js
+if (field === 'fg3m') {
+  if ((m.avg_fg3m ?? 0) < 0.5) continue; // non-shooter — skip
+}
+```
+
+`avg_fg3m` is already present in `player_research_metrics` (populated by `calc-metrics.js`).
+
+**Step 1e — Rolling window computation:**
+
+`player_research_metrics` has `avg_fg3m`, `l5_fg3m`, `l10_fg3m`. Use them directly — the same field-name pattern already works for `pts`, `reb`, `ast`, `stl`, `blk` throughout `analyzePlayerProp`. No additional logic needed as long as the `field` variable resolves to `'fg3m'` and the metric fields follow the `avg_{field}` / `l5_{field}` / `l10_{field}` naming convention.
+
+Verify in `analyzePlayerProp` that the season average and rolling window reads use the pattern `m[`avg_${field}`]`, `m[`l5_${field}`]`, `m[`l10_${field}`]` — if so, `fg3m` will work automatically. If hardcoded field names are used, add explicit `fg3m` cases.
+
+**Step 1f — Matchup signal (neutral fallback):**
+
+Like stl/blk at launch, use neutral fallback (50) for `fg3m` matchup — opponent 3PA rate isn't currently in `team_opponent_stats`. Add a key factor comment:
+
+```js
+if (field === 'fg3m') {
+  keyFactors.push('3-point matchup — fallback neutral (opponent 3PA rate not yet tracked)');
+}
+```
+
+Only add this when `sMatchup === 50` (neutral fallback). Suppress if a real signal is ever wired in.
+
+---
+
+### Part 2 — Frontend tab additions in `wnba-prop-scout.jsx`
+
+Update `GamePropsPanel` to render six tabs instead of three:
+
+```js
+<TabBar tabs={['pts', 'reb', 'ast', 'pra', 'stl', 'blk', 'fg3m']} active={activeTab} onSelect={setActiveTab} />
+```
+
+Add friendly labels to the `TabBar` `labels` map:
+
+```js
+const labels = {
+  pts:  'POINTS',
+  reb:  'REBOUNDS',
+  ast:  'ASSISTS',
+  pra:  'PRA',
+  stl:  'STEALS',
+  blk:  'BLOCKS',
+  fg3m: '3PM',
+};
+```
+
+No other frontend changes needed. The prop row rendering in `GamePropsPanel` already handles any `prop_type` generically.
+
+---
+
+### Acceptance criteria
+
+- `PROP_TYPES` includes `fg3m`
+- `node scripts/calc-confidence.js --season=2025` completes without errors; row count increases by the `fg3m` additions (expect ~2,000–4,000 new rows depending on how many players average ≥ 0.5 3PM)
+- `fg3m` confidence scores are capped at 72 (same as stl/blk)
+- Players averaging < 0.5 3PM per game produce no `fg3m` rows
+- `GamePropsPanel` shows seven tabs: Points, Rebounds, Assists, PRA, Steals, Blocks, 3PM — all returning correct top-5 rows from `/api/wnba/props`
+- Steals, Blocks, PRA tabs show data immediately (no backend re-run needed — rows already exist)
+- `node --check scripts/calc-confidence.js` passes
+- `npm run build` passes
+
+### Completion note — 2026-05-03
+
+Task N completed by Codex.
+
+Files changed:
+- `scripts/calc-confidence.js`
+- `wnba-prop-scout.jsx`
+
+What changed:
+- Added `fg3m` to `PROP_TYPES`.
+- Added `fg3m` to `PROP_CONFIG`:
+  - baseline `35`
+  - confidence cap `72`
+  - high-variance 3PM-specific weights from this task spec
+- Updated season/player log selects in `calc-confidence.js` to include raw `fg3m`.
+- Added the `avg_fg3m < 0.5` low-volume skip guard so non-shooters do not generate 3PM prop rows.
+- Added neutral 3PM matchup fallback plus key factor:
+  - `3-point matchup — fallback neutral (opponent 3PA rate not yet tracked)`
+- Expanded `GamePropsPanel` tabs to:
+  - Points
+  - Rebounds
+  - Assists
+  - PRA
+  - Steals
+  - Blocks
+  - 3PM
+- Added friendly `TabBar` labels for `pra`, `stl`, `blk`, and `fg3m`.
+
+Verification:
+- `node --check scripts/calc-confidence.js` passed.
+- `npm run build` passed.
+- `node scripts/calc-confidence.js --season=2025` completed successfully.
+- Row count before Task N: `29,313`.
+- Row count after Task N: `33,193`.
+- New `fg3m` rows: `3,880`.
+- By prop type after rerun:
+  - `pts`: `6,533`, max confidence `73.03`
+  - `reb`: `5,886`, max confidence `68.52`
+  - `ast`: `4,288`, max confidence `73.69`
+  - `pra`: `6,763`, max confidence `75.07`
+  - `stl`: `4,192`, max confidence `69.42`
+  - `blk`: `1,651`, max confidence `69.62`
+  - `fg3m`: `3,880`, max confidence `65.31`
+- `fg3m` confidence cap check passed: no `fg3m` confidence exceeded `72`.
+- Low-volume shooter check passed:
+  - distinct `fg3m` players: `22`
+  - players with `avg_fg3m < 0.5` among `fg3m` rows: `0`
+- Correlated prop pass still completed:
+  - correlated player-games: `11`
+  - correlated rows flagged: `22`
+
+---
+
+## Task O — First Basket Tab
+
+**Goal:** Build the First Basket scoring worker (`scripts/calc-first-basket.js`), a new API endpoint, and a First Basket tab in `GamePropsPanel`. This task is now unblocked — `q1_pts` was backfilled for 2024/2025 in Task G and will populate automatically for 2026 games going forward.
+
+**Files to change:**
+- `scripts/calc-first-basket.js` (new)
+- `server.js` — add `GET /api/wnba/first-basket?gameId=X`
+- `wnba-prop-scout.jsx` — add First Basket tab to `GamePropsPanel`
+- `scripts/scheduler.js` — add `calcFirstBasket` to post-midnight job
+- `scripts/backfill-season.js` — add `calcFirstBasket` to backfill steps
+- DB: new `first_basket_results` table (apply in Supabase SQL editor before running)
+
+---
+
+### New DB table — apply in Supabase SQL editor before running
+
+```sql
+CREATE TABLE IF NOT EXISTS first_basket_results (
+  id                  SERIAL PRIMARY KEY,
+  player_id           INTEGER NOT NULL REFERENCES players(id),
+  game_id             INTEGER NOT NULL REFERENCES games(id),
+  first_basket_score  DECIMAL(5,2),
+  recommendation      VARCHAR(20),   -- 'strong_look', 'value_look', 'pass'
+  signals             JSONB,
+  analyzed_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(player_id, game_id)
+);
+GRANT ALL ON TABLE first_basket_results TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE first_basket_results_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+---
+
+### Signal stack and scoring formula
+
+```js
+const FIRST_BASKET_WEIGHTS = {
+  usageRate:    0.35,  // avg_usage_rate from player_research_metrics, normalized 0–100
+  position:     0.15,  // G=65, F=50, C=42
+  pace:         0.20,  // average of both teams' pace_rating from team_pace_ratings
+  starterBonus: 0.20,  // confirmed starter from recent logs: 100 if starter in L3, else 20
+  q1Tendency:   0.10,  // avg q1_pts vs avg_pts ratio, normalized 0–100
+};
+// Final score 0–100. Recommendations: >= 65 = 'strong_look', 45–64 = 'value_look', < 45 = 'pass'
+// Only surface 'strong_look' and 'value_look' players (top 5 per game).
+// Filter: confirmed starters only (starter in L3 games). Non-starters are excluded.
+```
+
+**Usage rate normalization:** `clamp(50 + (avgUsageRate - 0.20) / 0.20 * 50)` where 0.20 (20%) is the WNBA average usage rate.
+
+**Position bonus:**
+```js
+function scorePosition(pos) {
+  const p = String(pos || '').toUpperCase();
+  if (p.startsWith('G')) return 65;
+  if (p.startsWith('F')) return 50;
+  if (p.startsWith('C')) return 42;
+  return 50;
+}
+```
+
+**Pace score:** Average `pace_rating` of both teams from `team_pace_ratings` for the current season. If no pace data, use 50.
+
+**Starter bonus:** Check `player_game_logs` — if the player started (i.e., `starter = true`) in at least 2 of their last 3 non-DNP games, treat as confirmed starter (score 100). Otherwise 20.
+
+**Q1 tendency:**
+```js
+// q1_tendency = avg q1_pts / avg_pts (season)
+// Normalize: clamp(50 + (ratio - 0.25) / 0.25 * 50)
+// 0.25 = expected Q1 share in a 4-quarter game
+// Null q1_pts → use 50 (neutral)
+```
+
+Compute `avg_q1_pts` on the fly from `player_game_logs` for the current season (same as how `calc-confidence.js` computes PRA rolling windows — no new metric column needed).
+
+---
+
+### `scripts/calc-first-basket.js` structure
+
+```js
+async function calcFirstBasket({ season, gameId } = {}) {
+  // If gameId provided: process only that game
+  // If season provided: process all final games in that season
+  // Default: process all unanalyzed final games with espn_id
+
+  // For each game:
+  //   1. Get both teams' active players (with metrics)
+  //   2. Get recent logs (L3) for starter detection
+  //   3. Get q1_pts from player_game_logs for q1 tendency
+  //   4. Get pace ratings for both teams
+  //   5. Score each player, filter to confirmed starters
+  //   6. Upsert top results to first_basket_results
+
+  return { upserted, failed };
+}
+```
+
+Logging format:
+```
+[calc-first-basket] Processing N games for season YYYY...
+[calc-first-basket] Done — X upserted, Y failed
+```
+
+---
+
+### `GET /api/wnba/first-basket?gameId=X` (server.js)
+
+```js
+app.get('/api/wnba/first-basket', async (req, res) => {
+  const { gameId } = req.query;
+  if (!gameId) return res.status(400).json({ error: 'gameId required' });
+
+  const { data, error } = await supabase
+    .from('first_basket_results')
+    .select(`
+      *,
+      players(id, full_name, first_name, last_name, position),
+      teams(id, name, abbreviation)
+    `)
+    .eq('game_id', gameId)
+    .neq('recommendation', 'pass')
+    .order('first_basket_score', { ascending: false })
+    .limit(10);
+
+  if (error) throw error;
+  res.json({ data: data || [] });
+});
+```
+
+---
+
+### Frontend tab in `wnba-prop-scout.jsx`
+
+Add `'fb'` tab to `GamePropsPanel`:
+
+```js
+<TabBar tabs={['pts', 'reb', 'ast', 'pra', 'stl', 'blk', 'fg3m', 'fb']} ... />
+// labels: fb → 'FIRST BASKET'
+```
+
+When `activeTab === 'fb'`, fetch from `/api/wnba/first-basket?gameId={game.id}` instead of `/api/wnba/props`. The response shape is different from props — render accordingly:
+
+Each card shows:
+- Player name + position
+- Team abbreviation
+- First basket score (0–100) using the existing `ConfidenceBar` component
+- Recommendation badge: `STRONG LOOK` (green) or `VALUE LOOK` (yellow)
+- Signals breakdown (from `signals` JSONB) — show as small chip tags: `STARTER`, `HIGH USAGE`, `FAST PACE`, `Q1 SCORER`
+
+Derive signal chips from the `signals` object:
+```js
+const chips = [];
+if (signals?.starter_score >= 80)   chips.push('STARTER');
+if (signals?.usage_score >= 65)     chips.push('HIGH USAGE');
+if (signals?.pace_score >= 65)      chips.push('FAST PACE');
+if (signals?.q1_tendency_score >= 65) chips.push('Q1 SCORER');
+```
+
+Empty state: `'No first basket analysis available yet for this game.'`
+
+---
+
+### Scheduler and backfill
+
+**`scripts/scheduler.js`** — add to post-midnight job after `calcConfidence`:
+```js
+const { calcFirstBasket } = require('./calc-first-basket');
+// in post-midnight job, after calcConfidence:
+await calcFirstBasket();
+```
+
+**`scripts/backfill-season.js`** — add after `ingestWnbaStats` step:
+```js
+const { calcFirstBasket } = require('./calc-first-basket');
+// step 8/8:
+const result = await calcFirstBasket({ season });
+console.log(`[backfill] First basket done — upserted ${result.upserted}, failed ${result.failed}`);
+```
+
+---
+
+### Acceptance criteria
+
+- `first_basket_results` table exists in Supabase (applied before running)
+- `node scripts/calc-first-basket.js --season=2025` populates rows without errors
+- Rows only exist for confirmed starters (`recommendation` is `'strong_look'` or `'value_look'`)
+- `GET /api/wnba/first-basket?gameId=X` returns results sorted by score descending
+- First Basket tab renders in `GamePropsPanel` with player name, score bar, recommendation badge, and signal chips
+- Empty state renders cleanly when no data exists
+- `node --check scripts/calc-first-basket.js` passes
+- `npm run build` passes
+- `node --check scripts/scheduler.js` passes
+
+### Completion note — 2026-05-03
+
+Task O completed by Codex.
+
+Files changed:
+- `db/013_create_first_basket_results.sql`
+- `scripts/calc-first-basket.js`
+- `server.js`
+- `wnba-prop-scout.jsx`
+- `scripts/scheduler.js`
+- `scripts/backfill-season.js`
+- `codex-handoff.md`
+
+DB status:
+- `first_basket_results` table already existed in live Supabase when Codex checked it.
+- Added `db/013_create_first_basket_results.sql` to the repo for fresh setups, including:
+  - `UNIQUE(player_id, game_id)`
+  - game/score and player indexes
+  - required GRANT statements
+
+Implementation:
+- Added `scripts/calc-first-basket.js`.
+- Worker supports:
+  - `node scripts/calc-first-basket.js`
+  - `node scripts/calc-first-basket.js --season=2025`
+  - `node scripts/calc-first-basket.js --gameId=51`
+- Default mode processes unanalyzed final games with `espn_id`.
+- Season mode processes all final games in the season.
+- Scoring follows the Task O weights:
+  - usage rate `0.35`
+  - position `0.15`
+  - pace `0.20`
+  - starter bonus `0.20`
+  - Q1 tendency `0.10`
+- Starter gate implemented from `player_game_logs`: player must have started at least 2 of last 3 prior non-DNP games.
+- Q1 tendency is computed on the fly from prior current-season `player_game_logs.q1_pts`; null/all-missing Q1 data falls back to neutral.
+- Results are top 5 per game, only `strong_look` / `value_look`, with stale rows cleared per game before upsert.
+- Added `GET /api/wnba/first-basket?gameId=X`.
+- API returns rows sorted by `first_basket_score DESC`, joined to player and player team.
+- Added `FIRST BASKET` tab to inline `GamePropsPanel`.
+- First Basket tab renders:
+  - player name
+  - team abbreviation + position
+  - score bar
+  - `STRONG LOOK` / `VALUE LOOK` badge
+  - signal chips: `STARTER`, `HIGH USAGE`, `FAST PACE`, `Q1 SCORER`
+- Added `calcFirstBasket()` to scheduler after `calcConfidence()`.
+- Added `calcFirstBasket({ season })` to `backfill-season.js` as step `8/8`.
+
+Verification:
+- `node --check scripts/calc-first-basket.js` passed.
+- `node --check scripts/scheduler.js` passed.
+- `node --check scripts/backfill-season.js` passed.
+- `node --check server.js` passed.
+- `npm run build` passed.
+- `node scripts/calc-first-basket.js --season=2025` completed:
+  - games processed: `298`
+  - rows upserted: `1,397`
+  - failed games: `0`
+- Live Supabase verification:
+  - 2025 `first_basket_results` rows: `1,397`
+  - rows with `recommendation = 'pass'`: `0`
+  - checked first `1,000` rows for starter gate signals; non-starter rows found: `0`
+- API smoke test passed with local server:
+  - `GET http://127.0.0.1:3001/api/wnba/first-basket?gameId=51`
+  - returned 5 rows sorted by `first_basket_score` descending.
+  - top sample: Odyssey Sims, `82.61`, `strong_look`.
+- Local server was stopped after smoke testing; port `3001` was clear.
+
 ---
 
 ## Notes for Codex
@@ -1133,7 +2856,7 @@ If adding to metrics: add `avg_q1_pts DECIMAL(5,2)` column to `player_research_m
 
 4. **PRA is not stored in rolling windows** — `player_research_metrics` has `avg_pra` (season avg) but no `l5_pra` or `l10_pra`. `calc-confidence.js` computes PRA rolling windows on-the-fly from raw logs. If adding more combo props, follow the same pattern.
 
-5. **Confidence score is 0–100** — the old spec said 0–10.0. The implementation uses 0–100 internally and in the DB (`confidence_score DECIMAL(4,2)`). The frontend may need updating if it expects 0–10.0 (see Task C).
+5. **Confidence score is 0–80 (display cap)** — internally the algorithm may score higher, but all stored and displayed values are clamped at 80. Tiers: 70–80 = High Confidence, 58–69 = Value Look, <58 = Speculative/PASS.
 
 6. **Synthetic lines are temporary** — any `prop_analysis_results` row where `sportsbook = 'synthetic'` used a derived line. These will be overwritten once real odds are ingested and `calc-confidence.js` is re-run.
 
@@ -1144,3 +2867,324 @@ If adding to metrics: add `avg_q1_pts DECIMAL(5,2)` column to `player_research_m
    [script-name] Description of what's happening
    [script-name] Done — X upserted, Y failed
    ```
+
+---
+
+## Task P — Referee Crew Foul Tendency
+
+**Goal:** Ingest WNBA referee crew assignments and build per-referee foul tendency scores that feed a `score_referee` signal in `calc-confidence.js`. This signal nudges points and PRA props up for whistle-heavy crews and down for let-it-play crews.
+
+**Source decision:** `official.nba.com/referee-assignments/` is a JS-rendered SPA — server-side `fetch` returns a shell page. Use `stats.wnba.com` instead, which we already have working with browser-spoofed headers:
+- **Same-day assignments**: `stats.wnba.com/stats/scoreboardv2?LeagueID=10&gameDate=MM/DD/YYYY` — returns today's scheduled games with officials assigned
+- **Historical foul tendency**: `stats.wnba.com/stats/boxscoresummaryv2?GameID=X` — returns officials per completed game; combine with team foul data from our existing `team_game_logs.pf` to compute each referee's foul rate
+
+Both endpoints use the same `WNBA_STATS_HEADERS` already defined in `scripts/ingest-wnba-stats.js`.
+
+**Files to create/change:**
+- `scripts/ingest-referee-crews.js` (new)
+- `db/014_create_referee_crews.sql` (new)
+- `scripts/calc-confidence.js` — add `score_referee` signal
+- `scripts/scheduler.js` — add crew ingestion to game-day job
+- `scripts/backfill-season.js` — add historical backfill step
+
+---
+
+### New DB tables — apply in Supabase SQL editor before running
+
+```sql
+-- Stores per-game referee assignments
+CREATE TABLE IF NOT EXISTS referee_crews (
+  id              SERIAL PRIMARY KEY,
+  game_id         INTEGER NOT NULL REFERENCES games(id),
+  official_id     VARCHAR(20) NOT NULL,   -- WNBA Stats official ID
+  name            VARCHAR(100) NOT NULL,
+  role            VARCHAR(20),            -- 'Crew Chief', 'Referee', 'Umpire'
+  season          INTEGER NOT NULL,
+  UNIQUE(game_id, official_id)
+);
+GRANT ALL ON TABLE referee_crews TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE referee_crews_id_seq TO postgres, anon, authenticated, service_role;
+
+-- Stores computed foul tendency per referee per season
+CREATE TABLE IF NOT EXISTS referee_foul_ratings (
+  id              SERIAL PRIMARY KEY,
+  official_id     VARCHAR(20) NOT NULL,
+  name            VARCHAR(100) NOT NULL,
+  season          INTEGER NOT NULL,
+  games           INTEGER NOT NULL DEFAULT 0,
+  avg_total_fouls DECIMAL(5,2),          -- avg (home_pf + away_pf) per game
+  foul_rating     DECIMAL(5,2),          -- 0–100, 50 = league average
+  rating_label    VARCHAR(20),           -- 'whistle_heavy', 'neutral', 'let_play'
+  as_of_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+  UNIQUE(official_id, season, as_of_date)
+);
+GRANT ALL ON TABLE referee_foul_ratings TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE referee_foul_ratings_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+---
+
+### Part 1 — WNBA Stats API: same-day scoreboardv2
+
+The `scoreboardv2` endpoint returns today's games with officials. The GameID in this response is the WNBA Stats `GameID` (format: `1021900001`), not our local `games.id`. Use date + team name matching to link to local game records (same pattern as `ingest-wnba-stats.js`).
+
+**Endpoint:**
+```
+GET https://stats.wnba.com/stats/scoreboardv2?DayOffset=0&LeagueID=10&gameDate={MM/DD/YYYY}
+```
+
+**Response shape** (standard resultSets pattern):
+```
+resultSets:
+  [0] GameHeader  — rows: [GAME_DATE_EST, GAME_SEQUENCE, GAME_ID, GAME_STATUS_ID, ...]
+  [1] LineScore   — rows: team scores per game
+  ...
+  [n] Officials   — rows: [OFFICIAL_ID, FIRST_NAME, LAST_NAME, JERSEY_NUM]
+                    (one row per official; must cross-reference GAME_ID back to GameHeader)
+```
+
+Parse officials rows and join to `GameHeader` via `GAME_ID`. Then match local `games` rows by `game_date` + team abbreviation/name (same as existing name-match logic in `ingest-wnba-stats.js`). Upsert to `referee_crews`.
+
+**Run timing:** Add to the game-day `midday odds + injuries` scheduler job (already runs at noon ET), since assignments post at 9am ET. Keep it lightweight — one API call per day.
+
+---
+
+### Part 2 — WNBA Stats API: boxscoresummaryv2 for historical officials
+
+For completed games that don't yet have crews stored, fetch officials from `boxscoresummaryv2`. This is needed for the 2024/2025 historical backfill.
+
+**Endpoint:**
+```
+GET https://stats.wnba.com/stats/boxscoresummaryv2?GameID={wnbaStatsGameId}
+```
+
+**Challenge:** We store ESPN `espn_id` in `games` but not WNBA Stats `GameID`. The `scoreboardv2` response includes `GAME_ID` for each game — use `scoreboardv2` date-by-date during backfill to collect WNBA Stats GameIDs and store them.
+
+**Alternative approach for backfill (simpler):** Run `scoreboardv2` for every game date in the 2024 and 2025 seasons. Since `scoreboardv2` includes officials directly, there's no need to call `boxscoresummaryv2` at all — each date's scoreboard gives both the WNBA GameID and the officials in one shot.
+
+Use this pattern for the backfill:
+```js
+for (const date of allGameDates) {
+  // fetch scoreboardv2 for date
+  // parse GameHeader + Officials resultSets
+  // match to local games.id by date + team name
+  // upsert official rows to referee_crews
+}
+```
+
+Throttle at 10 requests/minute (WNBA Stats API is less strict than BDL free tier, but be polite).
+
+---
+
+### Part 3 — Compute foul ratings
+
+After crews are ingested, compute each referee's foul tendency from the `referee_crews` + `team_game_logs` join. Run as a separate function `calcRefereeRatings()` at the end of `ingestRefereeCrew()` or as its own nightly step.
+
+```js
+async function calcRefereeRatings(season) {
+  // For each official in referee_crews for this season:
+  //   JOIN referee_crews ON game_id → team_game_logs ON game_id
+  //   Sum home_pf + away_pf for each game they worked
+  //   Compute avg_total_fouls = mean((home_pf + away_pf)) across all their games
+  //
+  // League average = mean(avg_total_fouls) across all officials
+  //
+  // foul_rating = clamp(50 + (avg_total_fouls - leagueAvg) / leagueAvg * 50)
+  //   → 50 = league average, >50 = whistle-heavy, <50 = let-it-play
+  //
+  // rating_label:
+  //   >= 65 → 'whistle_heavy'
+  //   <= 35 → 'let_play'
+  //   else  → 'neutral'
+  //
+  // Upsert to referee_foul_ratings (one row per official per season per as_of_date)
+}
+```
+
+**Minimum games threshold:** Only compute ratings for officials with >= 5 games worked. Below that, default to 50 (neutral) — too little data to be meaningful.
+
+---
+
+### Part 4 — Wire `score_referee` into `calc-confidence.js`
+
+Load referee foul ratings alongside other context in `calcConfidence`:
+
+```js
+async function getRefRatings(season) {
+  const { data, error } = await supabase
+    .from('referee_foul_ratings')
+    .select('official_id, foul_rating, as_of_date')
+    .eq('season', season)
+    .order('as_of_date', { ascending: false });
+
+  if (error || !data) return null;
+
+  // Average foul_rating across all officials for a game
+  // (a game has 3 officials; average their ratings for the game-level score)
+  // Return a Map<game_id, avg_foul_rating>
+  const crewData = await supabase
+    .from('referee_crews')
+    .select('game_id, official_id')
+    .eq('season', season);
+
+  const ratingsByOfficial = new Map((data || []).map(r => [r.official_id, Number(r.foul_rating)]));
+
+  const byGame = new Map();
+  for (const row of crewData.data || []) {
+    const rating = ratingsByOfficial.get(row.official_id) ?? 50;
+    if (!byGame.has(row.game_id)) byGame.set(row.game_id, []);
+    byGame.get(row.game_id).push(rating);
+  }
+
+  const gameRefRating = new Map();
+  for (const [gameId, ratings] of byGame) {
+    const avg = ratings.reduce((s, v) => s + v, 0) / ratings.length;
+    gameRefRating.set(gameId, Math.round(avg));
+  }
+
+  return gameRefRating;
+}
+```
+
+**Apply in `analyzePlayerProp`:** `score_referee` only meaningfully affects props where fouls drive scoring — pts and pra. For reb/ast/stl/blk it has negligible effect. Apply as a small nudge on `projectionEdge` for pts and pra only (same pattern as implied team total boost):
+
+```js
+// Only for field === 'pts' or field === 'pra'
+const refRating = refRatings?.get(game.id) ?? 50;
+const refBoost = (refRating - 50) / 50 * 0.04; // max ±4% nudge on projection
+const refAdjustedProj = proj * (1 + refBoost);
+```
+
+Add to `key_factors` when meaningful:
+```js
+if (refRating >= 65) keyFactors.push(`Whistle-heavy crew (ref rating: ${refRating}/100) — FTA environment elevated`);
+if (refRating <= 35) keyFactors.push(`Let-it-play crew (ref rating: ${refRating}/100) — fewer FTA expected`);
+```
+
+Add `score_referee: round(refRating)` to the stored output row.
+
+**Graceful fallback:** When `referee_crews` has no row for a game (pre-season, data gap), `refRating` defaults to 50, nudge is 0, no key factor emitted. No crash.
+
+---
+
+### Part 5 — Scheduler and backfill
+
+**`scripts/scheduler.js`** — add to the `midday odds + injuries` job (runs 12pm ET, after 9am posting):
+```js
+const { ingestRefereeCrew } = require('./ingest-referee-crews');
+// In midday job, after ingestInjuries:
+await ingestRefereeCrew();
+```
+
+**`scripts/backfill-season.js`** — add after `ingestWnbaStats`, before `calcFirstBasket`:
+```js
+const { ingestRefereeCrew } = require('./ingest-referee-crews');
+// step 8/9:
+const result = await ingestRefereeCrew({ season });
+console.log(`[backfill] Referee crews done — upserted ${result.upserted}, ratings ${result.ratings}`);
+```
+
+---
+
+### Acceptance criteria
+
+- Both tables created in Supabase before running (apply SQL in editor)
+- `node scripts/ingest-referee-crews.js --season=2025` upserts crew rows for all 2025 games without errors
+- `referee_crews` has 3 rows per game (crew chief + 2 referees/umpires)
+- `referee_foul_ratings` has one row per official with >= 5 games, with `foul_rating` centered around 50
+- `score_referee` appears in `prop_analysis_results` for pts and pra props after re-running `calc-confidence.js`
+- Key factors include whistle/let-play strings for crews significantly above/below 50
+- Neutral fallback (50, no key factor) when no crew data for a game
+- `node --check scripts/ingest-referee-crews.js` passes
+- `node --check scripts/calc-confidence.js` passes
+
+---
+
+## Completed Since Last Codex Session — 2026-05-04
+
+### 3PM Matchup Signal Upgrade (done by Cowork, no Codex action required)
+
+The neutral `fg3m` matchup fallback has been replaced with a live signal. **No Codex work needed — this is already implemented.** Notes for awareness only.
+
+**What changed:**
+
+`db/012_create_team_opponent_stats.sql` — `opp_fg3a_rate DECIMAL(6,4)` column added to the CREATE TABLE. Migration for existing projects:
+```sql
+ALTER TABLE team_opponent_stats ADD COLUMN IF NOT EXISTS opp_fg3a_rate DECIMAL(6,4);
+```
+**Run this in Supabase SQL editor before the next `ingest-wnba-stats.js` run.**
+
+`scripts/ingest-wnba-stats.js`:
+- `fetchOppFg3aRate(season)` — new function, calls `leaguedashteamstats` with `MeasureType: 'Opponent'`, computes `opp_fg3a_rate = OPP_FG3A / OPP_FGA` per team
+- `mergeRows()` — now accepts `fg3aRows` param and merges `opp_fg3a_rate` into each team row
+- `ingestWnbaStats()` — fetches all three stat types in parallel, passes `fg3aRows` to `mergeRows`
+- Exported: `fetchOppFg3aRate`
+
+`scripts/calc-confidence.js`:
+- `getOpponentStats()` — selects `opp_fg3a_rate`, stores in map, computes `_leagueAvgFg3a` dynamically (fallback: 0.32)
+- `analyzePlayerProp()` fg3m block — replaces hardcoded `matchupRating = 50` with: `clamp(50 + ((oppStats.opp_fg3a_rate - leagueAvgFg3a) / leagueAvgFg3a) * 100)`
+- Key factors — now emits `"Opponent allows X.X% of shots as 3s (matchup rating: N/100)"` when data is available; falls back to neutral message if not
+
+**Signal interpretation:** A defense that allows opponents to generate a high proportion of 3-point attempts is favorable for the shooter's fg3m prop (more open looks, more volume). A defense that suppresses 3PA below league average is a headwind.
+
+---
+
+### Task P — Referee Crew Foul Tendency (done by Cowork, 2026-05-04)
+
+**No Codex action needed — fully implemented.** Notes for awareness only.
+
+**SQL migrations to apply in Supabase before first run (3 statements):**
+```sql
+-- 1. Referee crew assignments
+CREATE TABLE IF NOT EXISTS referee_crews (
+  id SERIAL PRIMARY KEY, game_id INTEGER NOT NULL REFERENCES games(id),
+  official_id VARCHAR(20) NOT NULL, name VARCHAR(100) NOT NULL,
+  role VARCHAR(20), season INTEGER NOT NULL, UNIQUE(game_id, official_id)
+);
+GRANT ALL ON TABLE referee_crews TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE referee_crews_id_seq TO postgres, anon, authenticated, service_role;
+
+-- 2. Referee foul tendency ratings
+CREATE TABLE IF NOT EXISTS referee_foul_ratings (
+  id SERIAL PRIMARY KEY, official_id VARCHAR(20) NOT NULL, name VARCHAR(100) NOT NULL,
+  season INTEGER NOT NULL, games INTEGER NOT NULL DEFAULT 0,
+  avg_total_fouls DECIMAL(5,2), foul_rating DECIMAL(5,2), rating_label VARCHAR(20),
+  as_of_date DATE NOT NULL DEFAULT CURRENT_DATE, UNIQUE(official_id, season, as_of_date)
+);
+GRANT ALL ON TABLE referee_foul_ratings TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE referee_foul_ratings_id_seq TO postgres, anon, authenticated, service_role;
+
+-- 3. Add score_referee column to existing prop_analysis_results
+ALTER TABLE prop_analysis_results ADD COLUMN IF NOT EXISTS score_referee DECIMAL(5,2);
+```
+
+**Files created/changed:**
+
+`db/014_create_referee_crews.sql` — both tables with GRANTs, ALTER TABLE note for `score_referee`
+
+`scripts/ingest-referee-crews.js` (new):
+- `fetchScoreboard(dateIso)` — hits `scoreboardv2?LeagueID=10&gameDate=MM/DD/YYYY`
+- `parseScoreboard(json)` — extracts GameHeader, LineScore (team abbrevs → wnbaGameId), Officials (game_id, official_id, name, role)
+- `matchLocalGame(abbrevs, localGames, teamAbbrMap)` — maps WNBA Stats abbrevs → local team IDs → local game_id
+- `calcRefereeRatings(season, asOfDate)` — sums `player_game_logs.pf` per game (both teams), computes per-official `avg_total_fouls`, normalizes to 0–100 scale, upserts `referee_foul_ratings`
+- `ingestRefereeCrew({ date, season, backfill })` — same-day (default) or full-season date-loop backfill at 10 req/min
+- Exports: `{ ingestRefereeCrew, calcRefereeRatings }`
+
+`scripts/calc-confidence.js`:
+- `refRatingsCache` + `getRefRatings(season)` added — loads `referee_foul_ratings` + `referee_crews`, averages crew ratings per game, caches at season level
+- `analyzePlayerProp()` now accepts `refRatings` (12th param)
+- `refBoost = (refRating - 50) / 50 * 0.04` applied to pts/pra projection only (max ±4%)
+- `score_referee: round(refRating)` in all stored output rows
+- Key factors: `"Whistle-heavy crew (ref rating: N/100)"` at ≥65; `"Let-it-play crew"` at ≤35 (pts/pra only)
+- Graceful fallback: `refRating` defaults to 50 when no crew data; nudge = 0, no key factor
+
+`scripts/scheduler.js` — `ingestRefereeCrew()` added to midday job after `ingestInjuries`
+
+`scripts/backfill-season.js` — referee crews added as step 8/9 with `{ season, backfill: true }`; calcFirstBasket shifted to 9/9
+
+**To run historical backfill after applying SQL migrations:**
+```bash
+node scripts/ingest-referee-crews.js --season=2025 --backfill=true
+node scripts/ingest-referee-crews.js --season=2024 --backfill=true
+```
+Each full season loop takes ~25 min at the 6s throttle (≈150 game days).
