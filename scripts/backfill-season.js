@@ -25,7 +25,7 @@ const { calcFirstBasket } = require('./calc-first-basket');
 
 // WNBA regular seasons run roughly mid-May through mid-September.
 const SEASON_WINDOWS = {
-  2026: { start: '2026-05-16', end: '2026-09-20' },  // end date estimated; update if needed
+  2026: { start: '2026-05-08', end: '2026-09-20' },  // end date estimated; update if needed
   2025: { start: '2025-05-16', end: '2025-09-19' },
   2024: { start: '2024-05-14', end: '2024-09-19' },
   2023: { start: '2023-05-19', end: '2023-09-17' },

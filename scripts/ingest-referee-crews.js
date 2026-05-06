@@ -1,13 +1,17 @@
 require('dotenv').config();
 
 /**
- * Ingests WNBA referee crew assignments from stats.wnba.com/stats/scoreboardv2
- * and computes per-referee foul tendency ratings.
+ * Ingests WNBA referee crew assignments from stats.wnba.com.
  *
- * Same-day mode (default): fetches today's games + officials (run at noon ET
- * after assignments post at 9am ET).
+ * Strategy:
+ *   1. scoreboardv2  — get WNBA Stats GameIDs + team abbreviations for each date
+ *   2. boxscoresummaryv2 — get Officials (3 refs per game) for each completed game
  *
- * Backfill mode: loops every game date in a season window to populate history.
+ * The WNBA version of scoreboardv2 does NOT include an Officials resultSet
+ * (unlike the NBA version), so we must call boxscoresummaryv2 per game.
+ *
+ * Same-day mode (default): fetches today's games + officials
+ * Backfill mode: loops every game date in a season window
  *
  * Usage:
  *   node scripts/ingest-referee-crews.js                        # today
@@ -20,18 +24,20 @@ const { WNBA_STATS_HEADERS } = require('./ingest-wnba-stats');
 
 const WNBA_STATS_BASE      = 'https://stats.wnba.com/stats';
 const MIN_GAMES_FOR_RATING = 5;
-const BACKFILL_DELAY_MS    = 6000; // 10 req/min — be polite to WNBA Stats API
+const BACKFILL_DELAY_MS    = 6000; // ~10 req/min between dates — be polite
 
-// Maps WNBA Stats team abbreviations to the abbreviations stored in our teams table
+// Maps WNBA Stats team abbreviations → local teams.abbreviation
 const ABBREV_MAP = {
   ATL: 'ATL', CHI: 'CHI', CON: 'CON', DAL: 'DAL',
   GSV: 'GS',  IND: 'IND', LAS: 'LA',  LVA: 'LV',
-  MIN: 'MIN',  NYL: 'NY',  PHO: 'PHX', PHX: 'PHX',
-  SEA: 'SEA',  WAS: 'WSH',
+  MIN: 'MIN', NYL: 'NY',  PHO: 'PHX', PHX: 'PHX',
+  SEA: 'SEA', WAS: 'WSH',
+  // 2026 expansion teams — WNBA Stats abbreviations TBC; update if API uses different codes
+  TOR: 'TOR', POR: 'POR',
 };
 
 const SEASON_WINDOWS = {
-  2026: { start: '2026-05-16', end: '2026-09-20' },
+  2026: { start: '2026-05-08', end: '2026-09-20' },
   2025: { start: '2025-05-16', end: '2025-09-19' },
   2024: { start: '2024-05-14', end: '2024-09-19' },
 };
@@ -71,7 +77,12 @@ function clamp(v, lo = 0, hi = 100) {
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 
-async function fetchScoreboard(dateIso) {
+/**
+ * Fetches scoreboardv2 for a date.
+ * Returns Map<wnbaGameId, { abbrevs: [string, string] }>
+ * (used to match WNBA Stats GameIDs → local game IDs via team abbrevs)
+ */
+async function fetchScoreboardGames(dateIso) {
   const apiDate = isoToApiDate(dateIso);
   const url = `${WNBA_STATS_BASE}/scoreboardv2?DayOffset=0&LeagueID=10&gameDate=${encodeURIComponent(apiDate)}`;
   const res = await fetch(url, { headers: WNBA_STATS_HEADERS });
@@ -79,77 +90,59 @@ async function fetchScoreboard(dateIso) {
     const text = await res.text().catch(() => '');
     throw new Error(`scoreboardv2 ${res.status} for ${dateIso}: ${text.slice(0, 200)}`);
   }
-  return res.json();
-}
+  const json = await res.json();
 
-// Parses scoreboardv2 JSON.
-// Returns:
-//   byWnbaGameId: Map<wnbaGameId, { abbrevs: [string, string] }>
-//   officials:    [{ wnbaGameId, official_id, name, role }]
-function parseScoreboard(json) {
-  const resultSets = json?.resultSets || [];
-  const findSet    = name => resultSets.find(rs => rs.name === name);
+  const sets    = json?.resultSets || [];
+  const findSet = name => sets.find(rs => rs.name === name);
+  const lsSet   = findSet('LineScore');
 
-  const ghSet  = findSet('GameHeader');
-  const lsSet  = findSet('LineScore');
-  const offSet = findSet('Officials');
-
-  if (!ghSet) return { byWnbaGameId: new Map(), officials: [] };
-
-  // Validate GameHeader so we know which WNBA GameIDs exist
-  const ghIdx    = indexHeaders(ghSet.headers);
-  const ghGameId = ghIdx.get('GAME_ID');
-  const knownIds = new Set();
-  for (const row of ghSet.rowSet || []) {
-    if (ghGameId != null) knownIds.add(String(row[ghGameId]));
-  }
-
-  // LineScore: wnbaGameId → [abbrev, abbrev]
+  // Build wnbaGameId → { abbrevs: [string, string] }
   const byWnbaGameId = new Map();
   if (lsSet) {
-    const lsIdx    = indexHeaders(lsSet.headers);
-    const lsGameId = lsIdx.get('GAME_ID');
-    const lsAbbrev = lsIdx.get('TEAM_ABBREVIATION');
+    const idx    = indexHeaders(lsSet.headers);
+    const gidCol = idx.get('GAME_ID');
+    const abbCol = idx.get('TEAM_ABBREVIATION');
 
     for (const row of lsSet.rowSet || []) {
-      const wnbaGameId = lsGameId != null ? String(row[lsGameId]) : null;
-      const abbrev     = lsAbbrev != null ? String(row[lsAbbrev] || '').toUpperCase() : null;
+      const wnbaGameId = gidCol != null ? String(row[gidCol]) : null;
+      const abbrev     = abbCol != null ? String(row[abbCol] || '').toUpperCase() : null;
       if (!wnbaGameId || !abbrev) continue;
-
-      if (!byWnbaGameId.has(wnbaGameId)) byWnbaGameId.set(wnbaGameId, { wnbaGameId, abbrevs: [] });
+      if (!byWnbaGameId.has(wnbaGameId)) byWnbaGameId.set(wnbaGameId, { abbrevs: [] });
       byWnbaGameId.get(wnbaGameId).abbrevs.push(abbrev);
     }
   }
 
-  // Officials: one row per official per game
-  const officials = [];
-  if (offSet) {
-    const oIdx    = indexHeaders(offSet.headers);
-    const oGameId = oIdx.get('GAME_ID');
-    const oId     = oIdx.get('OFFICIAL_ID');
-    const oFirst  = oIdx.get('FIRST_NAME');
-    const oLast   = oIdx.get('LAST_NAME');
-    const oRole   = oIdx.get('ASSIGNMENT'); // may not exist in all response shapes
+  return byWnbaGameId; // may be empty on off-days
+}
 
-    for (const row of offSet.rowSet || []) {
-      const wnbaGameId = oGameId != null ? String(row[oGameId]) : null;
-      const officialId = oId    != null ? String(row[oId]    || '').trim() : null;
-      const firstName  = oFirst != null ? String(row[oFirst] || '') : '';
-      const lastName   = oLast  != null ? String(row[oLast]  || '') : '';
-      const role       = oRole  != null ? (String(row[oRole] || '') || null) : null;
-
-      if (!officialId) continue;
-
-      officials.push({
-        wnbaGameId,
-        official_id: officialId,
-        name: `${firstName} ${lastName}`.trim(),
-        role,
-      });
-    }
+/**
+ * Fetches boxscoresummaryv2 for a single WNBA Stats GameID.
+ * Returns array of { official_id, name, role } — no GAME_ID in Officials headers,
+ * but we already know the game since we called per-game.
+ */
+async function fetchGameOfficials(wnbaGameId) {
+  const url = `${WNBA_STATS_BASE}/boxscoresummaryv2?GameID=${wnbaGameId}`;
+  const res = await fetch(url, { headers: WNBA_STATS_HEADERS });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`boxscoresummaryv2 ${res.status} for ${wnbaGameId}: ${text.slice(0, 200)}`);
   }
+  const json = await res.json();
 
-  return { byWnbaGameId, officials };
+  const sets    = json?.resultSets || [];
+  const offSet  = sets.find(rs => rs.name === 'Officials');
+  if (!offSet?.rowSet?.length) return [];
+
+  const idx   = indexHeaders(offSet.headers);
+  const oId   = idx.get('OFFICIAL_ID');
+  const oFirst = idx.get('FIRST_NAME');
+  const oLast  = idx.get('LAST_NAME');
+
+  return (offSet.rowSet || []).map(row => ({
+    official_id: oId    != null ? String(row[oId]    || '').trim() : null,
+    name:        `${oFirst != null ? row[oFirst] : ''} ${oLast != null ? row[oLast] : ''}`.trim(),
+    role:        null, // WNBA boxscoresummaryv2 Officials has no role/assignment column
+  })).filter(o => o.official_id);
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -202,7 +195,6 @@ async function upsertCrewRows(rows) {
 async function calcRefereeRatings(season, asOfDate) {
   console.log(`[ingest-referee-crews] Computing foul ratings for season ${season}...`);
 
-  // Load all crew assignments for this season
   const { data: crewRows, error: crewErr } = await supabase
     .from('referee_crews')
     .select('game_id, official_id, name')
@@ -216,7 +208,7 @@ async function calcRefereeRatings(season, asOfDate) {
 
   const gameIds = [...new Set(crewRows.map(r => r.game_id))];
 
-  // Sum all player fouls per game (both teams combined) — team_game_logs lacks pf column
+  // Sum all player fouls per game (both teams)
   const { data: pfRows, error: pfErr } = await supabase
     .from('player_game_logs')
     .select('game_id, pf')
@@ -230,7 +222,6 @@ async function calcRefereeRatings(season, asOfDate) {
     foulsByGame.set(row.game_id, (foulsByGame.get(row.game_id) || 0) + pf);
   }
 
-  // Group crew rows by official → collect game foul totals
   const officialMap = new Map();
   for (const row of crewRows) {
     if (!officialMap.has(row.official_id)) {
@@ -239,7 +230,6 @@ async function calcRefereeRatings(season, asOfDate) {
     officialMap.get(row.official_id).gameIds.push(row.game_id);
   }
 
-  // Build per-official stats, filtering to MIN_GAMES_FOR_RATING
   const officialStats = [];
   for (const [officialId, data] of officialMap) {
     const gameFouls = data.gameIds
@@ -264,7 +254,6 @@ async function calcRefereeRatings(season, asOfDate) {
     const foulRating  = clamp(50 + ((o.avgFouls - leagueAvg) / leagueAvg) * 50);
     const rounded     = Math.round(foulRating * 100) / 100;
     const ratingLabel = rounded >= 65 ? 'whistle_heavy' : rounded <= 35 ? 'let_play' : 'neutral';
-
     return {
       official_id:     o.official_id,
       name:            o.name,
@@ -324,12 +313,11 @@ async function ingestRefereeCrew(opts = {}) {
     if (doBackfill && i > 0) await sleep(BACKFILL_DELAY_MS);
 
     try {
-      const json = await fetchScoreboard(date);
-      const { byWnbaGameId, officials } = parseScoreboard(json);
+      // Step 1: get WNBA Stats GameIDs + team abbrevs for this date
+      const byWnbaGameId = await fetchScoreboardGames(date);
+      if (!byWnbaGameId.size) continue; // off-day
 
-      if (!officials.length) continue; // off-day or officials not yet assigned
-
-      // Load local games for this date
+      // Step 2: load local games for this date
       const { data: localGames, error: lgErr } = await supabase
         .from('games')
         .select('id, home_team_id, visitor_team_id, season')
@@ -337,7 +325,7 @@ async function ingestRefereeCrew(opts = {}) {
       if (lgErr) throw lgErr;
       if (!localGames?.length) continue;
 
-      // Build wnbaGameId → { localGameId, season }
+      // Step 3: match WNBA GameIDs → local game IDs
       const wnbaToLocal = new Map();
       for (const [wnbaGameId, gameInfo] of byWnbaGameId) {
         const localGameId = matchLocalGame(gameInfo.abbrevs || [], localGames, teamAbbrMap);
@@ -347,19 +335,26 @@ async function ingestRefereeCrew(opts = {}) {
         }
       }
 
-      // Build upsert rows
-      const rows = [];
-      for (const off of officials) {
-        const mapped = off.wnbaGameId ? wnbaToLocal.get(off.wnbaGameId) : null;
-        if (!mapped) { totalFailed++; continue; }
+      if (!wnbaToLocal.size) continue;
 
-        rows.push({
-          game_id:     mapped.localGameId,
-          official_id: off.official_id,
-          name:        off.name,
-          role:        off.role,
-          season:      mapped.season,
-        });
+      // Step 4: fetch officials for each game via boxscoresummaryv2
+      const rows = [];
+      for (const [wnbaGameId, mapped] of wnbaToLocal) {
+        try {
+          const officials = await fetchGameOfficials(wnbaGameId);
+          for (const off of officials) {
+            rows.push({
+              game_id:     mapped.localGameId,
+              official_id: off.official_id,
+              name:        off.name,
+              role:        off.role,
+              season:      mapped.season,
+            });
+          }
+        } catch (gameErr) {
+          console.error(`[ingest-referee-crews] boxscoresummaryv2 failed for ${wnbaGameId}: ${gameErr.message}`);
+          totalFailed++;
+        }
       }
 
       if (rows.length) {

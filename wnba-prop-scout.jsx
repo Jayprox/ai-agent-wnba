@@ -557,11 +557,11 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
   const hw    = game.home_team?.abbreviation    || 'HOME';
   const venue = TEAM_VENUES[hw] ?? null;
 
-  const spreadLabel = game.spread != null ? fmtGameSpread(hw, game.spread) : '—';
-  const totalLabel  = game.total  != null ? fmtOne(game.total)             : '—';
-  const mlLabel     = (game.home_ml != null || game.away_ml != null)
-    ? `${hw} ${fmtML(game.home_ml)}`
-    : '—';
+  const spreadLabel  = game.spread   != null ? fmtGameSpread(hw, game.spread) : '—';
+  const totalLabel   = game.total    != null ? fmtOne(game.total)              : '—';
+  const homeMlLabel  = game.home_ml  != null ? fmtML(game.home_ml)            : '—';
+  const awayMlLabel  = game.away_ml  != null ? fmtML(game.away_ml)            : '—';
+  const hasOdds      = game.spread != null || game.total != null || game.home_ml != null;
 
   const recColor = topPick?.recommendation === 'OVER'  ? T.green
                  : topPick?.recommendation === 'UNDER' ? T.red
@@ -590,36 +590,53 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
           <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>
             {game.visitor_record && game.home_record
               ? `${game.visitor_record}  ·  ${game.home_record}`
-              : venue}
+              : (venue || ' ')}
           </div>
         </div>
         <StatusBadge status={game.status} />
       </div>
 
-      {/* Venue + date */}
-      {venue && (
-        <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>
-          {venue}  ·  {fmtDate(game.game_date || game.date)}
-        </div>
-      )}
-
-      {/* Odds row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 10 }}>
+      {/* Odds row — 4 columns: SPR · O/U · Away ML · Home ML */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 5, marginTop: 10 }}>
         {[
-          { label: 'SPR', value: spreadLabel },
-          { label: 'O/U', value: totalLabel  },
-          { label: 'ML',  value: mlLabel     },
+          { label: 'SPR',       value: spreadLabel  },
+          { label: 'O/U',       value: totalLabel   },
+          { label: `${aw} ML`,  value: awayMlLabel  },
+          { label: `${hw} ML`,  value: homeMlLabel  },
         ].map(({ label, value }) => (
-          <div key={label} style={{ background: T.card3, borderRadius: 8, padding: '7px 8px', textAlign: 'center' }}>
-            <div style={{ fontSize: 8, color: T.text3, letterSpacing: 0.8, marginBottom: 3 }}>{label}</div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.text, letterSpacing: -0.2 }}>{value}</div>
+          <div key={label} style={{ background: T.card3, borderRadius: 7, padding: '6px 4px', textAlign: 'center' }}>
+            <div style={{ fontSize: 7, color: T.text3, letterSpacing: 0.7, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: hasOdds ? T.text : T.text3, letterSpacing: -0.2 }}>{value}</div>
           </div>
         ))}
       </div>
 
+      {/* Bottom info strip: venue · date · sportsbook */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginTop: 8, paddingTop: 7, borderTop: `1px solid ${T.border}`,
+        fontSize: 9, color: T.text3,
+      }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 6 }}>
+          {venue ? `📍 ${venue}` : '📍 TBA'}
+          {' · '}
+          {fmtDate(game.game_date || game.date)}
+        </span>
+        {game.odds_sportsbook && (
+          <span style={{
+            background: T.card3, border: `1px solid ${T.border}`,
+            padding: '2px 6px', borderRadius: 4, fontSize: 8,
+            letterSpacing: 0.5, fontWeight: 700, color: T.text2,
+            flexShrink: 0, textTransform: 'uppercase',
+          }}>
+            {game.odds_sportsbook}
+          </span>
+        )}
+      </div>
+
       {/* Top pick footer */}
       {topPick && (
-        <div style={{ marginTop: 10, borderTop: `1px solid ${T.border}`, paddingTop: 9, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ marginTop: 8, borderTop: `1px solid ${T.border}`, paddingTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontSize: 10, color: T.text2, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             <span style={{ color: T.accent, fontWeight: 700, marginRight: 4 }}>TOP PICK</span>
             {playerName(topPick.players || {})}
@@ -1461,8 +1478,8 @@ function ModelTab() {
 }
 
 // ---- Board tab ----
-const BOARD_STAT_TABS   = ['pts', 'reb', 'ast', 'fg3m'];
-const BOARD_STAT_LABELS = { pts:'POINTS', reb:'REBOUNDS', ast:'ASSISTS', fg3m:'3PM' };
+const BOARD_STAT_TABS   = ['pts', 'reb', 'ast', 'fg3m', 'stl', 'blk', 'pra'];
+const BOARD_STAT_LABELS = { pts:'POINTS', reb:'REBOUNDS', ast:'ASSISTS', fg3m:'3PM', stl:'STEALS', blk:'BLOCKS', pra:'PRA' };
 
 function BoardPlayerCard({ pick, rank }) {
   const player  = pick.players || {};
@@ -1652,6 +1669,11 @@ export default function App() {
   const [topPicks, setTopPicks]             = useState([]);
   const [selectedGame, setSelectedGame]     = useState(null);
   const [expandedGameId, setExpandedGameId] = useState(null);
+  const [slateSubTab, setSlateSubTab]       = useState('games');
+  const [comboSubTab, setComboSubTab]       = useState('pra');
+  const [fbData, setFbData]                 = useState([]);
+  const [loadingFb, setLoadingFb]           = useState(false);
+  const [fbErr, setFbErr]                   = useState(null);
   const [loadingSlate, setLoadingSlate]     = useState(true);
   const [loadingPicks, setLoadingPicks]     = useState(true);
   const [slateError, setSlateError]         = useState(null);
@@ -1705,6 +1727,35 @@ export default function App() {
 
     loadAll();
     return () => { cancelled = true; };
+  }, [selectedDate]);
+
+  // Fetch first basket when FB sub-tab is active
+  useEffect(() => {
+    if (activeNav !== 'slate' || slateSubTab !== 'fb') return;
+    if (games.length === 0) return;
+    let cancelled = false;
+    async function loadFb() {
+      setLoadingFb(true); setFbErr(null);
+      const results = [];
+      for (const g of games) {
+        try {
+          const res = await fetch(`/api/wnba/first-basket?gameId=${g.id}`);
+          if (res.ok) {
+            const d = await res.json();
+            results.push(...(Array.isArray(d) ? d : [d]));
+          }
+        } catch { /* skip */ }
+      }
+      if (!cancelled) { setFbData(results); setLoadingFb(false); }
+    }
+    loadFb();
+    return () => { cancelled = true; };
+  }, [activeNav, slateSubTab, games]);
+
+  // Reset slate sub-tab when date changes
+  useEffect(() => {
+    setSlateSubTab('games');
+    setFbData([]);
   }, [selectedDate]);
 
   const isToday = selectedDate === today();
@@ -1785,57 +1836,255 @@ export default function App() {
             <span style={{ color: T.text3 }}>▾</span>
           </div>
 
-          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1.2, marginBottom: 12 }}>
+          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1.2, marginBottom: 10 }}>
             {isToday
               ? `TODAY'S SLATE — ${games.length} GAME${games.length === 1 ? '' : 'S'}`
               : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' }).toUpperCase() + ` SLATE — ${games.length} GAME${games.length === 1 ? '' : 'S'}`}
           </div>
 
-          {loadingSlate && (
-            <div style={{ textAlign: 'center', padding: 40, color: T.text3, fontSize: 12 }}>Loading games…</div>
-          )}
-          {slateError && (
-            <div style={{ textAlign: 'center', padding: 40, color: T.red, fontSize: 12 }}>{slateError}</div>
-          )}
-          {!loadingSlate && !slateError && games.length === 0 && (
-            <div className="ps-empty-state">No games scheduled.</div>
-          )}
+          {/* ── Slate sub-tabs ── */}
+          {(() => {
+            const SLATE_TABS = [
+              { id: 'games', label: 'GAMES' },
+              { id: 'pts',   label: 'PTS'   },
+              { id: 'reb',   label: 'REB'   },
+              { id: 'ast',   label: 'AST'   },
+              { id: 'fg3m',  label: '3PM'   },
+              { id: 'stl',   label: 'STL'   },
+              { id: 'blk',   label: 'BLK'   },
+              { id: 'combo', label: 'COMBO' },
+              { id: 'fb',    label: '1ST 🏀' },
+            ];
+            const COMBO_TABS = [
+              { id: 'pra',     label: 'PRA'     },
+              { id: 'pts+ast', label: 'PTS+AST' },
+              { id: 'pts+reb', label: 'PTS+REB' },
+              { id: 'ast+reb', label: 'AST+REB' },
+            ];
 
-          {games.length > 0 && (
-            <div className="ps-slate-grid">
-              {games.map(g => (
-                <div key={g.id}>
-                  <SlateCard
-                    game={g}
-                    isSelected={expandedGameId === g.id}
-                    topPick={topPicksByGame.get(g.id) || null}
-                    onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
-                  />
-                  {expandedGameId === g.id && (
-                    <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
-                  )}
+            // Stat sub-tab content — filtered picks as ranked BoardPlayerCard list
+            const statContent = (statKey) => {
+              const filtered = topPicks
+                .filter(p => String(p.prop_type || '').toLowerCase() === statKey)
+                .sort((a, b) => Number(b.confidence_score || 0) - Number(a.confidence_score || 0));
+              if (loadingPicks) return <div className="ps-empty-state">Loading picks…</div>;
+              if (picksError)   return <div className="ps-empty-state" style={{ color: T.red }}>{picksError}</div>;
+              if (filtered.length === 0) return <div className="ps-empty-state">No {statKey.toUpperCase()} picks for this slate.</div>;
+              return (
+                <div className="ps-panel" style={{ marginTop: 8 }}>
+                  {filtered.map((pick, i) => (
+                    <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            };
 
-          {/* Confidence legend */}
-          {!loadingSlate && games.length > 0 && (
-            <div className="ps-legend" style={{ marginTop: 16, padding: '10px 14px', background: T.card, borderRadius: 10, border: `1px solid ${T.border}` }}>
-              <div style={{ fontSize: 9, color: T.text3, letterSpacing: 1, marginBottom: 8 }}>CONFIDENCE SCALE</div>
-              <div style={{ display: 'flex', gap: 16 }}>
-                {[{color:T.green,label:'70–100',desc:'FAVORABLE'},{color:T.yellow,label:'40–69',desc:'NEUTRAL'},{color:T.red,label:'0–39',desc:'UNFAV.'}].map(({ color, label, desc }) => (
-                  <div key={desc} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
-                    <div>
-                      <div style={{ fontSize: 9, color: T.text2 }}>{label}</div>
-                      <div style={{ fontSize: 8, color: T.text3 }}>{desc}</div>
+            // Combo sub-tab content — players appearing in both required prop types
+            const comboContent = () => {
+              const parts = comboSubTab === 'pra'
+                ? ['pts', 'reb', 'ast']
+                : comboSubTab.split('+');
+
+              // Group picks by player_id
+              const byPlayer = new Map();
+              for (const p of topPicks) {
+                const pid = p.player_id;
+                if (!pid) continue;
+                if (!byPlayer.has(pid)) byPlayer.set(pid, { picks: [], player: p.players });
+                byPlayer.get(pid).picks.push(p);
+              }
+
+              // Find players who have ALL required prop types
+              const combos = [];
+              for (const [pid, data] of byPlayer) {
+                const typesAvail = new Set(data.picks.map(p => String(p.prop_type || '').toLowerCase()));
+                if (parts.every(pt => typesAvail.has(pt))) {
+                  const relevantPicks = data.picks.filter(p => parts.includes(String(p.prop_type || '').toLowerCase()));
+                  // Avg confidence across the relevant picks
+                  const avgConf = relevantPicks.reduce((s, p) => s + Number(p.confidence_score || 0), 0) / relevantPicks.length;
+                  const allOver = relevantPicks.every(p => (p.recommendation || '') === 'OVER');
+                  const allUnder = relevantPicks.every(p => (p.recommendation || '') === 'UNDER');
+                  combos.push({ pid, player: data.player, picks: relevantPicks, avgConf, rec: allOver ? 'OVER' : allUnder ? 'UNDER' : 'SPLIT' });
+                }
+              }
+              combos.sort((a, b) => b.avgConf - a.avgConf);
+
+              if (loadingPicks) return <div className="ps-empty-state">Loading picks…</div>;
+              if (combos.length === 0) return <div className="ps-empty-state">No combo picks found for this slate.</div>;
+
+              return (
+                <div className="ps-panel" style={{ marginTop: 8 }}>
+                  {combos.map((combo, i) => {
+                    const name = playerName(combo.player || {});
+                    const conf = Math.round(combo.avgConf);
+                    const color = scoreColor(conf);
+                    const recBg = combo.rec === 'OVER' ? T.greenDim : combo.rec === 'UNDER' ? T.redDim : T.card3;
+                    const recFg = combo.rec === 'OVER' ? T.green    : combo.rec === 'UNDER' ? T.red    : T.text3;
+                    return (
+                      <div key={combo.pid} style={{ display: 'flex', alignItems: 'stretch', borderBottom: `1px solid ${T.border}`, background: 'transparent' }}>
+                        <div style={{ width: 3, flexShrink: 0, background: i < 3 ? T.accent : 'transparent' }} />
+                        <div style={{ flex: 1, padding: '12px 14px 10px', minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                            <div style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: i < 3 ? T.accent : T.card3, color: i < 3 ? '#fff' : T.text3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900, marginTop: 1 }}>{i + 1}</div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                              <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{(combo.player || {}).position || '—'}</div>
+                            </div>
+                            <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 44 }}>
+                              <div style={{ fontSize: 30, fontWeight: 900, color, lineHeight: 1 }}>{conf}</div>
+                              <div style={{ fontSize: 7, color, letterSpacing: 1.2, marginTop: 1 }}>CONF</div>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9, marginLeft: 34 }}>
+                            <span style={{ background: recBg, color: recFg, fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 5 }}>{combo.rec}</span>
+                            {combo.picks.map(p => (
+                              <span key={p.prop_type} style={{ background: T.card3, color: T.text2, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5 }}>
+                                {String(p.prop_type || '').toUpperCase()} {fmtOne(p.line)} {p.recommendation === 'OVER' ? '▲' : p.recommendation === 'UNDER' ? '▼' : '—'}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            };
+
+            // First basket content
+            const fbContent = () => {
+              if (loadingFb) return <div className="ps-empty-state">Loading first basket data…</div>;
+              if (fbErr)     return <div className="ps-empty-state" style={{ color: T.red }}>{fbErr}</div>;
+              if (fbData.length === 0) return <div className="ps-empty-state">No first basket data available for this slate.</div>;
+              return (
+                <div className="ps-panel" style={{ marginTop: 8 }}>
+                  {fbData.map((row, i) => {
+                    const player = row.players || {};
+                    const name   = playerName(player);
+                    const odds   = row.odds != null ? (row.odds > 0 ? `+${row.odds}` : String(row.odds)) : null;
+                    return (
+                      <div key={row.id || i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderBottom: `1px solid ${T.border}` }}>
+                        <div style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: i < 3 ? T.accent : T.card3, color: i < 3 ? '#fff' : T.text3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900 }}>{i + 1}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name || '—'}</div>
+                          <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{row.matchup || ''}</div>
+                        </div>
+                        {odds && (
+                          <div style={{ background: T.card3, border: `1px solid ${T.border}`, padding: '4px 10px', borderRadius: 6, fontSize: 13, fontWeight: 800, color: T.accent }}>{odds}</div>
+                        )}
+                        {row.result && (
+                          <div style={{ fontSize: 9, fontWeight: 700, color: T.green, background: T.greenDim, padding: '3px 8px', borderRadius: 5 }}>✓ SCORED</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            };
+
+            return (
+              <>
+                {/* Sub-tab bar */}
+                <div className="ps-subnav" style={{ marginBottom: 12, border: `1px solid ${T.border}`, borderRadius: 12, overflowX: 'auto' }}>
+                  {SLATE_TABS.map(tab => {
+                    const isActive = slateSubTab === tab.id;
+                    const count = tab.id === 'games'
+                      ? games.length
+                      : tab.id === 'combo' || tab.id === 'fb'
+                        ? null
+                        : topPicks.filter(p => String(p.prop_type || '').toLowerCase() === tab.id).length;
+                    return (
+                      <button key={tab.id} onClick={() => setSlateSubTab(tab.id)} style={{
+                        background: isActive ? T.accent : T.card,
+                        border: `1px solid ${isActive ? T.accent : T.border}`,
+                        padding: '8px 13px',
+                        fontSize: 11, fontWeight: 800,
+                        color: isActive ? '#fff' : T.text3,
+                        cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {tab.label}
+                        {count != null && count > 0 && (
+                          <span style={{ marginLeft: 4, fontSize: 9, fontWeight: 700, color: isActive ? T.accent : T.text3 }}>{count}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* GAMES sub-tab */}
+                {slateSubTab === 'games' && (
+                  <>
+                    {loadingSlate && <div style={{ textAlign: 'center', padding: 40, color: T.text3, fontSize: 12 }}>Loading games…</div>}
+                    {slateError   && <div style={{ textAlign: 'center', padding: 40, color: T.red, fontSize: 12 }}>{slateError}</div>}
+                    {!loadingSlate && !slateError && games.length === 0 && <div className="ps-empty-state">No games scheduled.</div>}
+                    {games.length > 0 && (
+                      <div className="ps-slate-grid">
+                        {games.map(g => (
+                          <div key={g.id}>
+                            <SlateCard
+                              game={g}
+                              isSelected={expandedGameId === g.id}
+                              topPick={topPicksByGame.get(g.id) || null}
+                              onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
+                            />
+                            {expandedGameId === g.id && (
+                              <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Confidence legend */}
+                    {!loadingSlate && games.length > 0 && (
+                      <div className="ps-legend" style={{ marginTop: 16, padding: '10px 14px', background: T.card, borderRadius: 10, border: `1px solid ${T.border}` }}>
+                        <div style={{ fontSize: 9, color: T.text3, letterSpacing: 1, marginBottom: 8 }}>CONFIDENCE SCALE</div>
+                        <div style={{ display: 'flex', gap: 16 }}>
+                          {[{color:T.green,label:'70–100',desc:'FAVORABLE'},{color:T.yellow,label:'40–69',desc:'NEUTRAL'},{color:T.red,label:'0–39',desc:'UNFAV.'}].map(({ color, label, desc }) => (
+                            <div key={desc} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
+                              <div>
+                                <div style={{ fontSize: 9, color: T.text2 }}>{label}</div>
+                                <div style={{ fontSize: 8, color: T.text3 }}>{desc}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Stat sub-tabs: pts / reb / ast / fg3m / stl / blk */}
+                {['pts','reb','ast','fg3m','stl','blk'].includes(slateSubTab) && statContent(slateSubTab)}
+
+                {/* COMBO sub-tab */}
+                {slateSubTab === 'combo' && (
+                  <>
+                    {/* Combo type bar */}
+                    <div className="ps-subnav" style={{ marginBottom: 10, border: `1px solid ${T.border}`, borderRadius: 10 }}>
+                      {COMBO_TABS.map(ct => (
+                        <button key={ct.id} onClick={() => setComboSubTab(ct.id)} style={{
+                          background: comboSubTab === ct.id ? T.card3 : 'transparent',
+                          border: `1px solid ${comboSubTab === ct.id ? T.accent : T.border}`,
+                          padding: '6px 12px',
+                          fontSize: 10, fontWeight: 800,
+                          color: comboSubTab === ct.id ? T.accent : T.text3,
+                          cursor: 'pointer', letterSpacing: 0.4,
+                        }}>
+                          {ct.label}
+                        </button>
+                      ))}
                     </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+                    {comboContent()}
+                  </>
+                )}
+
+                {/* FIRST BASKET sub-tab */}
+                {slateSubTab === 'fb' && fbContent()}
+              </>
+            );
+          })()}
         </div>
       )}
 

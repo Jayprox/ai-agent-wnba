@@ -559,21 +559,14 @@ Verification completed:
 - `node --check scripts/calc-confidence.js scripts/calc-pace-ratings.js` passed.
 - Additional syntax checks for `scripts/scheduler.js` and `scripts/backfill-season.js` passed.
 
-Blocked live steps:
-- Attempted to apply SQL via `supabase.rpc('exec_sql')`; project does not have `public.exec_sql(sql)`.
-- Attempted direct Postgres connection through `SUPABASE_DB_URL`; DNS failed for `db.qwswytnvbfnhtjbojdxb.supabase.co`.
-- Attempted common Supabase pooler hosts on ports 6543 and 5432; all returned `XX000`.
-- `node scripts/calc-pace-ratings.js --season=2025` currently fails with `Could not find the table 'public.team_pace_ratings' in the schema cache`.
+Post-migration verification — completed 2026-05-06:
+- `team_pace_ratings` table applied in Supabase SQL editor ✅
+- `node scripts/calc-pace-ratings.js --season=2024` → 14 rows upserted ✅
+- `node scripts/calc-pace-ratings.js --season=2025` → 15 rows upserted ✅
+- `node scripts/calc-confidence.js --season=2025` → 33,193 prop rows; 11 correlated player-games, 22 rows flagged ✅
+- `node scripts/calc-confidence.js --season=2024` → 24,803 prop rows; 24 correlated player-games, 48 rows flagged ✅
 
-Next required manual step:
-- Apply the `team_pace_ratings` SQL below in Supabase SQL editor, including both GRANT statements.
-- Then run:
-  ```bash
-  node scripts/calc-pace-ratings.js --season=2025
-  node scripts/calc-pace-ratings.js --season=2024
-  node scripts/calc-confidence.js --season=2025
-  ```
-  and record the resulting row counts here.
+Task F is now fully complete. `score_pace` is live for both seasons.
 
 ---
 
@@ -3187,7 +3180,19 @@ ALTER TABLE prop_analysis_results ADD COLUMN IF NOT EXISTS score_referee DECIMAL
 node scripts/ingest-referee-crews.js --season=2025 --backfill=true
 node scripts/ingest-referee-crews.js --season=2024 --backfill=true
 ```
-Each full season loop takes ~25 min at the 6s throttle (≈150 game days).
+
+**Bug fix applied 2026-05-06:**
+
+The original script tried to parse an `Officials` resultSet from `scoreboardv2`. The WNBA version of that endpoint does not include officials (unlike the NBA version) — the resultSet is absent entirely, so 0 crews were upserted on the first backfill run.
+
+Fix: `scripts/ingest-referee-crews.js` was rewritten to use a two-step approach:
+1. `scoreboardv2` → get WNBA Stats GameIDs + team abbreviations per date
+2. `boxscoresummaryv2?GameID={wnbaGameId}` → get Officials per game (3 rows: `OFFICIAL_ID`, `FIRST_NAME`, `LAST_NAME`, `JERSEY_NUM` — no role column in WNBA version, stored as null)
+
+Backfill results after fix:
+- 2025: crews upserted ✅, foul ratings computed ✅
+- 2024: 450 crews upserted, 19 officials with ≥5 games rated, league avg fouls/game 35.60 ✅
+- `calc-confidence.js` re-run for both seasons with `score_referee` signal active ✅
 
 ---
 
@@ -3245,3 +3250,86 @@ Each full season loop takes ~25 min at the 6s throttle (≈150 game days).
 **Notes / limitations:**
 - No backend or data changes.
 - Browser visual inspection was limited by local tool permissions, but the user reviewed screenshots in-browser and confirmed the direction looked good before this handoff update.
+
+---
+
+### Slate Prop Sub-Tabs (done by Cowork, 2026-05-06)
+
+**Goal:** Add prop-type sub-tabs to the SLATE page so users can browse picks filtered by stat type without switching to the BOARD tab.
+
+**File changed:** `wnba-prop-scout.jsx`
+
+**What was added:**
+- 3 new state variables: `slateSubTab` (default `'games'`), `comboSubTab` (default `'pra'`), `fbData` / `loadingFb` / `fbErr` for first basket
+- `useEffect` to fetch `/api/wnba/first-basket?gameId=X` for all slate games when `fb` sub-tab is opened (lazy — only fires when tab is activated)
+- `useEffect` to reset `slateSubTab` to `'games'` and clear `fbData` when the selected date changes
+- A `SLATE_TABS` bar with 9 tabs: GAMES · PTS · REB · AST · 3PM · STL · BLK · COMBO · 1ST 🏀
+- Tab labels show pick counts (from `topPicks`) for stat tabs
+- When a stat sub-tab is active: ranked `BoardPlayerCard` list filtered from `topPicks` for that prop type
+- When COMBO is active: nested bar (PRA / PTS+AST / PTS+REB / AST+REB) + player cards for players who have picks in all required prop types, with per-leg lines shown inline
+- When 1ST 🏀 is active: ranked first basket candidate list with odds display
+
+**Notes:**
+- GAMES sub-tab is identical to the previous full-page behavior (slate grid + GamePropsPanel expansion + confidence legend)
+- All stat sub-tab data comes from `topPicks` already fetched at App level — no extra API calls
+- First basket data is fetched lazily per-game when the tab is opened
+
+---
+
+## 2026 Season Pre-Opening Runbook
+
+**Audit result (2026-05-06):** Zero code changes needed. Every script defaults to `new Date().getFullYear()` for the season. `backfill-season.js` has the `2026-05-08 → 2026-09-20` window. All DB tables are season-parameterized with a `season` integer column.
+
+**Season window corrected 2026-05-06:** Opening day is May 8, not May 16. Updated `SEASON_WINDOWS[2026].start` from `2026-05-16` to `2026-05-08` in both `backfill-season.js` and `ingest-referee-crews.js`.
+
+### Phase 1 — Before May 16 (roster seed)
+
+Run once to pull 2026 rosters into the DB before opening day:
+
+```bash
+node scripts/ingest-teams.js     # refresh team records (expansions, renames)
+node scripts/ingest-players.js   # pull 2026 rosters (trades, free agents, rookies)
+```
+
+Both are idempotent and take ~1 minute.
+
+### Phase 2 — Opening Day: May 16
+
+The scheduler handles everything automatically if it's running. To trigger manually:
+
+**Morning (after 9am ET — referee assignments post):**
+```bash
+node scripts/ingest-games.js     # pulls today's games from BDL
+node scripts/ingest-odds.js      # opening day lines
+node scripts/ingest-injuries.js  # injury reports
+node scripts/ingest-referee-crews.js  # referee assignments for tonight's games
+```
+
+**Post-midnight (after games finish):**
+```bash
+node scripts/ingest-espn-ids.js       # link completed games to ESPN event IDs
+node scripts/ingest-player-logs.js    # box scores from ESPN
+node scripts/ingest-team-logs.js      # aggregate team logs
+node scripts/calc-metrics.js          # compute player research metrics
+node scripts/calc-matchup-ratings.js  # update defender matchup ratings
+node scripts/calc-pace-ratings.js     # update team pace ratings
+node scripts/ingest-wnba-stats.js     # opponent context (tov%, opp-3PA, stl/blk rates)
+node scripts/calc-confidence.js       # generate prop_analysis_results for next slate
+node scripts/calc-first-basket.js     # first basket scoring
+```
+
+Or just run: `node scripts/backfill-season.js --season=2026` (it skips dates with no data automatically).
+
+### Scheduler
+
+Once the scheduler is running (`node scripts/scheduler.js`), it handles all of the above daily via cron:
+- `10:00 ET` — teams + players refresh
+- `11:00 ET` — games
+- `12:00 ET` — odds + injuries + referee crews (noon fetch, assignments post at 9am)
+- `12:00–23:00 ET` every 4h — odds refresh
+- `00:30 ET` — player logs → metrics → confidence → first basket
+
+### Known caveats
+- `ingest-wnba-stats.js` passes `Season: "2026"` to the WNBA Stats API. Prior runs used `"2025"` successfully; `"2026"` should work the same way. If it returns empty rows, check the API's season format (sometimes `"2025-26"` is required — inspect the URL in `fetchWnbaStats()`).
+- `calc-confidence.js` cross-season lookback: `[season-1, season-2].filter(s => s >= 2024)` → for 2026 this is [2025, 2024]. Both seasons have data. ✅
+- Pace/matchup ratings for 2026 will be sparse until ~20 games in. The model falls back to league averages automatically (score = 50 neutral).
