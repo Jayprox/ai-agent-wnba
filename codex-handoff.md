@@ -3639,3 +3639,300 @@ ALTER TABLE prop_analysis_results ADD COLUMN IF NOT EXISTS score_streak SMALLINT
 - `node scripts/calc-confidence.js --season=2025` completed with `33181 prop rows total; 0 correlated player-game(s), 0 row(s) flagged`.
 
 **Notes for Cowork:** `team_opponent_stats` currently has 13 rows for 2025 from WNBA Stats. This likely reflects the 2025 league including Golden State; local team mapping succeeded by name for every source row in this run.
+
+---
+
+## Task T — Team Offensive / Defensive Efficiency Ranks
+
+**Goal:** Populate team-level `off_rating`, `def_rating`, `net_rating` from the WNBA Stats Advanced leaguedash endpoint and wire a new `score_team_context` signal into `calc-confidence.js`. A player on a top-5 offense facing a bottom-5 defense is a meaningfully stronger pick.
+
+**Status:** Ready to implement. `team_opponent_stats` already exists and is upserted by `ingest-wnba-stats.js`. Three new columns need to be added and the Advanced fetch added to the merge flow. `prop_analysis_results` needs one new column.
+
+**Files to change:** `scripts/ingest-wnba-stats.js`, `scripts/calc-confidence.js`, plus two SQL migrations.
+
+---
+
+### Step 1 — DB migrations
+
+Run in Supabase SQL editor:
+
+```sql
+-- Add efficiency columns to team_opponent_stats
+ALTER TABLE team_opponent_stats ADD COLUMN IF NOT EXISTS off_rating DECIMAL(5,2);
+ALTER TABLE team_opponent_stats ADD COLUMN IF NOT EXISTS def_rating DECIMAL(5,2);
+ALTER TABLE team_opponent_stats ADD COLUMN IF NOT EXISTS net_rating DECIMAL(5,2);
+
+-- Add signal column to prop_analysis_results
+ALTER TABLE prop_analysis_results ADD COLUMN IF NOT EXISTS score_team_context SMALLINT;
+```
+
+---
+
+### Step 2 — `fetchTeamAdvancedRatings(season)` in `ingest-wnba-stats.js`
+
+Add a new fetch function alongside the existing `fetchOppFg3aRate`, `fetchOpponentStlBlkRates`, etc.:
+
+```js
+async function fetchTeamAdvancedRatings(season) {
+  const url = `${WNBA_STATS_BASE}/leaguedashteamstats?`
+    + `Conference=&DateFrom=&DateTo=&Division=&GameScope=&GameSegment=`
+    + `&LastNGames=0&LeagueID=10&Location=&MeasureType=Advanced&Month=0`
+    + `&OpponentTeamID=0&Outcome=&PORound=0&PaceAdjust=N&PerMode=PerGame`
+    + `&Period=0&PlayerExperience=&PlayerPosition=&PlusMinus=N&Rank=N`
+    + `&Season=${season}&SeasonSegment=&SeasonType=Regular+Season`
+    + `&ShotClockRange=&StarterBench=&TeamID=0&TwoWay=0&VsConference=&VsDivision=`;
+
+  const res = await fetch(url, { headers: WNBA_STATS_HEADERS });
+  if (!res.ok) throw new Error(`leaguedashteamstats Advanced ${res.status}`);
+  const json = await res.json();
+
+  const rs  = (json?.resultSets || []).find(s => s.name === 'LeagueDashTeamStats');
+  if (!rs?.rowSet?.length) return [];
+
+  const idx = indexHeaders(rs.headers);
+  const iId  = idx.get('TEAM_ID');
+  const iOff = idx.get('OFF_RATING');
+  const iDef = idx.get('DEF_RATING');
+  const iNet = idx.get('NET_RATING');
+
+  return rs.rowSet.map(row => ({
+    wnba_team_id: String(row[iId]),
+    off_rating:   row[iOff] != null ? Number(row[iOff]) : null,
+    def_rating:   row[iDef] != null ? Number(row[iDef]) : null,
+    net_rating:   row[iNet] != null ? Number(row[iNet]) : null,
+  }));
+}
+```
+
+---
+
+### Step 3 — Merge into `mergeRows()`
+
+In `mergeRows()`, add `advancedRows` as the 5th data source parameter (alongside `stlBlkRows`). For each row, look up by `wnba_team_id` and assign `off_rating`, `def_rating`, `net_rating`. Add these three fields to all fallback initializer objects (set to `null`).
+
+In `ingestWnbaStats()`, call `fetchTeamAdvancedRatings(season)` in the `Promise.all` alongside the other fetches, and pass the result to `mergeRows`.
+
+---
+
+### Step 4 — `scoreTeamContext()` in `calc-confidence.js`
+
+Add this function:
+
+```js
+function scoreTeamContext(teamOffRating, oppDefRating, leagueAvgOff, leagueAvgDef) {
+  if (teamOffRating == null || oppDefRating == null) return 50;
+
+  // Positive delta = player's team is above league average offense
+  const offDelta = teamOffRating - (leagueAvgOff ?? 108);
+  // Positive delta = opponent is above average DEF (harder matchup; lower is better for us)
+  const defPenalty = oppDefRating - (leagueAvgDef ?? 108);
+
+  const raw = 50 + (offDelta * 2) - (defPenalty * 2);
+  return Math.min(85, Math.max(15, Math.round(raw)));
+}
+```
+
+---
+
+### Step 5 — Wire into `analyzePlayerProp` / `calcConfidence`
+
+In the main confidence calculation, load `team_opponent_stats` for both the player's team and the opponent, extracting `off_rating` (player's team) and `def_rating` (opponent). Compute league averages from the full season result set. Pass into `scoreTeamContext`. Add `score_team_context` weight to `PROP_WEIGHTS` for each prop type (suggested: `teamContext: 0.05`), redistribute by reducing `restContext` by 0.05. Add to output row: `score_team_context: round(sTeamContext)`.
+
+Add key factor when meaningful:
+```js
+if (teamOffRating != null && teamOffRating > leagueAvgOff + 3)
+  keyFactors.push(`High-offense team context (OFF RTG ${teamOffRating.toFixed(1)})`);
+if (oppDefRating != null && oppDefRating < leagueAvgDef - 3)
+  keyFactors.push(`Soft defensive opponent (DEF RTG ${oppDefRating.toFixed(1)})`);
+```
+
+---
+
+### Acceptance checks
+
+- `node scripts/ingest-wnba-stats.js --season=2025` — verify output includes "off_rating / def_rating" or no new errors; `team_opponent_stats` rows should now have non-null `off_rating`.
+- `SELECT team_id, off_rating, def_rating, net_rating FROM team_opponent_stats WHERE season=2025 ORDER BY off_rating DESC` — should return ranked teams.
+- `node scripts/calc-confidence.js --season=2025` — completes without error.
+- `SELECT player_id, score_team_context FROM prop_analysis_results WHERE score_team_context IS NOT NULL LIMIT 10` — returns rows.
+
+---
+
+## Task U — Teammate Injury Usage Boost
+
+**Goal:** When a key teammate is listed OUT in `injury_reports`, redistribute their historical `usage_rate` to the healthy players on the same team. A player who normally shares 20% usage with a now-absent teammate should see a projection bump. This makes injury context dynamic — not just "is the player themselves hurt" but "does an absence create opportunity?"
+
+**Status:** Ready to implement. `getInjuryContext()` already queries `injury_reports`. `player_research_metrics` has `usage_rate`. This is entirely within `calc-confidence.js`.
+
+**Files to change:** `scripts/calc-confidence.js` only.
+
+---
+
+### Step 1 — Extend `getInjuryContext()` to return roster + usage data
+
+Modify the function signature and return shape:
+
+```js
+async function getInjuryContext(playerIds, gameDate) {
+  // existing injury_reports query — unchanged
+
+  // NEW: fetch usage rates for all players on the same teams
+  const { data: usageRows } = await supabase
+    .from('player_research_metrics')
+    .select('player_id, team_id, usage_rate')
+    .in('player_id', playerIds);  // all players on the slate, not just the subject
+
+  return {
+    injuryMap,    // Map<playerId, status> — existing
+    usageMap,     // Map<playerId, { team_id, usage_rate }>
+  };
+}
+```
+
+---
+
+### Step 2 — Compute usage boost multiplier per player
+
+After loading injury context, group players by team. For each team:
+
+1. Find all OUT players → sum their `usage_rate` as `redistributed_usage`
+2. Find all healthy players on that team (not OUT)
+3. Distribute `redistributed_usage` proportionally to healthy players based on their own `usage_rate` (players with more usage absorb more)
+4. Store a `usageBoostMap: Map<playerId, multiplier>` where `multiplier = (usage + absorbed) / usage`
+
+```js
+// Build per-team groups from usageMap
+const byTeam = new Map();
+for (const [pid, { team_id, usage_rate }] of usageMap) {
+  if (!byTeam.has(team_id)) byTeam.set(team_id, []);
+  byTeam.get(team_id).push({ pid, usage_rate, status: injuryMap.get(pid) ?? 'available' });
+}
+
+const usageBoostMap = new Map();
+for (const [teamId, players] of byTeam) {
+  const outUsage    = players.filter(p => p.status === 'out').reduce((s, p) => s + (p.usage_rate ?? 0), 0);
+  const healthy     = players.filter(p => p.status !== 'out' && (p.usage_rate ?? 0) > 0);
+  const healthySum  = healthy.reduce((s, p) => s + p.usage_rate, 0);
+
+  if (outUsage < 1 || healthySum < 1) continue; // no meaningful redistribution
+
+  for (const p of healthy) {
+    const absorbed   = outUsage * (p.usage_rate / healthySum);
+    const multiplier = (p.usage_rate + absorbed) / p.usage_rate;
+    usageBoostMap.set(p.pid, multiplier);
+  }
+}
+```
+
+---
+
+### Step 3 — Apply multiplier to projection and key factors
+
+In `analyzePlayerProp`, after the projection is computed and before the confidence score:
+
+```js
+const usageMultiplier = usageBoostMap.get(playerId) ?? 1.0;
+const adjustedProjection = projection * usageMultiplier;
+
+if (usageMultiplier > 1.05) {
+  keyFactors.push(`Usage boost: key teammate OUT (+${((usageMultiplier - 1) * 100).toFixed(0)}% usage absorbed)`);
+}
+```
+
+Use `adjustedProjection` (not raw `projection`) when computing `projectionEdge` and `scoreProjectionEdge`.
+
+No new DB columns needed. No weight change needed. This modifies the projection input, not a separate scored signal.
+
+---
+
+### Acceptance checks
+
+- Find a game where a starter was OUT in `injury_reports`. Run `node scripts/calc-confidence.js --season=2025 --date=<that date>`.
+- Query `SELECT player_id, key_factors FROM prop_analysis_results WHERE game_id = <that game id> AND prop_type = 'pts'` — teammates of the OUT player should show "Usage boost" in `key_factors`.
+- Verify no player listed as OUT themselves appears in `prop_analysis_results` for that game (they should still be skipped at the existing `sInjury === null` check).
+
+---
+
+## Task V — Rolling Opponent Defensive Efficiency (L10)
+
+**Goal:** The current matchup signal uses season-long positional defensive ratings. A team that was a soft defender early in the season but has tightened up recently will still show a high `def_rating_scaled` (easy matchup) when in fact the last 10 games tell the opposite story. Add rolling L10 columns to `team_defensive_ratings` and prefer them in `calc-confidence.js` when sample size is adequate.
+
+**Status:** Ready to implement. `calc-matchup-ratings.js` already has `buildRows()` which can be extended. `team_defensive_ratings` needs 3 new columns for rolling values.
+
+**Files to change:** `scripts/calc-matchup-ratings.js`, `scripts/calc-confidence.js`, plus one SQL migration.
+
+---
+
+### Step 1 — DB migration
+
+```sql
+ALTER TABLE team_defensive_ratings ADD COLUMN IF NOT EXISTS pts_allowed_avg_l10  DECIMAL(5,2);
+ALTER TABLE team_defensive_ratings ADD COLUMN IF NOT EXISTS reb_allowed_avg_l10  DECIMAL(5,2);
+ALTER TABLE team_defensive_ratings ADD COLUMN IF NOT EXISTS ast_allowed_avg_l10  DECIMAL(5,2);
+ALTER TABLE team_defensive_ratings ADD COLUMN IF NOT EXISTS l10_game_count        SMALLINT;
+```
+
+---
+
+### Step 2 — Extend `buildRows()` in `calc-matchup-ratings.js`
+
+`buildRows()` currently collects all games into `bucket.pts`, `bucket.reb`, `bucket.ast` arrays (season-long). Extend to also track per-game dates so we can slice the last 10.
+
+Modify each bucket to store game-level entries sorted by date, then compute L10 averages alongside the season averages:
+
+```js
+// In the per-log loop, instead of just pushing the value, push { date, value }
+bucket.ptsEntries.push({ date: game.game_date, v: Number(log.pts) });
+bucket.rebEntries.push({ date: game.game_date, v: Number(log.reb) });
+bucket.astEntries.push({ date: game.game_date, v: Number(log.ast) });
+
+// In the output mapping:
+const sortedPts = bucket.ptsEntries.sort((a, b) => b.date.localeCompare(a.date)); // newest first
+const l10Pts    = sortedPts.slice(0, 10).map(e => e.v);
+const l10Reb    = bucket.rebEntries.sort(...).slice(0, 10).map(e => e.v);
+const l10Ast    = bucket.astEntries.sort(...).slice(0, 10).map(e => e.v);
+
+// Add to output row:
+pts_allowed_avg_l10:  l10Pts.length >= 3 ? round(avg(l10Pts)) : null,
+reb_allowed_avg_l10:  l10Reb.length >= 3 ? round(avg(l10Reb)) : null,
+ast_allowed_avg_l10:  l10Ast.length >= 3 ? round(avg(l10Ast)) : null,
+l10_game_count:       l10Pts.length,
+```
+
+Minimum 3 games to populate L10 columns (early-season safety net).
+
+---
+
+### Step 3 — Use L10 ratings in `calc-confidence.js`
+
+In the matchup scoring block, after loading `team_defensive_ratings` for the opponent:
+
+```js
+// Prefer rolling L10 when sample is large enough; fall back to season
+const useRolling = (oppRating?.l10_game_count ?? 0) >= 5;
+
+const ptsAllowed = useRolling && oppRating?.pts_allowed_avg_l10 != null
+  ? oppRating.pts_allowed_avg_l10
+  : oppRating?.pts_allowed_avg;
+
+// ... same pattern for reb_allowed, ast_allowed
+```
+
+Add a key factor when rolling diverges meaningfully from season:
+
+```js
+if (useRolling && oppRating.pts_allowed_avg_l10 != null && oppRating.pts_allowed_avg != null) {
+  const diff = oppRating.pts_allowed_avg_l10 - oppRating.pts_allowed_avg;
+  if (diff > 2)  keyFactors.push(`Opponent allowing more pts recently (L10 avg ${oppRating.pts_allowed_avg_l10.toFixed(1)} vs season ${oppRating.pts_allowed_avg.toFixed(1)})`);
+  if (diff < -2) keyFactors.push(`Opponent defense tightening (L10 avg ${oppRating.pts_allowed_avg_l10.toFixed(1)} vs season ${oppRating.pts_allowed_avg.toFixed(1)})`);
+}
+```
+
+---
+
+### Acceptance checks
+
+- `node scripts/calc-matchup-ratings.js --season=2025` — completes without error.
+- `SELECT team_id, position, pts_allowed_avg, pts_allowed_avg_l10, l10_game_count FROM team_defensive_ratings WHERE season=2025 ORDER BY pts_allowed_avg_l10 DESC LIMIT 10` — non-null L10 values for teams with ≥ 3 games.
+- `node scripts/calc-confidence.js --season=2025` — completes without error.
+- `SELECT player_id, key_factors FROM prop_analysis_results WHERE key_factors LIKE '%L10%' OR key_factors LIKE '%recently%' LIMIT 5` — at least some rows flag the rolling divergence.
+

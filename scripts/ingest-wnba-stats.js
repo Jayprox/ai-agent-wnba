@@ -184,6 +184,61 @@ async function fetchOpponentTovPct(season) {
   }));
 }
 
+async function fetchTeamAdvancedRatings(season) {
+  console.log(`[ingest-wnba-stats] Fetching team Advanced ratings for season ${season}`);
+
+  const json = await fetchWnbaStats('leaguedashteamstats', {
+    Conference: '',
+    DateFrom: '',
+    DateTo: '',
+    Division: '',
+    GameScope: '',
+    GameSegment: '',
+    Height: '',
+    LastNGames: '0',
+    LeagueID: '10',
+    Location: '',
+    MeasureType: 'Advanced',
+    Month: '0',
+    OpponentTeamID: '0',
+    Outcome: '',
+    PORound: '0',
+    PaceAdjust: 'N',
+    PerMode: 'PerGame',
+    Period: '0',
+    PlayerExperience: '',
+    PlayerPosition: '',
+    PlusMinus: 'N',
+    Rank: 'N',
+    Season: String(season),
+    SeasonSegment: '',
+    SeasonType: 'Regular Season',
+    ShotClockRange: '',
+    StarterBench: '',
+    TeamID: '0',
+    TwoWay: '0',
+    VsConference: '',
+    VsDivision: '',
+  });
+
+  const resultSet = resultSetArray(json, 'leaguedashteamstats-advanced-ratings');
+  const headers = indexHeaders(resultSet.headers);
+  const required = ['TEAM_ID', 'TEAM_NAME', 'OFF_RATING', 'DEF_RATING', 'NET_RATING'];
+  for (const header of required) {
+    if (!headers.has(header)) throw new Error(`leaguedashteamstats-advanced-ratings missing ${header}`);
+  }
+
+  const teamAbbrevIndex = headers.get('TEAM_ABBREVIATION');
+  return (resultSet.rowSet || []).map(row => ({
+    wnbaTeamId:       Number(row[headers.get('TEAM_ID')]),
+    teamName:         row[headers.get('TEAM_NAME')],
+    teamAbbreviation: teamAbbrevIndex == null ? null : row[teamAbbrevIndex],
+    off_rating:       round(row[headers.get('OFF_RATING')], 2),
+    def_rating:       round(row[headers.get('DEF_RATING')], 2),
+    net_rating:       round(row[headers.get('NET_RATING')], 2),
+  }));
+}
+
 function shotLocationColumnLayout(headers) {
   const categoryHeader = (headers || []).find(header =>
     Array.isArray(header?.columnNames) && header.columnNames.includes('Restricted Area')
@@ -392,7 +447,24 @@ async function fetchRimFgaRate(season) {
   });
 }
 
-function mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, asOfDate }) {
+function baseStatsRow(mappedTeam, season, asOfDate, teamName) {
+  return {
+    team_id:       mappedTeam.id,
+    season,
+    opp_tov_pct:   null,
+    rim_fga_rate:  null,
+    opp_fg3a_rate: null,
+    opponent_stl_rate: null,
+    opponent_blk_rate: null,
+    off_rating:    null,
+    def_rating:    null,
+    net_rating:    null,
+    as_of_date:    asOfDate,
+    teamName,
+  };
+}
+
+function mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, advancedRows, lookups, season, asOfDate }) {
   const byStatsTeamId = new Map();
   const mappingModes = {};
   const failed = [];
@@ -405,17 +477,9 @@ function mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, as
     }
 
     mappingModes[mapped.mode] = (mappingModes[mapped.mode] || 0) + 1;
-    byStatsTeamId.set(row.wnbaTeamId, {
-      team_id:       mapped.team.id,
-      season,
-      opp_tov_pct:   row.opp_tov_pct,
-      rim_fga_rate:  null,
-      opp_fg3a_rate: null,
-      opponent_stl_rate: null,
-      opponent_blk_rate: null,
-      as_of_date:    asOfDate,
-      teamName:      row.teamName,
-    });
+    const existing = baseStatsRow(mapped.team, season, asOfDate, row.teamName);
+    existing.opp_tov_pct = row.opp_tov_pct;
+    byStatsTeamId.set(row.wnbaTeamId, existing);
   }
 
   for (const row of rimRows) {
@@ -427,17 +491,7 @@ function mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, as
 
     mappingModes[mapped.mode] = (mappingModes[mapped.mode] || 0) + 1;
 
-    const existing = byStatsTeamId.get(row.wnbaTeamId) || {
-      team_id:       mapped.team.id,
-      season,
-      opp_tov_pct:   null,
-      rim_fga_rate:  null,
-      opp_fg3a_rate: null,
-      opponent_stl_rate: null,
-      opponent_blk_rate: null,
-      as_of_date:    asOfDate,
-      teamName:      row.teamName,
-    };
+    const existing = byStatsTeamId.get(row.wnbaTeamId) || baseStatsRow(mapped.team, season, asOfDate, row.teamName);
 
     existing.team_id     = mapped.team.id;
     existing.rim_fga_rate = row.rim_fga_rate;
@@ -453,17 +507,7 @@ function mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, as
 
     mappingModes[mapped.mode] = (mappingModes[mapped.mode] || 0) + 1;
 
-    const existing = byStatsTeamId.get(row.wnbaTeamId) || {
-      team_id:       mapped.team.id,
-      season,
-      opp_tov_pct:   null,
-      rim_fga_rate:  null,
-      opp_fg3a_rate: null,
-      opponent_stl_rate: null,
-      opponent_blk_rate: null,
-      as_of_date:    asOfDate,
-      teamName:      row.teamName,
-    };
+    const existing = byStatsTeamId.get(row.wnbaTeamId) || baseStatsRow(mapped.team, season, asOfDate, row.teamName);
 
     existing.team_id      = mapped.team.id;
     existing.opp_fg3a_rate = row.opp_fg3a_rate;
@@ -479,21 +523,28 @@ function mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, as
 
     mappingModes[mapped.mode] = (mappingModes[mapped.mode] || 0) + 1;
 
-    const existing = byStatsTeamId.get(row.wnbaTeamId) || {
-      team_id:       mapped.team.id,
-      season,
-      opp_tov_pct:   null,
-      rim_fga_rate:  null,
-      opp_fg3a_rate: null,
-      opponent_stl_rate: null,
-      opponent_blk_rate: null,
-      as_of_date:    asOfDate,
-      teamName:      row.teamName,
-    };
+    const existing = byStatsTeamId.get(row.wnbaTeamId) || baseStatsRow(mapped.team, season, asOfDate, row.teamName);
 
     existing.team_id = mapped.team.id;
     existing.opponent_stl_rate = row.opponent_stl_rate;
     existing.opponent_blk_rate = row.opponent_blk_rate;
+    byStatsTeamId.set(row.wnbaTeamId, existing);
+  }
+
+  for (const row of (advancedRows || [])) {
+    const mapped = mapTeam(row, lookups);
+    if (!mapped.team) {
+      failed.push({ source: 'advanced', teamName: row.teamName, wnbaTeamId: row.wnbaTeamId });
+      continue;
+    }
+
+    mappingModes[mapped.mode] = (mappingModes[mapped.mode] || 0) + 1;
+
+    const existing = byStatsTeamId.get(row.wnbaTeamId) || baseStatsRow(mapped.team, season, asOfDate, row.teamName);
+    existing.team_id = mapped.team.id;
+    existing.off_rating = row.off_rating;
+    existing.def_rating = row.def_rating;
+    existing.net_rating = row.net_rating;
     byStatsTeamId.set(row.wnbaTeamId, existing);
   }
 
@@ -506,15 +557,16 @@ async function ingestWnbaStats(opts = {}) {
   const asOfDate = opts.asOfDate ?? getArg('as-of-date') ?? todayIso();
 
   try {
-    const [lookups, tovRows, rimRows, fg3aRows, stlBlkRows] = await Promise.all([
+    const [lookups, tovRows, rimRows, fg3aRows, stlBlkRows, advancedRows] = await Promise.all([
       getTeamsByLookup(),
       fetchOpponentTovPct(season),
       fetchRimFgaRate(season),
       fetchOppFg3aRate(season),
       fetchOpponentStlBlkRates(season),
+      fetchTeamAdvancedRatings(season),
     ]);
 
-    const { rows, failed, mappingModes } = mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, asOfDate });
+    const { rows, failed, mappingModes } = mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, advancedRows, lookups, season, asOfDate });
 
     if (failed.length) {
       for (const miss of failed) {
@@ -523,7 +575,7 @@ async function ingestWnbaStats(opts = {}) {
     }
 
     console.log(`[ingest-wnba-stats] Team mapping modes: ${JSON.stringify(mappingModes)}`);
-    console.log(`[ingest-wnba-stats] League averages — OPP_TOV_PCT ${round(avg(rows.map(row => row.opp_tov_pct)))}; rim_fga_rate ${round(avg(rows.map(row => row.rim_fga_rate)))}; opp_fg3a_rate ${round(avg(rows.map(row => row.opp_fg3a_rate)))}; opponent_stl_rate ${round(avg(rows.map(row => row.opponent_stl_rate)))}; opponent_blk_rate ${round(avg(rows.map(row => row.opponent_blk_rate)))}`);
+    console.log(`[ingest-wnba-stats] League averages — OPP_TOV_PCT ${round(avg(rows.map(row => row.opp_tov_pct)))}; rim_fga_rate ${round(avg(rows.map(row => row.rim_fga_rate)))}; opp_fg3a_rate ${round(avg(rows.map(row => row.opp_fg3a_rate)))}; opponent_stl_rate ${round(avg(rows.map(row => row.opponent_stl_rate)))}; opponent_blk_rate ${round(avg(rows.map(row => row.opponent_blk_rate)))}; off_rating ${round(avg(rows.map(row => row.off_rating)), 2)}; def_rating ${round(avg(rows.map(row => row.def_rating)), 2)}`);
 
     if (!rows.length) {
       console.log('[ingest-wnba-stats] Done — 0 rows upserted, 0 failed');
@@ -557,6 +609,7 @@ module.exports = {
   fetchRimFgaRate,
   fetchOppFg3aRate,
   fetchOpponentStlBlkRates,
+  fetchTeamAdvancedRatings,
   ingestWnbaStats,
   mergeRows,
 };

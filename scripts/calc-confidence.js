@@ -32,14 +32,15 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.28,
       hitRate: 0.22,
-      recentForm: 0.11,
+      recentForm: 0.08,
       minuteStability: 0.10,
-      restContext: 0.02,
+      restContext: 0.00,
       matchup: 0.05,
       pace: 0.07,
       oddsMovement: 0.03,
       injury: 0.06,
       streak: 0.06,
+      teamContext: 0.05,
     },
   },
   reb: {
@@ -48,14 +49,15 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.25,
       hitRate: 0.20,
-      recentForm: 0.08,
+      recentForm: 0.05,
       minuteStability: 0.12,
-      restContext: 0.02,
+      restContext: 0.00,
       matchup: 0.10,
       pace: 0.08,
       oddsMovement: 0.03,
       injury: 0.06,
       streak: 0.06,
+      teamContext: 0.05,
     },
   },
   ast: {
@@ -64,15 +66,16 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.25,
       hitRate: 0.20,
-      recentForm: 0.08,
+      recentForm: 0.05,
       minuteStability: 0.10,
-      restContext: 0.02,
+      restContext: 0.00,
       matchup: 0.08,
       pace: 0.07,
       oddsMovement: 0.03,
       ballHandlerRole: 0.05,
       injury: 0.06,
       streak: 0.06,
+      teamContext: 0.05,
     },
   },
   pra: {
@@ -81,14 +84,15 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.28,
       hitRate: 0.22,
-      recentForm: 0.11,
+      recentForm: 0.08,
       minuteStability: 0.10,
-      restContext: 0.02,
+      restContext: 0.00,
       matchup: 0.05,
       pace: 0.07,
       oddsMovement: 0.03,
       injury: 0.06,
       streak: 0.06,
+      teamContext: 0.05,
     },
   },
   stl: {
@@ -97,7 +101,7 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.30,
       hitRate: 0.25,
-      recentForm: 0.08,
+      recentForm: 0.03,
       minuteStability: 0.12,
       restContext: 0.00,
       matchup: 0.08,
@@ -105,6 +109,7 @@ const PROP_CONFIG = {
       oddsMovement: 0.00,
       injury: 0.08,
       streak: 0.04,
+      teamContext: 0.05,
     },
   },
   blk: {
@@ -113,7 +118,7 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.30,
       hitRate: 0.25,
-      recentForm: 0.08,
+      recentForm: 0.03,
       minuteStability: 0.12,
       restContext: 0.00,
       matchup: 0.08,
@@ -121,6 +126,7 @@ const PROP_CONFIG = {
       oddsMovement: 0.00,
       injury: 0.08,
       streak: 0.04,
+      teamContext: 0.05,
     },
   },
   fg3m: {
@@ -129,14 +135,15 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.28,
       hitRate: 0.22,
-      recentForm: 0.12,
+      recentForm: 0.09,
       minuteStability: 0.10,
-      restContext: 0.02,
+      restContext: 0.00,
       matchup: 0.06,
       pace: 0.07,
       oddsMovement: 0.03,
       injury: 0.06,
       streak: 0.04,
+      teamContext: 0.05,
     },
   },
 };
@@ -451,8 +458,8 @@ async function getGameOddsContext(gameId) {
   };
 }
 
-async function getInjuryContext(playerIds, gameDate) {
-  if (!playerIds.length) return new Map();
+async function getInjuryContext(playerIds, gameDate, season, players = []) {
+  if (!playerIds.length) return { injuryMap: new Map(), usageMap: new Map() };
 
   const { data, error } = await supabase
     .from('injury_reports')
@@ -463,20 +470,75 @@ async function getInjuryContext(playerIds, gameDate) {
 
   if (error) {
     console.warn(`[calc-confidence] injury lookup failed: ${error.message}`);
-    return new Map();
+    return { injuryMap: new Map(), usageMap: new Map() };
   }
 
-  const map = new Map();
+  const injuryMap = new Map();
   for (const row of data || []) {
-    if (!map.has(row.player_id)) map.set(row.player_id, row.status);
+    if (!injuryMap.has(row.player_id)) injuryMap.set(row.player_id, row.status);
   }
-  return map;
+
+  const { data: usageRows, error: usageError } = await supabase
+    .from('player_research_metrics')
+    .select('player_id, avg_usage_rate, as_of_date')
+    .in('player_id', playerIds)
+    .eq('season', season)
+    .order('as_of_date', { ascending: false });
+
+  if (usageError) {
+    console.warn(`[calc-confidence] injury usage lookup failed: ${usageError.message}`);
+    return { injuryMap, usageMap: new Map() };
+  }
+
+  const teamByPlayer = new Map(players.map(player => [player.id, player.team_id]));
+  const usageMap = new Map();
+  for (const row of usageRows || []) {
+    if (usageMap.has(row.player_id)) continue;
+    usageMap.set(row.player_id, {
+      team_id: teamByPlayer.get(row.player_id) ?? null,
+      usage_rate: row.avg_usage_rate == null ? null : Number(row.avg_usage_rate),
+    });
+  }
+
+  return { injuryMap, usageMap };
+}
+
+function buildUsageBoostMap(injuryMap, usageMap) {
+  const byTeam = new Map();
+  for (const [pid, { team_id, usage_rate }] of usageMap) {
+    if (!team_id) continue;
+    if (!byTeam.has(team_id)) byTeam.set(team_id, []);
+    byTeam.get(team_id).push({
+      pid,
+      usage_rate: Number(usage_rate) || 0,
+      status: injuryMap.get(pid) ?? 'available',
+    });
+  }
+
+  const usageBoostMap = new Map();
+  for (const [, players] of byTeam) {
+    const outUsage = players
+      .filter(player => player.status === 'out')
+      .reduce((sum, player) => sum + (player.usage_rate ?? 0), 0);
+    const healthy = players.filter(player => player.status !== 'out' && (player.usage_rate ?? 0) > 0);
+    const healthySum = healthy.reduce((sum, player) => sum + player.usage_rate, 0);
+
+    if (outUsage < 0.01 || healthySum < 0.01) continue;
+
+    for (const player of healthy) {
+      const absorbed = outUsage * (player.usage_rate / healthySum);
+      const multiplier = (player.usage_rate + absorbed) / player.usage_rate;
+      usageBoostMap.set(player.pid, multiplier);
+    }
+  }
+
+  return usageBoostMap;
 }
 
 async function getMatchupRatings(teamIds, season) {
   const { data, error } = await supabase
     .from('team_defensive_ratings')
-    .select('team_id, position, matchup_rating, as_of_date')
+    .select('team_id, position, pts_allowed_avg, reb_allowed_avg, ast_allowed_avg, pts_allowed_avg_l10, reb_allowed_avg_l10, ast_allowed_avg_l10, l10_game_count, matchup_rating, as_of_date')
     .in('team_id', teamIds)
     .eq('season', season)
     .order('as_of_date', { ascending: false });
@@ -489,7 +551,40 @@ async function getMatchupRatings(teamIds, season) {
   const map = new Map();
   for (const row of data || []) {
     const key = `${row.team_id}:${row.position}`;
-    if (!map.has(key)) map.set(key, Number(row.matchup_rating));
+    if (!map.has(key)) {
+      map.set(key, {
+        team_id: row.team_id,
+        position: row.position,
+        pts_allowed_avg: row.pts_allowed_avg == null ? null : Number(row.pts_allowed_avg),
+        reb_allowed_avg: row.reb_allowed_avg == null ? null : Number(row.reb_allowed_avg),
+        ast_allowed_avg: row.ast_allowed_avg == null ? null : Number(row.ast_allowed_avg),
+        pts_allowed_avg_l10: row.pts_allowed_avg_l10 == null ? null : Number(row.pts_allowed_avg_l10),
+        reb_allowed_avg_l10: row.reb_allowed_avg_l10 == null ? null : Number(row.reb_allowed_avg_l10),
+        ast_allowed_avg_l10: row.ast_allowed_avg_l10 == null ? null : Number(row.ast_allowed_avg_l10),
+        l10_game_count: row.l10_game_count == null ? 0 : Number(row.l10_game_count),
+        matchup_rating: row.matchup_rating == null ? 50 : Number(row.matchup_rating),
+      });
+    }
+  }
+
+  const positions = ['G', 'F', 'C'];
+  for (const pos of positions) {
+    const ratings = Array.from(map.values()).filter(row => row.position === pos);
+    for (const field of ['pts', 'reb', 'ast']) {
+      const seasonKey = `${field}_allowed_avg`;
+      const l10Key = `${field}_allowed_avg_l10`;
+      const seasonVals = ratings.map(row => row[seasonKey]).filter(v => v != null);
+      const l10Vals = ratings
+        .filter(row => (row.l10_game_count ?? 0) >= 5)
+        .map(row => row[l10Key])
+        .filter(v => v != null);
+      map[`_league_${pos}_${field}`] = seasonVals.length
+        ? seasonVals.reduce((sum, value) => sum + value, 0) / seasonVals.length
+        : null;
+      map[`_league_${pos}_${field}_l10`] = l10Vals.length
+        ? l10Vals.reduce((sum, value) => sum + value, 0) / l10Vals.length
+        : map[`_league_${pos}_${field}`];
+    }
   }
   return map;
 }
@@ -524,7 +619,7 @@ async function getOpponentStats(season) {
 
   const { data, error } = await supabase
     .from('team_opponent_stats')
-    .select('team_id, opp_tov_pct, rim_fga_rate, opp_fg3a_rate, as_of_date')
+    .select('team_id, opp_tov_pct, rim_fga_rate, opp_fg3a_rate, opponent_stl_rate, opponent_blk_rate, off_rating, def_rating, net_rating, as_of_date')
     .eq('season', season)
     .order('as_of_date', { ascending: false });
 
@@ -543,6 +638,11 @@ async function getOpponentStats(season) {
         opp_tov_pct:   row.opp_tov_pct   == null ? null : Number(row.opp_tov_pct),
         rim_fga_rate:  row.rim_fga_rate   == null ? null : Number(row.rim_fga_rate),
         opp_fg3a_rate: row.opp_fg3a_rate  == null ? null : Number(row.opp_fg3a_rate),
+        opponent_stl_rate: row.opponent_stl_rate == null ? null : Number(row.opponent_stl_rate),
+        opponent_blk_rate: row.opponent_blk_rate == null ? null : Number(row.opponent_blk_rate),
+        off_rating:    row.off_rating     == null ? null : Number(row.off_rating),
+        def_rating:    row.def_rating     == null ? null : Number(row.def_rating),
+        net_rating:    row.net_rating     == null ? null : Number(row.net_rating),
         as_of_date:    row.as_of_date,
       });
     }
@@ -552,9 +652,13 @@ async function getOpponentStats(season) {
   const tovVals  = Array.from(map.values()).map(r => r.opp_tov_pct).filter(v => v != null);
   const rimVals  = Array.from(map.values()).map(r => r.rim_fga_rate).filter(v => v != null);
   const fg3aVals = Array.from(map.values()).map(r => r.opp_fg3a_rate).filter(v => v != null);
+  const offVals  = Array.from(map.values()).map(r => r.off_rating).filter(v => v != null);
+  const defVals  = Array.from(map.values()).map(r => r.def_rating).filter(v => v != null);
   map._leagueAvgTov  = tovVals.length  ? tovVals.reduce((s, v)  => s + v, 0) / tovVals.length  : 0.145;
   map._leagueAvgRim  = rimVals.length  ? rimVals.reduce((s, v)  => s + v, 0) / rimVals.length  : 0.35;
   map._leagueAvgFg3a = fg3aVals.length ? fg3aVals.reduce((s, v) => s + v, 0) / fg3aVals.length : 0.32;
+  map._leagueAvgOff  = offVals.length  ? offVals.reduce((s, v)  => s + v, 0) / offVals.length  : 108;
+  map._leagueAvgDef  = defVals.length  ? defVals.reduce((s, v)  => s + v, 0) / defVals.length  : 108;
 
   opponentStatsCache.set(season, map);
   return map;
@@ -774,6 +878,15 @@ function scoreBlowoutRisk(spread, playerIsOnFavoredTeam) {
   return 50;
 }
 
+function scoreTeamContext(teamOffRating, oppDefRating, leagueAvgOff, leagueAvgDef) {
+  if (teamOffRating == null || oppDefRating == null) return 50;
+
+  const offDelta = teamOffRating - (leagueAvgOff ?? 108);
+  const defPenalty = oppDefRating - (leagueAvgDef ?? 108);
+  const raw = 50 + (offDelta * 2) - (defPenalty * 2);
+  return clamp(Math.round(raw), 15, 85);
+}
+
 function scoreBallHandlerRole(avgAst) {
   if (avgAst == null) return 50;
   if (avgAst >= 5.0) return 85;
@@ -797,9 +910,54 @@ function hitRateOver(logs, field, line) {
   return vals.length ? vals.filter(v => v > line).length / vals.length : null;
 }
 
+function matchupFieldForProp(field) {
+  if (field === 'reb') return 'reb';
+  if (field === 'ast') return 'ast';
+  return 'pts';
+}
+
+function scoreAllowedVsLeague(allowed, leagueAvg) {
+  if (allowed == null || !leagueAvg) return null;
+  return clamp(50 + ((allowed - leagueAvg) / leagueAvg) * 50);
+}
+
+function matchupScoreFromRating(oppRating, matchupRatings, position, field) {
+  if (!oppRating) return { score: 50, useRolling: false, fieldKey: matchupFieldForProp(field) };
+
+  const fieldKey = matchupFieldForProp(field);
+  const useRolling = (oppRating.l10_game_count ?? 0) >= 5;
+  const seasonValue = oppRating[`${fieldKey}_allowed_avg`];
+  const rollingValue = oppRating[`${fieldKey}_allowed_avg_l10`];
+  const selectedValue = useRolling && rollingValue != null ? rollingValue : seasonValue;
+  const leagueKey = `_league_${position}_${fieldKey}${useRolling && rollingValue != null ? '_l10' : ''}`;
+  const leagueAvg = matchupRatings.get(leagueKey);
+  const score = scoreAllowedVsLeague(selectedValue, leagueAvg);
+
+  if (field === 'pra') {
+    const parts = ['pts', 'reb', 'ast'].map(key => {
+      const value = useRolling && oppRating[`${key}_allowed_avg_l10`] != null
+        ? oppRating[`${key}_allowed_avg_l10`]
+        : oppRating[`${key}_allowed_avg`];
+      const avgKey = `_league_${position}_${key}${useRolling && oppRating[`${key}_allowed_avg_l10`] != null ? '_l10' : ''}`;
+      return scoreAllowedVsLeague(value, matchupRatings.get(avgKey));
+    }).filter(v => v != null);
+    return {
+      score: parts.length ? arrAvg(parts) : (oppRating.matchup_rating ?? 50),
+      useRolling,
+      fieldKey,
+    };
+  }
+
+  return {
+    score: score ?? oppRating.matchup_rating ?? 50,
+    useRolling,
+    fieldKey,
+  };
+}
+
 // ─── Core analysis ────────────────────────────────────────────────────────────
 
-function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupRatings, paceRatings, oddsContext, gameOddsContext, opponentStats, refRatings, injuryStatus, sInjury) {
+function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupRatings, paceRatings, oddsContext, gameOddsContext, opponentStats, refRatings, injuryStatus, sInjury, usageMultiplier = 1) {
   const config = PROP_CONFIG[field];
   if (!config) throw new Error(`No prop config for field: ${field}`);
   const { baseline, cap, weights } = config;
@@ -809,11 +967,19 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   const isHome = player.team_id === game.home_team_id;
   const oppId  = isHome ? game.visitor_team_id : game.home_team_id;
   const position = normalizePosition(player.position);
-  let matchupRating = position
-    ? matchupRatings.get(`${oppId}:${position}`) ?? 50
-    : 50;
+  const oppRating = position ? matchupRatings.get(`${oppId}:${position}`) : null;
+  const matchupContext = position
+    ? matchupScoreFromRating(oppRating, matchupRatings, position, field)
+    : { score: 50, useRolling: false, fieldKey: matchupFieldForProp(field) };
+  let matchupRating = matchupContext.score;
 
   const oppStats = opponentStats?.get(oppId);
+  const teamStats = opponentStats?.get(player.team_id);
+  const teamOffRating = teamStats?.off_rating ?? null;
+  const oppDefRating = oppStats?.def_rating ?? null;
+  const leagueAvgOff = opponentStats?._leagueAvgOff ?? 108;
+  const leagueAvgDef = opponentStats?._leagueAvgDef ?? 108;
+  const sTeamContext = scoreTeamContext(teamOffRating, oppDefRating, leagueAvgOff, leagueAvgDef);
 
   if (field === 'stl') {
     matchupRating = 50;
@@ -856,7 +1022,8 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   const refBoost  = (field === 'pts' || field === 'pra')
     ? (refRating - 50) / 50 * 0.04  // max ±4% nudge on pts/pra projection
     : 0;
-  const adjustedProj = round(proj * (1 + impliedBoost + refBoost));
+  const boostedProj = proj * (usageMultiplier || 1);
+  const adjustedProj = round(boostedProj * (1 + impliedBoost + refBoost));
   const valueGap = round(adjustedProj - line);
 
   // Hit rates
@@ -908,7 +1075,8 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     sOdds            * (weights.oddsMovement ?? 0)     +
     sBallHandler     * (weights.ballHandlerRole ?? 0)  +
     sInjury          * (weights.injury ?? 0)           +
-    sStreak          * (weights.streak ?? 0),
+    sStreak          * (weights.streak ?? 0)           +
+    sTeamContext     * (weights.teamContext ?? 0),
   ));
 
   // Only commit a direction if confidence is high enough and the gap is meaningful
@@ -925,6 +1093,15 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   }
   if (impliedTeamTotal && impliedTeamTotal < 78) {
     keyFactors.push(`Team implied at ${round(impliedTeamTotal, 1)} pts (below avg) — suppressed scoring environment`);
+  }
+  if (usageMultiplier > 1.05) {
+    keyFactors.push(`Usage boost: key teammate OUT (+${((usageMultiplier - 1) * 100).toFixed(0)}% usage absorbed)`);
+  }
+  if (teamOffRating != null && teamOffRating > leagueAvgOff + 3) {
+    keyFactors.push(`High-offense team context (OFF RTG ${teamOffRating.toFixed(1)})`);
+  }
+  if (oppDefRating != null && oppDefRating < leagueAvgDef - 3) {
+    keyFactors.push(`Soft defensive opponent (DEF RTG ${oppDefRating.toFixed(1)})`);
   }
   if (hrL5 != null && hrL5 > 0.70) keyFactors.push(`Went over in ${Math.round(hrL5 * 100)}% of L5`);
   if (hrL5 != null && hrL5 < 0.30) keyFactors.push(`Only went over in ${Math.round(hrL5 * 100)}% of L5`);
@@ -958,6 +1135,18 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
       keyFactors.push('3-point matchup — fallback neutral (no opponent stats available)');
     }
   } else {
+    const seasonAllowed = oppRating?.[`${matchupContext.fieldKey}_allowed_avg`];
+    const rollingAllowed = oppRating?.[`${matchupContext.fieldKey}_allowed_avg_l10`];
+    if (matchupContext.useRolling && rollingAllowed != null && seasonAllowed != null) {
+      const diff = rollingAllowed - seasonAllowed;
+      const label = matchupContext.fieldKey.toUpperCase();
+      if (diff > 2) {
+        keyFactors.push(`Opponent allowing more ${label} recently (L10 avg ${rollingAllowed.toFixed(1)} vs season ${seasonAllowed.toFixed(1)})`);
+      }
+      if (diff < -2) {
+        keyFactors.push(`Opponent defense tightening vs ${label} (L10 avg ${rollingAllowed.toFixed(1)} vs season ${seasonAllowed.toFixed(1)})`);
+      }
+    }
     if (sMatchup >= 60) keyFactors.push(`Favorable ${position || 'position'} matchup vs ${oppId} (rating: ${round(sMatchup, 0)}/100)`);
     if (sMatchup <= 40) keyFactors.push(`Tough ${position || 'position'} matchup vs ${oppId} (rating: ${round(sMatchup, 0)}/100)`);
   }
@@ -1040,6 +1229,7 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     score_injury_impact:     round(sInjury),
     score_odds_movement:     round(sOdds),
     score_streak:            round(sStreak),
+    score_team_context:      round(sTeamContext),
     score_referee:           round(refRating),
     risk_flags:              riskFlags,
     key_factors:             keyFactors,
@@ -1137,15 +1327,17 @@ async function calcConfidence(opts = {}) {
       }
 
       const playerIds = eligible.map(player => player.id);
-      const [{ bestLines, oddsContext }, gameOddsContext, matchupRatings, paceRatings, opponentStats, refRatings, injuryMap] = await Promise.all([
+      const [{ bestLines, oddsContext }, gameOddsContext, matchupRatings, paceRatings, opponentStats, refRatings, injuryContext] = await Promise.all([
         getOddsData(game.id),
         getGameOddsContext(game.id),
         getMatchupRatings(teamIds, gameSzn),
         getPaceRatings(gameSzn),
         getOpponentStats(gameSzn),
         getRefRatings(gameSzn),
-        getInjuryContext(playerIds, game.game_date),
+        getInjuryContext(playerIds, game.game_date, gameSzn, eligible),
       ]);
+      const injuryMap = injuryContext.injuryMap;
+      const usageBoostMap = buildUsageBoostMap(injuryContext.injuryMap, injuryContext.usageMap);
 
       const rows = [];
 
@@ -1155,6 +1347,7 @@ async function calcConfidence(opts = {}) {
         const injuryStatus = injuryMap.get(player.id) ?? 'available';
         const sInjury = scoreInjury(injuryStatus);
         if (sInjury === null) continue;
+        const usageMultiplier = usageBoostMap.get(player.id) ?? 1.0;
 
         for (const field of PROP_TYPES) {
           // Determine the line to use
@@ -1188,6 +1381,7 @@ async function calcConfidence(opts = {}) {
             refRatings,
             injuryStatus,
             sInjury,
+            usageMultiplier,
           ));
         }
       }

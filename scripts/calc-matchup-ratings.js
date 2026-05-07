@@ -36,7 +36,7 @@ function avg(values) {
 async function getSeasonGames(season) {
   const { data, error } = await supabase
     .from('games')
-    .select('id, home_team_id, visitor_team_id')
+    .select('id, game_date, home_team_id, visitor_team_id')
     .eq('season', season)
     .eq('status', 'final');
 
@@ -81,14 +81,31 @@ function buildRows({ games, logs, playersById, season, asOfDate }) {
       : game.home_team_id;
 
     const key = `${opponentTeamId}:${position}`;
-    if (!buckets.has(key)) buckets.set(key, { team_id: opponentTeamId, position, pts: [], reb: [], ast: [] });
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        team_id: opponentTeamId,
+        position,
+        pts: [],
+        reb: [],
+        ast: [],
+        ptsEntries: [],
+        rebEntries: [],
+        astEntries: [],
+      });
+    }
     if (!leagueBuckets.has(position)) leagueBuckets.set(position, { pts: [] });
 
     const bucket = buckets.get(key);
-    bucket.pts.push(Number(log.pts));
-    bucket.reb.push(Number(log.reb));
-    bucket.ast.push(Number(log.ast));
-    leagueBuckets.get(position).pts.push(Number(log.pts));
+    const pts = Number(log.pts);
+    const reb = Number(log.reb);
+    const ast = Number(log.ast);
+    bucket.pts.push(pts);
+    bucket.reb.push(reb);
+    bucket.ast.push(ast);
+    bucket.ptsEntries.push({ date: game.game_date, v: pts });
+    bucket.rebEntries.push({ date: game.game_date, v: reb });
+    bucket.astEntries.push({ date: game.game_date, v: ast });
+    leagueBuckets.get(position).pts.push(pts);
   }
 
   const leaguePtsAvg = new Map(
@@ -101,6 +118,18 @@ function buildRows({ games, logs, playersById, season, asOfDate }) {
     const rating = leagueAvg
       ? Math.max(0, Math.min(100, 50 + ((ptsAllowedAvg - leagueAvg) / leagueAvg) * 50))
       : 50;
+    const l10Pts = [...bucket.ptsEntries]
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .slice(0, 10)
+      .map(entry => entry.v);
+    const l10Reb = [...bucket.rebEntries]
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .slice(0, 10)
+      .map(entry => entry.v);
+    const l10Ast = [...bucket.astEntries]
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .slice(0, 10)
+      .map(entry => entry.v);
 
     return {
       team_id: bucket.team_id,
@@ -109,6 +138,10 @@ function buildRows({ games, logs, playersById, season, asOfDate }) {
       pts_allowed_avg: round(ptsAllowedAvg),
       reb_allowed_avg: round(avg(bucket.reb)),
       ast_allowed_avg: round(avg(bucket.ast)),
+      pts_allowed_avg_l10: l10Pts.length >= 3 ? round(avg(l10Pts)) : null,
+      reb_allowed_avg_l10: l10Reb.length >= 3 ? round(avg(l10Reb)) : null,
+      ast_allowed_avg_l10: l10Ast.length >= 3 ? round(avg(l10Ast)) : null,
+      l10_game_count: l10Pts.length,
       matchup_rating: round(rating),
       as_of_date: asOfDate,
     };

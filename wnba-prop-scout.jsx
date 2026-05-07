@@ -707,51 +707,77 @@ function GameTabBar({ tabs, active, onSelect }) {
 function OverviewTab({ game, odds }) {
   const aw = game.visitor_team;
   const hw = game.home_team;
+  const venue = TEAM_VENUES[hw?.abbreviation] ?? 'Venue TBA';
+  const statusText = String(game.status || '').toUpperCase();
+  const gameDate = fmtDate(game.game_date || game.date);
 
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ background: T.card2, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${T.border}` }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 8, alignItems: 'center', textAlign: 'center' }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 900, color: T.text }}>{aw.abbreviation}</div>
-            <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{aw.name}</div>
-            <div style={{ fontSize: 11, color: T.text2, marginTop: 3 }}>{game.visitor_record}</div>
-            <div style={{ marginTop: 5 }}><FormDots form={game.visitor_form} /></div>
+    <div style={{ padding: '18px 0 28px' }}>
+      <div className="ps-daily-card">
+        <span>↯ GAME OVERVIEW</span>
+        <span style={{ color: T.text3 }}>{statusText}</span>
+      </div>
+
+      <div style={{
+        background: 'linear-gradient(180deg, rgba(27,38,72,0.82), rgba(20,29,56,0.72))',
+        border: `1px solid ${T.border}`,
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 14,
+      }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)', gap: 12, alignItems: 'center', textAlign: 'center' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 30, fontWeight: 950, color: T.text, lineHeight: 1 }}>{aw?.abbreviation || '—'}</div>
+            <div style={{ fontSize: 11, color: T.text2, marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{aw?.name || '—'}</div>
+            <div style={{ fontSize: 10, color: T.text3, marginTop: 5 }}>{game.visitor_record || 'Record unavailable'}</div>
+            <div style={{ marginTop: 7, display: 'flex', justifyContent: 'flex-end' }}>
+              <FormDots form={game.visitor_form} />
+            </div>
           </div>
-          <div style={{ fontSize: 13, color: T.text3 }}>
-            <div>@</div>
-            <div style={{ marginTop: 4, fontSize: 10 }}>{game.status}</div>
+          <div style={{ width: 58, display: 'grid', placeItems: 'center', gap: 5 }}>
+            <div style={{ color: T.accent, fontSize: 12, fontWeight: 900, letterSpacing: 1 }}>@</div>
+            <StatusBadge status={game.status} />
           </div>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 900, color: T.text }}>{hw.abbreviation}</div>
-            <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{hw.name}</div>
-            <div style={{ fontSize: 11, color: T.text2, marginTop: 3 }}>{game.home_record}</div>
-            <div style={{ marginTop: 5 }}><FormDots form={game.home_form} /></div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 30, fontWeight: 950, color: T.text, lineHeight: 1 }}>{hw?.abbreviation || '—'}</div>
+            <div style={{ fontSize: 11, color: T.text2, marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hw?.name || '—'}</div>
+            <div style={{ fontSize: 10, color: T.text3, marginTop: 5 }}>{game.home_record || 'Record unavailable'}</div>
+            <div style={{ marginTop: 7, display: 'flex', justifyContent: 'flex-start' }}>
+              <FormDots form={game.home_form} />
+            </div>
           </div>
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+          <span style={{ fontSize: 10, color: T.text2, background: T.card3, border: `1px solid ${T.border}`, borderRadius: 999, padding: '4px 9px' }}>{gameDate}</span>
+          <span style={{ fontSize: 10, color: T.text2, background: T.card3, border: `1px solid ${T.border}`, borderRadius: 999, padding: '4px 9px' }}>{venue}</span>
         </div>
       </div>
 
       {odds && odds.spread && odds.total ? (
-        <div style={{ background: T.card2, borderRadius: 10, padding: 14, border: `1px solid ${T.border}` }}>
-          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>GAME ODDS</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+        <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: 14, background: 'rgba(20,29,56,0.72)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: T.accent, letterSpacing: 1.2, fontWeight: 800 }}>GAME ODDS</div>
+            <div style={{ fontSize: 9, color: T.text3 }}>{game.odds_sportsbook || 'Default book'}</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
             {[
               { label:'SPREAD', value:`${aw.abbreviation} ${fmtSpread(odds.spread.away)} / ${hw.abbreviation} ${fmtSpread(odds.spread.home)}` },
               { label:'TOTAL',  value:`O/U ${odds.total.line}` },
               { label:'ML',     value:`${aw.abbreviation} ${fmtOdds(odds.moneyline.away)} / ${hw.abbreviation} ${fmtOdds(odds.moneyline.home)}` },
             ].map(({ label, value }) => (
-              <div key={label} style={{ background: T.card3, borderRadius: 7, padding: '9px 7px', textAlign: 'center' }}>
+              <div key={label} style={{ background: T.card3, border: `1px solid ${T.border}`, borderRadius: 8, padding: '10px 8px', textAlign: 'center' }}>
                 <div style={{ fontSize: 9, color: T.text3, letterSpacing: 0.8 }}>{label}</div>
-                <div style={{ fontSize: 11, color: T.text, marginTop: 3, fontWeight: 700 }}>{value}</div>
+                <div style={{ fontSize: 11, color: T.text, marginTop: 5, fontWeight: 800 }}>{value}</div>
               </div>
             ))}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginTop: 8 }}>
             {[
               { label:'OVER',  value: fmtOdds(odds.total.overOdds),  color: T.green },
               { label:'UNDER', value: fmtOdds(odds.total.underOdds), color: T.red   },
             ].map(({ label, value, color }) => (
-              <div key={label} style={{ background: T.card3, borderRadius: 7, padding: '8px 10px', textAlign: 'center' }}>
+              <div key={label} style={{ background: T.card3, border: `1px solid ${T.border}`, borderRadius: 8, padding: '9px 10px', textAlign: 'center' }}>
                 <div style={{ fontSize: 9, color: T.text3, letterSpacing: 0.8 }}>{label}</div>
                 <div style={{ fontSize: 14, color, fontWeight: 800, marginTop: 2 }}>{value}</div>
               </div>
@@ -759,7 +785,7 @@ function OverviewTab({ game, odds }) {
           </div>
         </div>
       ) : (
-        <div style={{ background: T.card2, borderRadius: 10, padding: 14, border: `1px solid ${T.border}`, fontSize: 12, color: T.text3, textAlign: 'center' }}>
+        <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: 18, background: 'rgba(20,29,56,0.72)', fontSize: 12, color: T.text3, textAlign: 'center' }}>
           Odds unavailable
         </div>
       )}
@@ -1288,38 +1314,57 @@ function GameCard({ game, onClose }) {
   const hw = game.home_team;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: T.bg, overflowY: 'auto', display: 'flex', flexDirection: 'column', fontFamily: T.font }}>
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      zIndex: 100,
+      background: 'radial-gradient(circle at 18% -10%, rgba(249,115,22,0.12), transparent 32%), linear-gradient(180deg, #0e1430 0%, #0c1124 46%, #080d1f 100%)',
+      overflowY: 'auto',
+      display: 'flex',
+      flexDirection: 'column',
+      fontFamily: T.font,
+      color: T.text,
+    }}>
       {/* Header */}
-      <div style={{ background: T.card, borderBottom: `1px solid ${T.border}`, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
-        <button onClick={onClose} style={{ background: T.card2, border: 'none', color: T.text, width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          ←
-        </button>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{aw.abbreviation} @ {hw.abbreviation}</div>
-          <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{IS_SANDBOX ? 'SANDBOX · ' : ''}{game.status}</div>
-        </div>
-        <StatusBadge status={game.status} />
-      </div>
-
-      {/* Inner tab bar */}
-      <div style={{ display: 'flex', background: T.card2, borderBottom: `1px solid ${T.border}`, overflowX: 'auto' }}>
-        {GAME_TABS.map(t => (
-          <button key={t} onClick={() => setActiveTab(t)} style={{
-            flex: '0 0 auto', background: 'none', border: 'none',
-            padding: '10px 14px', fontSize: 11, fontWeight: 700,
-            color: activeTab === t ? T.accent : T.text3,
-            borderBottom: activeTab === t ? `2px solid ${T.accent}` : '2px solid transparent',
-            cursor: 'pointer', letterSpacing: 0.3,
-          }}>
-            {GAME_LABELS[t]}
+      <div style={{ background: 'rgba(12,17,36,0.92)', borderBottom: `1px solid ${T.border}`, position: 'sticky', top: 0, zIndex: 10, backdropFilter: 'blur(14px)' }}>
+        <div className="ps-shell" style={{ padding: '14px 16px 12px', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={onClose} style={{ background: T.card2, border: `1px solid ${T.border}`, color: T.text, width: 38, height: 38, borderRadius: 10, cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            ←
           </button>
-        ))}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 18, fontWeight: 900, color: T.text }}>{aw.abbreviation} @ {hw.abbreviation}</div>
+              <StatusBadge status={game.status} />
+            </div>
+            <div style={{ fontSize: 10, color: T.text3, marginTop: 3, letterSpacing: 0.4 }}>{IS_SANDBOX ? 'SANDBOX · ' : ''}{fmtDate(game.game_date || game.date)} · {TEAM_VENUES[hw?.abbreviation] || 'Venue TBA'}</div>
+          </div>
+        </div>
+
+        {/* Inner tab bar */}
+        <div className="ps-shell" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 16px 12px', scrollbarWidth: 'none' }}>
+          {GAME_TABS.map(t => (
+            <button key={t} onClick={() => setActiveTab(t)} style={{
+              flex: '0 0 auto',
+              background: activeTab === t ? T.accent : T.card,
+              border: `1px solid ${activeTab === t ? T.accent : T.border}`,
+              borderRadius: 8,
+              padding: '8px 14px',
+              fontSize: 11,
+              fontWeight: 800,
+              color: activeTab === t ? '#fff' : T.text3,
+              cursor: 'pointer',
+              letterSpacing: 0.4,
+            }}>
+              {GAME_LABELS[t]}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading ? (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: T.text3 }}>Loading…</div>
       ) : (
-        <div style={{ flex: 1 }}>
+        <div className="ps-shell" style={{ flex: 1, padding: '0 16px' }}>
           {activeTab === 'overview' && <OverviewTab game={game} odds={odds} />}
           {activeTab === 'lineup'   && <LineupTab game={game} allPlayers={allPlayers} gameLogs={gameLogs} expandedId={expandedId} setExpandedId={setExpandedId} />}
           {activeTab === 'matchup'  && <MatchupTab game={game} allPlayers={allPlayers} matchups={matchups} gameLogs={gameLogs} intel={intel} />}
