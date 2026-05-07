@@ -377,6 +377,28 @@ function fmtML(value) {
   return n > 0 ? `+${n}` : String(n);
 }
 
+function pickResult(pick) {
+  const raw = String(pick?.result_label || pick?.result || '').toLowerCase();
+  if (raw === 'hit') return 'hit';
+  if (raw === 'miss') return 'miss';
+  if (raw === 'push') return 'push';
+  if (pick?.hit === true) return 'hit';
+  if (pick?.hit === false) return 'miss';
+  return null;
+}
+
+function hitSummary(picks) {
+  const settled = (picks || []).filter(p => {
+    const r = pickResult(p);
+    return r === 'hit' || r === 'miss';
+  });
+  if (!settled.length) return null;
+  return {
+    hits: settled.filter(p => pickResult(p) === 'hit').length,
+    total: settled.length,
+  };
+}
+
 function fmtGameSpread(abbr, spread) {
   if (spread == null || !Number.isFinite(Number(spread))) return '—';
   const n = Number(spread);
@@ -1478,8 +1500,14 @@ function ModelTab() {
 }
 
 // ---- Board tab ----
-const BOARD_STAT_TABS   = ['pts', 'reb', 'ast', 'fg3m', 'stl', 'blk', 'pra'];
-const BOARD_STAT_LABELS = { pts:'POINTS', reb:'REBOUNDS', ast:'ASSISTS', fg3m:'3PM', stl:'STEALS', blk:'BLOCKS', pra:'PRA' };
+const BOARD_STAT_TABS   = ['pts', 'reb', 'ast', 'fg3m', 'stl', 'blk', 'pra', 'combo', 'fb'];
+const BOARD_STAT_LABELS = { pts:'POINTS', reb:'REBOUNDS', ast:'ASSISTS', fg3m:'3PM', stl:'STEALS', blk:'BLOCKS', pra:'PRA', combo:'COMBO', fb:'1ST 🏀' };
+const COMBO_TABS = [
+  { id: 'pra',     label: 'PRA'     },
+  { id: 'pts+ast', label: 'PTS+AST' },
+  { id: 'pts+reb', label: 'PTS+REB' },
+  { id: 'ast+reb', label: 'AST+REB' },
+];
 
 function BoardPlayerCard({ pick, rank }) {
   const player  = pick.players || {};
@@ -1496,15 +1524,22 @@ function BoardPlayerCard({ pick, rank }) {
     ? `${pick.visitor_team.abbreviation} @ ${pick.home_team.abbreviation}`
     : null;
   const hasProj = pick.projection != null;
+  const result  = pickResult(pick);
+  const resultColor = result === 'hit' ? T.green : result === 'miss' ? T.red : result === 'push' ? T.yellow : null;
+  const resultBg = result === 'hit' ? T.greenDim : result === 'miss' ? T.redDim : result === 'push' ? T.yellowDim : null;
+  const resultText = result === 'hit' ? 'HIT' : result === 'miss' ? 'MISS' : result === 'push' ? 'PUSH' : null;
+  const resultLine = resultText && pick.actual_value != null
+    ? `${fmtOne(pick.actual_value)}/${fmtOne(pick.line)} ${resultText}`
+    : resultText;
 
   return (
     <div style={{
       display: 'flex', alignItems: 'stretch',
-      borderBottom: `1px solid ${T.border}`,
-      background: 'transparent',
+      borderBottom: `1px solid ${resultColor ? `${resultColor}55` : T.border}`,
+      background: resultColor ? `${resultBg}` : 'transparent',
     }}>
       {/* Left accent stripe for top 3 */}
-      <div style={{ width: 3, flexShrink: 0, background: isTop ? T.accent : 'transparent', borderRadius: '0 0 0 0' }} />
+      <div style={{ width: 3, flexShrink: 0, background: resultColor || (isTop ? T.accent : 'transparent'), borderRadius: '0 0 0 0' }} />
 
       <div style={{ flex: 1, padding: '13px 14px 11px', minWidth: 0 }}>
         {/* Row 1: rank + name + big conf number */}
@@ -1538,6 +1573,19 @@ function BoardPlayerCard({ pick, rank }) {
 
           {/* Confidence score */}
           <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 44 }}>
+            {resultLine && (
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                color: resultColor, background: resultBg,
+                border: `1px solid ${resultColor}55`,
+                borderRadius: 999, padding: '2px 7px',
+                fontSize: 8, fontWeight: 900, lineHeight: 1.1,
+                marginBottom: 4, whiteSpace: 'nowrap',
+              }}>
+                {result === 'hit' ? '✓ ' : result === 'miss' ? '✗ ' : ''}
+                {resultLine}
+              </div>
+            )}
             <div style={{ fontSize: 30, fontWeight: 900, color, lineHeight: 1 }}>{conf}</div>
             <div style={{ fontSize: 7, color, letterSpacing: 1.2, marginTop: 1, textAlign: 'right' }}>CONF</div>
           </div>
@@ -1586,12 +1634,128 @@ function BoardPlayerCard({ pick, rank }) {
   );
 }
 
-function BoardTab({ picks, loading, error }) {
-  const [activeStat, setActiveStat] = useState('pts');
+function BoardTab({ picks, loading, error, games }) {
+  const [activeStat, setActiveStat]   = useState('pts');
+  const [comboSubTab, setComboSubTab] = useState('pra');
+  const [fbData, setFbData]           = useState([]);
+  const [loadingFb, setLoadingFb]     = useState(false);
+  const [fbErr, setFbErr]             = useState(null);
+
+  // Fetch first basket when FB tab is active
+  useEffect(() => {
+    if (activeStat !== 'fb') return;
+    if (!games || games.length === 0) return;
+    let cancelled = false;
+    async function loadFb() {
+      setLoadingFb(true); setFbErr(null);
+      const results = [];
+      for (const g of games) {
+        try {
+          const res = await fetch(`/api/wnba/first-basket?gameId=${g.id}`);
+          if (res.ok) {
+            const d = await res.json();
+            results.push(...(Array.isArray(d) ? d : [d]));
+          }
+        } catch { /* skip */ }
+      }
+      if (!cancelled) { setFbData(results); setLoadingFb(false); }
+    }
+    loadFb();
+    return () => { cancelled = true; };
+  }, [activeStat, games]);
 
   const filtered = (picks || [])
     .filter(p => String(p.prop_type || '').toLowerCase() === activeStat)
     .sort((a, b) => Number(b.confidence_score || 0) - Number(a.confidence_score || 0));
+
+  // Combo content — players appearing in both required prop types
+  const comboContent = () => {
+    const parts = comboSubTab === 'pra' ? ['pts', 'reb', 'ast'] : comboSubTab.split('+');
+    const byPlayer = new Map();
+    for (const p of picks || []) {
+      const pid = p.player_id;
+      if (!pid) continue;
+      if (!byPlayer.has(pid)) byPlayer.set(pid, { picks: [], player: p.players });
+      byPlayer.get(pid).picks.push(p);
+    }
+    const combos = [];
+    for (const [pid, data] of byPlayer) {
+      const typesAvail = new Set(data.picks.map(p => String(p.prop_type || '').toLowerCase()));
+      if (parts.every(pt => typesAvail.has(pt))) {
+        const relevantPicks = data.picks.filter(p => parts.includes(String(p.prop_type || '').toLowerCase()));
+        const avgConf = relevantPicks.reduce((s, p) => s + Number(p.confidence_score || 0), 0) / relevantPicks.length;
+        const allOver  = relevantPicks.every(p => (p.recommendation || '') === 'OVER');
+        const allUnder = relevantPicks.every(p => (p.recommendation || '') === 'UNDER');
+        combos.push({ pid, player: data.player, picks: relevantPicks, avgConf, rec: allOver ? 'OVER' : allUnder ? 'UNDER' : 'SPLIT' });
+      }
+    }
+    combos.sort((a, b) => b.avgConf - a.avgConf);
+    if (combos.length === 0) return <div className="ps-empty-state">No combo picks found for today's slate.</div>;
+    return (
+      <div className="ps-panel">
+        {combos.map((combo, i) => {
+          const name   = playerName(combo.player || {});
+          const conf   = Math.round(combo.avgConf);
+          const color  = scoreColor(conf);
+          const recBg  = combo.rec === 'OVER' ? T.greenDim : combo.rec === 'UNDER' ? T.redDim : T.card3;
+          const recFg  = combo.rec === 'OVER' ? T.green    : combo.rec === 'UNDER' ? T.red    : T.text3;
+          return (
+            <div key={combo.pid} style={{ display:'flex', alignItems:'stretch', borderBottom:`1px solid ${T.border}` }}>
+              <div style={{ width:3, flexShrink:0, background: i < 3 ? T.accent : 'transparent' }} />
+              <div style={{ flex:1, padding:'12px 14px 10px', minWidth:0 }}>
+                <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                  <div style={{ width:24, height:24, borderRadius:'50%', flexShrink:0, background: i < 3 ? T.accent : T.card3, color: i < 3 ? '#fff' : T.text3, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:900, marginTop:1 }}>{i+1}</div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:700, color:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</div>
+                    <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{(combo.player||{}).position||'—'}</div>
+                  </div>
+                  <div style={{ textAlign:'right', flexShrink:0, minWidth:44 }}>
+                    <div style={{ fontSize:30, fontWeight:900, color, lineHeight:1 }}>{conf}</div>
+                    <div style={{ fontSize:7, color, letterSpacing:1.2, marginTop:1 }}>CONF</div>
+                  </div>
+                </div>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:9, marginLeft:34 }}>
+                  <span style={{ background:recBg, color:recFg, fontSize:10, fontWeight:800, padding:'2px 8px', borderRadius:5 }}>{combo.rec}</span>
+                  {combo.picks.map(p => (
+                    <span key={p.prop_type} style={{ background:T.card3, color:T.text2, fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:5 }}>
+                      {String(p.prop_type||'').toUpperCase()} {fmtOne(p.line)} {p.recommendation==='OVER'?'▲':p.recommendation==='UNDER'?'▼':'—'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // First basket content
+  const fbContent = () => {
+    if (loadingFb) return <div className="ps-empty-state">Loading first basket data…</div>;
+    if (fbErr)     return <div className="ps-empty-state" style={{ color:T.red }}>{fbErr}</div>;
+    if (fbData.length === 0) return <div className="ps-empty-state">No first basket data available for today's slate.</div>;
+    return (
+      <div className="ps-panel">
+        {fbData.map((row, i) => {
+          const player = row.players || {};
+          const name   = playerName(player);
+          const odds   = row.odds != null ? (row.odds > 0 ? `+${row.odds}` : String(row.odds)) : null;
+          return (
+            <div key={row.id || i} style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px', borderBottom:`1px solid ${T.border}` }}>
+              <div style={{ width:24, height:24, borderRadius:'50%', flexShrink:0, background: i < 3 ? T.accent : T.card3, color: i < 3 ? '#fff' : T.text3, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:900 }}>{i+1}</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name||'—'}</div>
+                <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{row.matchup||''}</div>
+              </div>
+              {odds && <div style={{ background:T.card3, border:`1px solid ${T.border}`, padding:'4px 10px', borderRadius:6, fontSize:13, fontWeight:800, color:T.accent }}>{odds}</div>}
+              {row.result && <div style={{ fontSize:9, fontWeight:700, color:T.green, background:T.greenDim, padding:'3px 8px', borderRadius:5 }}>✓ SCORED</div>}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -1601,25 +1765,32 @@ function BoardTab({ picks, loading, error }) {
       </div>
 
       {/* Stat sub-tabs */}
-      <div className="ps-subnav" style={{ marginBottom: 12, border: `1px solid ${T.border}`, borderRadius: 12 }}>
+      <div className="ps-subnav" style={{ marginBottom: 12, border: `1px solid ${T.border}`, borderRadius: 12, overflowX: 'auto' }}>
         {BOARD_STAT_TABS.map(t => {
-          const count = (picks || []).filter(p => String(p.prop_type || '').toLowerCase() === t).length;
+          const isSpecial = t === 'combo' || t === 'fb';
+          const tabPicks  = isSpecial ? [] : (picks || []).filter(p => String(p.prop_type || '').toLowerCase() === t);
+          const count     = tabPicks.length;
+          const summary   = isSpecial ? null : hitSummary(tabPicks);
           return (
             <button key={t} onClick={() => setActiveStat(t)} style={{
+              position: 'relative',
               background: activeStat === t ? T.accent : T.card,
               border: `1px solid ${activeStat === t ? T.accent : T.border}`,
               padding: '8px 14px',
               fontSize: 11, fontWeight: 800,
               color: activeStat === t ? '#fff' : T.text3,
               cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
+              whiteSpace: 'nowrap',
             }}>
               {BOARD_STAT_LABELS[t]}
-              {count > 0 && (
-                <span style={{
-                  marginLeft: 4, fontSize: 9, fontWeight: 700,
-                  color: activeStat === t ? T.accent : T.text3,
-                }}>
+              {!isSpecial && count > 0 && (
+                <span style={{ marginLeft: 4, fontSize: 9, fontWeight: 700, color: activeStat === t ? '#fff' : T.text3 }}>
                   {count}
+                </span>
+              )}
+              {summary && (
+                <span style={{ marginLeft:7, display:'inline-flex', alignItems:'center', background: summary.hits > 0 ? T.green : T.card3, color: summary.hits > 0 ? '#062515' : T.text2, border:`1px solid ${summary.hits > 0 ? 'rgba(255,255,255,0.22)' : T.border}`, borderRadius:999, padding:'1px 6px', fontSize:8, fontWeight:900, lineHeight:1.2, whiteSpace:'nowrap' }}>
+                  {summary.hits}/{summary.total} hit
                 </span>
               )}
             </button>
@@ -1627,32 +1798,49 @@ function BoardTab({ picks, loading, error }) {
         })}
       </div>
 
-      {/* List */}
-      {loading && (
-        <div className="ps-empty-state">Loading…</div>
-      )}
-      {!loading && error && (
-        <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>
-      )}
-      {!loading && !error && filtered.length === 0 && (
-        <div className="ps-empty-state">
-          No {BOARD_STAT_LABELS[activeStat]} picks available yet for today.
-        </div>
-      )}
-      {!loading && !error && filtered.length > 0 && (
-        <div className="ps-panel">
-          {filtered.map((pick, i) => (
-            <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
-          ))}
-        </div>
+      {/* Stat tabs: pts / reb / ast / fg3m / stl / blk / pra */}
+      {!['combo','fb'].includes(activeStat) && (
+        <>
+          {loading && <div className="ps-empty-state">Loading…</div>}
+          {!loading && error && <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>}
+          {!loading && !error && filtered.length === 0 && (
+            <div className="ps-empty-state">No {BOARD_STAT_LABELS[activeStat]} picks available yet for today.</div>
+          )}
+          {!loading && !error && filtered.length > 0 && (
+            <div className="ps-panel">
+              {filtered.map((pick, i) => (
+                <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
+              ))}
+            </div>
+          )}
+          {!loading && !error && filtered.length > 0 && (
+            <div style={{ padding:'12px 16px', fontSize:10, color:T.text3, textAlign:'center', borderTop:`1px solid ${T.border}` }}>
+              Ranked by confidence score · Updated daily at 12:30 AM ET
+            </div>
+          )}
+        </>
       )}
 
-      {/* Footer note */}
-      {!loading && !error && filtered.length > 0 && (
-        <div style={{ padding: '12px 16px', fontSize: 10, color: T.text3, textAlign: 'center', borderTop: `1px solid ${T.border}` }}>
-          Ranked by confidence score · Updated daily at 12:30 AM ET
-        </div>
+      {/* Combo tab */}
+      {activeStat === 'combo' && (
+        <>
+          <div className="ps-subnav" style={{ marginBottom:10, border:`1px solid ${T.border}`, borderRadius:10 }}>
+            {COMBO_TABS.map(ct => (
+              <button key={ct.id} onClick={() => setComboSubTab(ct.id)} style={{
+                background: comboSubTab === ct.id ? T.card3 : 'transparent',
+                border: `1px solid ${comboSubTab === ct.id ? T.accent : T.border}`,
+                padding: '6px 12px', fontSize:10, fontWeight:800,
+                color: comboSubTab === ct.id ? T.accent : T.text3,
+                cursor: 'pointer', letterSpacing: 0.4,
+              }}>{ct.label}</button>
+            ))}
+          </div>
+          {loading ? <div className="ps-empty-state">Loading…</div> : comboContent()}
+        </>
       )}
+
+      {/* First basket tab */}
+      {activeStat === 'fb' && fbContent()}
     </div>
   );
 }
@@ -1669,11 +1857,6 @@ export default function App() {
   const [topPicks, setTopPicks]             = useState([]);
   const [selectedGame, setSelectedGame]     = useState(null);
   const [expandedGameId, setExpandedGameId] = useState(null);
-  const [slateSubTab, setSlateSubTab]       = useState('games');
-  const [comboSubTab, setComboSubTab]       = useState('pra');
-  const [fbData, setFbData]                 = useState([]);
-  const [loadingFb, setLoadingFb]           = useState(false);
-  const [fbErr, setFbErr]                   = useState(null);
   const [loadingSlate, setLoadingSlate]     = useState(true);
   const [loadingPicks, setLoadingPicks]     = useState(true);
   const [slateError, setSlateError]         = useState(null);
@@ -1729,34 +1912,6 @@ export default function App() {
     return () => { cancelled = true; };
   }, [selectedDate]);
 
-  // Fetch first basket when FB sub-tab is active
-  useEffect(() => {
-    if (activeNav !== 'slate' || slateSubTab !== 'fb') return;
-    if (games.length === 0) return;
-    let cancelled = false;
-    async function loadFb() {
-      setLoadingFb(true); setFbErr(null);
-      const results = [];
-      for (const g of games) {
-        try {
-          const res = await fetch(`/api/wnba/first-basket?gameId=${g.id}`);
-          if (res.ok) {
-            const d = await res.json();
-            results.push(...(Array.isArray(d) ? d : [d]));
-          }
-        } catch { /* skip */ }
-      }
-      if (!cancelled) { setFbData(results); setLoadingFb(false); }
-    }
-    loadFb();
-    return () => { cancelled = true; };
-  }, [activeNav, slateSubTab, games]);
-
-  // Reset slate sub-tab when date changes
-  useEffect(() => {
-    setSlateSubTab('games');
-    setFbData([]);
-  }, [selectedDate]);
 
   const isToday = selectedDate === today();
 
@@ -1842,256 +1997,52 @@ export default function App() {
               : new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' }).toUpperCase() + ` SLATE — ${games.length} GAME${games.length === 1 ? '' : 'S'}`}
           </div>
 
-          {/* ── Slate sub-tabs ── */}
-          {(() => {
-            const SLATE_TABS = [
-              { id: 'games', label: 'GAMES' },
-              { id: 'pts',   label: 'PTS'   },
-              { id: 'reb',   label: 'REB'   },
-              { id: 'ast',   label: 'AST'   },
-              { id: 'fg3m',  label: '3PM'   },
-              { id: 'stl',   label: 'STL'   },
-              { id: 'blk',   label: 'BLK'   },
-              { id: 'combo', label: 'COMBO' },
-              { id: 'fb',    label: '1ST 🏀' },
-            ];
-            const COMBO_TABS = [
-              { id: 'pra',     label: 'PRA'     },
-              { id: 'pts+ast', label: 'PTS+AST' },
-              { id: 'pts+reb', label: 'PTS+REB' },
-              { id: 'ast+reb', label: 'AST+REB' },
-            ];
+          {loadingSlate && <div style={{ textAlign:'center', padding:40, color:T.text3, fontSize:12 }}>Loading games…</div>}
+          {slateError   && <div style={{ textAlign:'center', padding:40, color:T.red, fontSize:12 }}>{slateError}</div>}
+          {!loadingSlate && !slateError && games.length === 0 && <div className="ps-empty-state">No games scheduled.</div>}
 
-            // Stat sub-tab content — filtered picks as ranked BoardPlayerCard list
-            const statContent = (statKey) => {
-              const filtered = topPicks
-                .filter(p => String(p.prop_type || '').toLowerCase() === statKey)
-                .sort((a, b) => Number(b.confidence_score || 0) - Number(a.confidence_score || 0));
-              if (loadingPicks) return <div className="ps-empty-state">Loading picks…</div>;
-              if (picksError)   return <div className="ps-empty-state" style={{ color: T.red }}>{picksError}</div>;
-              if (filtered.length === 0) return <div className="ps-empty-state">No {statKey.toUpperCase()} picks for this slate.</div>;
-              return (
-                <div className="ps-panel" style={{ marginTop: 8 }}>
-                  {filtered.map((pick, i) => (
-                    <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
-                  ))}
+          {games.length > 0 && (
+            <div className="ps-slate-grid">
+              {games.map(g => (
+                <div key={g.id}>
+                  <SlateCard
+                    game={g}
+                    isSelected={expandedGameId === g.id}
+                    topPick={topPicksByGame.get(g.id) || null}
+                    onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
+                  />
+                  {expandedGameId === g.id && (
+                    <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
+                  )}
                 </div>
-              );
-            };
+              ))}
+            </div>
+          )}
 
-            // Combo sub-tab content — players appearing in both required prop types
-            const comboContent = () => {
-              const parts = comboSubTab === 'pra'
-                ? ['pts', 'reb', 'ast']
-                : comboSubTab.split('+');
-
-              // Group picks by player_id
-              const byPlayer = new Map();
-              for (const p of topPicks) {
-                const pid = p.player_id;
-                if (!pid) continue;
-                if (!byPlayer.has(pid)) byPlayer.set(pid, { picks: [], player: p.players });
-                byPlayer.get(pid).picks.push(p);
-              }
-
-              // Find players who have ALL required prop types
-              const combos = [];
-              for (const [pid, data] of byPlayer) {
-                const typesAvail = new Set(data.picks.map(p => String(p.prop_type || '').toLowerCase()));
-                if (parts.every(pt => typesAvail.has(pt))) {
-                  const relevantPicks = data.picks.filter(p => parts.includes(String(p.prop_type || '').toLowerCase()));
-                  // Avg confidence across the relevant picks
-                  const avgConf = relevantPicks.reduce((s, p) => s + Number(p.confidence_score || 0), 0) / relevantPicks.length;
-                  const allOver = relevantPicks.every(p => (p.recommendation || '') === 'OVER');
-                  const allUnder = relevantPicks.every(p => (p.recommendation || '') === 'UNDER');
-                  combos.push({ pid, player: data.player, picks: relevantPicks, avgConf, rec: allOver ? 'OVER' : allUnder ? 'UNDER' : 'SPLIT' });
-                }
-              }
-              combos.sort((a, b) => b.avgConf - a.avgConf);
-
-              if (loadingPicks) return <div className="ps-empty-state">Loading picks…</div>;
-              if (combos.length === 0) return <div className="ps-empty-state">No combo picks found for this slate.</div>;
-
-              return (
-                <div className="ps-panel" style={{ marginTop: 8 }}>
-                  {combos.map((combo, i) => {
-                    const name = playerName(combo.player || {});
-                    const conf = Math.round(combo.avgConf);
-                    const color = scoreColor(conf);
-                    const recBg = combo.rec === 'OVER' ? T.greenDim : combo.rec === 'UNDER' ? T.redDim : T.card3;
-                    const recFg = combo.rec === 'OVER' ? T.green    : combo.rec === 'UNDER' ? T.red    : T.text3;
-                    return (
-                      <div key={combo.pid} style={{ display: 'flex', alignItems: 'stretch', borderBottom: `1px solid ${T.border}`, background: 'transparent' }}>
-                        <div style={{ width: 3, flexShrink: 0, background: i < 3 ? T.accent : 'transparent' }} />
-                        <div style={{ flex: 1, padding: '12px 14px 10px', minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                            <div style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: i < 3 ? T.accent : T.card3, color: i < 3 ? '#fff' : T.text3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900, marginTop: 1 }}>{i + 1}</div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-                              <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{(combo.player || {}).position || '—'}</div>
-                            </div>
-                            <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 44 }}>
-                              <div style={{ fontSize: 30, fontWeight: 900, color, lineHeight: 1 }}>{conf}</div>
-                              <div style={{ fontSize: 7, color, letterSpacing: 1.2, marginTop: 1 }}>CONF</div>
-                            </div>
-                          </div>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9, marginLeft: 34 }}>
-                            <span style={{ background: recBg, color: recFg, fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 5 }}>{combo.rec}</span>
-                            {combo.picks.map(p => (
-                              <span key={p.prop_type} style={{ background: T.card3, color: T.text2, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5 }}>
-                                {String(p.prop_type || '').toUpperCase()} {fmtOne(p.line)} {p.recommendation === 'OVER' ? '▲' : p.recommendation === 'UNDER' ? '▼' : '—'}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            };
-
-            // First basket content
-            const fbContent = () => {
-              if (loadingFb) return <div className="ps-empty-state">Loading first basket data…</div>;
-              if (fbErr)     return <div className="ps-empty-state" style={{ color: T.red }}>{fbErr}</div>;
-              if (fbData.length === 0) return <div className="ps-empty-state">No first basket data available for this slate.</div>;
-              return (
-                <div className="ps-panel" style={{ marginTop: 8 }}>
-                  {fbData.map((row, i) => {
-                    const player = row.players || {};
-                    const name   = playerName(player);
-                    const odds   = row.odds != null ? (row.odds > 0 ? `+${row.odds}` : String(row.odds)) : null;
-                    return (
-                      <div key={row.id || i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderBottom: `1px solid ${T.border}` }}>
-                        <div style={{ width: 24, height: 24, borderRadius: '50%', flexShrink: 0, background: i < 3 ? T.accent : T.card3, color: i < 3 ? '#fff' : T.text3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900 }}>{i + 1}</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name || '—'}</div>
-                          <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{row.matchup || ''}</div>
-                        </div>
-                        {odds && (
-                          <div style={{ background: T.card3, border: `1px solid ${T.border}`, padding: '4px 10px', borderRadius: 6, fontSize: 13, fontWeight: 800, color: T.accent }}>{odds}</div>
-                        )}
-                        {row.result && (
-                          <div style={{ fontSize: 9, fontWeight: 700, color: T.green, background: T.greenDim, padding: '3px 8px', borderRadius: 5 }}>✓ SCORED</div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            };
-
-            return (
-              <>
-                {/* Sub-tab bar */}
-                <div className="ps-subnav" style={{ marginBottom: 12, border: `1px solid ${T.border}`, borderRadius: 12, overflowX: 'auto' }}>
-                  {SLATE_TABS.map(tab => {
-                    const isActive = slateSubTab === tab.id;
-                    const count = tab.id === 'games'
-                      ? games.length
-                      : tab.id === 'combo' || tab.id === 'fb'
-                        ? null
-                        : topPicks.filter(p => String(p.prop_type || '').toLowerCase() === tab.id).length;
-                    return (
-                      <button key={tab.id} onClick={() => setSlateSubTab(tab.id)} style={{
-                        background: isActive ? T.accent : T.card,
-                        border: `1px solid ${isActive ? T.accent : T.border}`,
-                        padding: '8px 13px',
-                        fontSize: 11, fontWeight: 800,
-                        color: isActive ? '#fff' : T.text3,
-                        cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
-                        whiteSpace: 'nowrap',
-                      }}>
-                        {tab.label}
-                        {count != null && count > 0 && (
-                          <span style={{ marginLeft: 4, fontSize: 9, fontWeight: 700, color: isActive ? T.accent : T.text3 }}>{count}</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* GAMES sub-tab */}
-                {slateSubTab === 'games' && (
-                  <>
-                    {loadingSlate && <div style={{ textAlign: 'center', padding: 40, color: T.text3, fontSize: 12 }}>Loading games…</div>}
-                    {slateError   && <div style={{ textAlign: 'center', padding: 40, color: T.red, fontSize: 12 }}>{slateError}</div>}
-                    {!loadingSlate && !slateError && games.length === 0 && <div className="ps-empty-state">No games scheduled.</div>}
-                    {games.length > 0 && (
-                      <div className="ps-slate-grid">
-                        {games.map(g => (
-                          <div key={g.id}>
-                            <SlateCard
-                              game={g}
-                              isSelected={expandedGameId === g.id}
-                              topPick={topPicksByGame.get(g.id) || null}
-                              onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
-                            />
-                            {expandedGameId === g.id && (
-                              <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {/* Confidence legend */}
-                    {!loadingSlate && games.length > 0 && (
-                      <div className="ps-legend" style={{ marginTop: 16, padding: '10px 14px', background: T.card, borderRadius: 10, border: `1px solid ${T.border}` }}>
-                        <div style={{ fontSize: 9, color: T.text3, letterSpacing: 1, marginBottom: 8 }}>CONFIDENCE SCALE</div>
-                        <div style={{ display: 'flex', gap: 16 }}>
-                          {[{color:T.green,label:'70–100',desc:'FAVORABLE'},{color:T.yellow,label:'40–69',desc:'NEUTRAL'},{color:T.red,label:'0–39',desc:'UNFAV.'}].map(({ color, label, desc }) => (
-                            <div key={desc} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
-                              <div>
-                                <div style={{ fontSize: 9, color: T.text2 }}>{label}</div>
-                                <div style={{ fontSize: 8, color: T.text3 }}>{desc}</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Stat sub-tabs: pts / reb / ast / fg3m / stl / blk */}
-                {['pts','reb','ast','fg3m','stl','blk'].includes(slateSubTab) && statContent(slateSubTab)}
-
-                {/* COMBO sub-tab */}
-                {slateSubTab === 'combo' && (
-                  <>
-                    {/* Combo type bar */}
-                    <div className="ps-subnav" style={{ marginBottom: 10, border: `1px solid ${T.border}`, borderRadius: 10 }}>
-                      {COMBO_TABS.map(ct => (
-                        <button key={ct.id} onClick={() => setComboSubTab(ct.id)} style={{
-                          background: comboSubTab === ct.id ? T.card3 : 'transparent',
-                          border: `1px solid ${comboSubTab === ct.id ? T.accent : T.border}`,
-                          padding: '6px 12px',
-                          fontSize: 10, fontWeight: 800,
-                          color: comboSubTab === ct.id ? T.accent : T.text3,
-                          cursor: 'pointer', letterSpacing: 0.4,
-                        }}>
-                          {ct.label}
-                        </button>
-                      ))}
+          {/* Confidence legend */}
+          {!loadingSlate && games.length > 0 && (
+            <div className="ps-legend" style={{ marginTop:16, padding:'10px 14px', background:T.card, borderRadius:10, border:`1px solid ${T.border}` }}>
+              <div style={{ fontSize:9, color:T.text3, letterSpacing:1, marginBottom:8 }}>CONFIDENCE SCALE</div>
+              <div style={{ display:'flex', gap:16 }}>
+                {[{color:T.green,label:'70–100',desc:'FAVORABLE'},{color:T.yellow,label:'40–69',desc:'NEUTRAL'},{color:T.red,label:'0–39',desc:'UNFAV.'}].map(({ color, label, desc }) => (
+                  <div key={desc} style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <div style={{ width:8, height:8, borderRadius:2, background:color, flexShrink:0 }} />
+                    <div>
+                      <div style={{ fontSize:9, color:T.text2 }}>{label}</div>
+                      <div style={{ fontSize:8, color:T.text3 }}>{desc}</div>
                     </div>
-                    {comboContent()}
-                  </>
-                )}
-
-                {/* FIRST BASKET sub-tab */}
-                {slateSubTab === 'fb' && fbContent()}
-              </>
-            );
-          })()}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* ── BOARD tab ── */}
       {activeNav === 'board' && (
         <div className="ps-shell ps-page">
-          <BoardTab picks={topPicks} loading={loadingPicks} error={picksError} />
+          <BoardTab picks={topPicks} loading={loadingPicks} error={picksError} games={games} />
         </div>
       )}
 

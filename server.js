@@ -54,6 +54,50 @@ function toNullableNumber(value) {
   return value == null ? null : Number(value);
 }
 
+function propActualValue(log, propType) {
+  if (!log) return null;
+  const type = String(propType || '').toLowerCase();
+  if (type === 'pra') {
+    const pts = Number(log.pts);
+    const reb = Number(log.reb);
+    const ast = Number(log.ast);
+    if (![pts, reb, ast].every(Number.isFinite)) return null;
+    return pts + reb + ast;
+  }
+  const value = Number(log[type]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function gradePropPick(pick, log, game) {
+  const status = String(game?.status || '').toLowerCase();
+  const actualValue = propActualValue(log, pick.prop_type);
+  const line = Number(pick.line);
+  const recommendation = String(pick.recommendation || '').toUpperCase();
+
+  if (actualValue == null || !Number.isFinite(line) || !['OVER', 'UNDER'].includes(recommendation)) {
+    return { actual_value: actualValue, result: null, result_label: null, hit: null };
+  }
+
+  const isFinal = status === 'final' || status === 'closed' || status === 'complete';
+  if (!isFinal) {
+    return { actual_value: actualValue, result: null, result_label: null, hit: null };
+  }
+
+  if (actualValue === line) {
+    return { actual_value: actualValue, result: 'push', result_label: 'PUSH', hit: null };
+  }
+
+  const hit = recommendation === 'OVER'
+    ? actualValue > line
+    : actualValue < line;
+  return {
+    actual_value: actualValue,
+    result: hit ? 'hit' : 'miss',
+    result_label: hit ? 'HIT' : 'MISS',
+    hit,
+  };
+}
+
 function formatPlayer(player) {
   return {
     id: player.id,
@@ -578,12 +622,30 @@ app.get('/api/wnba/top-picks', async (req, res) => {
 
     if (picksError) throw picksError;
 
+    const playerIds = [...new Set((picks || []).map(pick => pick.player_id).filter(Boolean))];
+    const { data: logs, error: logsError } = playerIds.length
+      ? await supabase
+        .from('player_game_logs')
+        .select('player_id, game_id, pts, reb, ast, stl, blk, fg3m')
+        .in('game_id', gameIds)
+        .in('player_id', playerIds)
+      : { data: [], error: null };
+
+    if (logsError) throw logsError;
+
+    const logsByPlayerGame = new Map(
+      (logs || []).map(log => [`${log.player_id}:${log.game_id}`, log])
+    );
+
     const data = (picks || []).map(pick => {
       const game       = gamesById.get(pick.game_id);
       const homeTeam   = game ? teamsById.get(game.home_team_id)    : null;
       const visitorTeam = game ? teamsById.get(game.visitor_team_id) : null;
+      const log        = logsByPlayerGame.get(`${pick.player_id}:${pick.game_id}`);
+      const grade      = gradePropPick(pick, log, game);
       return {
         ...pick,
+        ...grade,
         game_date:    game?.game_date  ?? date,
         game_status:  game?.status     ?? null,
         home_team:    homeTeam    ? formatTeam(homeTeam)    : null,

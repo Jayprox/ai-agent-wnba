@@ -32,12 +32,14 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.28,
       hitRate: 0.22,
-      recentForm: 0.17,
+      recentForm: 0.11,
       minuteStability: 0.10,
-      restContext: 0.06,
+      restContext: 0.02,
       matchup: 0.05,
       pace: 0.07,
-      oddsMovement: 0.05,
+      oddsMovement: 0.03,
+      injury: 0.06,
+      streak: 0.06,
     },
   },
   reb: {
@@ -46,12 +48,14 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.25,
       hitRate: 0.20,
-      recentForm: 0.15,
+      recentForm: 0.08,
       minuteStability: 0.12,
-      restContext: 0.05,
+      restContext: 0.02,
       matchup: 0.10,
       pace: 0.08,
-      oddsMovement: 0.05,
+      oddsMovement: 0.03,
+      injury: 0.06,
+      streak: 0.06,
     },
   },
   ast: {
@@ -60,13 +64,15 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.25,
       hitRate: 0.20,
-      recentForm: 0.15,
+      recentForm: 0.08,
       minuteStability: 0.10,
-      restContext: 0.05,
+      restContext: 0.02,
       matchup: 0.08,
       pace: 0.07,
-      oddsMovement: 0.05,
+      oddsMovement: 0.03,
       ballHandlerRole: 0.05,
+      injury: 0.06,
+      streak: 0.06,
     },
   },
   pra: {
@@ -75,12 +81,14 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.28,
       hitRate: 0.22,
-      recentForm: 0.17,
+      recentForm: 0.11,
       minuteStability: 0.10,
-      restContext: 0.06,
+      restContext: 0.02,
       matchup: 0.05,
       pace: 0.07,
-      oddsMovement: 0.05,
+      oddsMovement: 0.03,
+      injury: 0.06,
+      streak: 0.06,
     },
   },
   stl: {
@@ -89,12 +97,14 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.30,
       hitRate: 0.25,
-      recentForm: 0.15,
+      recentForm: 0.08,
       minuteStability: 0.12,
-      restContext: 0.05,
+      restContext: 0.00,
       matchup: 0.08,
       pace: 0.05,
       oddsMovement: 0.00,
+      injury: 0.08,
+      streak: 0.04,
     },
   },
   blk: {
@@ -103,12 +113,14 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.30,
       hitRate: 0.25,
-      recentForm: 0.15,
+      recentForm: 0.08,
       minuteStability: 0.12,
-      restContext: 0.05,
+      restContext: 0.00,
       matchup: 0.08,
       pace: 0.05,
       oddsMovement: 0.00,
+      injury: 0.08,
+      streak: 0.04,
     },
   },
   fg3m: {
@@ -117,12 +129,14 @@ const PROP_CONFIG = {
     weights: {
       projectionEdge: 0.28,
       hitRate: 0.22,
-      recentForm: 0.17,
+      recentForm: 0.12,
       minuteStability: 0.10,
-      restContext: 0.05,
+      restContext: 0.02,
       matchup: 0.06,
       pace: 0.07,
-      oddsMovement: 0.05,
+      oddsMovement: 0.03,
+      injury: 0.06,
+      streak: 0.04,
     },
   },
 };
@@ -437,6 +451,28 @@ async function getGameOddsContext(gameId) {
   };
 }
 
+async function getInjuryContext(playerIds, gameDate) {
+  if (!playerIds.length) return new Map();
+
+  const { data, error } = await supabase
+    .from('injury_reports')
+    .select('player_id, status')
+    .in('player_id', playerIds)
+    .eq('report_date', gameDate)
+    .order('updated_at', { ascending: false });
+
+  if (error) {
+    console.warn(`[calc-confidence] injury lookup failed: ${error.message}`);
+    return new Map();
+  }
+
+  const map = new Map();
+  for (const row of data || []) {
+    if (!map.has(row.player_id)) map.set(row.player_id, row.status);
+  }
+  return map;
+}
+
 async function getMatchupRatings(teamIds, season) {
   const { data, error } = await supabase
     .from('team_defensive_ratings')
@@ -670,6 +706,39 @@ function scoreRest(logs, gameDate) {
   return 65;
 }
 
+function scoreInjury(status) {
+  switch (status) {
+    case 'out':          return null;
+    case 'doubtful':     return 15;
+    case 'questionable': return 30;
+    case 'gtd':          return 40;
+    default:             return 50;
+  }
+}
+
+function scoreStreak(recentValues, seasonAvg) {
+  // Required DB change before persisting this field:
+  // ALTER TABLE prop_analysis_results ADD COLUMN IF NOT EXISTS score_streak SMALLINT;
+  if (!recentValues || recentValues.length < 3 || !seasonAvg) return 50;
+
+  let streak = 0;
+  for (const v of recentValues) {
+    if (v > seasonAvg) streak += 1;
+    else if (v < seasonAvg) streak -= 1;
+    else break;
+  }
+
+  if (streak >= 5)  return 82;
+  if (streak >= 4)  return 72;
+  if (streak >= 3)  return 62;
+  if (streak >= 2)  return 54;
+  if (streak <= -5) return 18;
+  if (streak <= -4) return 28;
+  if (streak <= -3) return 38;
+  if (streak <= -2) return 46;
+  return 50;
+}
+
 function scoreOddsMovement(movement, gap, direction) {
   let score = 50;
 
@@ -730,7 +799,7 @@ function hitRateOver(logs, field, line) {
 
 // ─── Core analysis ────────────────────────────────────────────────────────────
 
-function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupRatings, paceRatings, oddsContext, gameOddsContext, opponentStats, refRatings) {
+function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupRatings, paceRatings, oddsContext, gameOddsContext, opponentStats, refRatings, injuryStatus, sInjury) {
   const config = PROP_CONFIG[field];
   if (!config) throw new Error(`No prop config for field: ${field}`);
   const { baseline, cap, weights } = config;
@@ -822,6 +891,11 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   const sOdds      = ctx
     ? scoreOddsMovement(ctx.movement, ctx.gap, dir)
     : 50;
+  const recentValues = logs
+    .slice(0, 5)
+    .map(log => Number(log[field] ?? 0))
+    .filter(Number.isFinite);
+  const sStreak = scoreStreak(recentValues, seasonAvg);
 
   const confidence = Math.min(cap, round(
     sProjEdge        * (weights.projectionEdge ?? 0)   +
@@ -832,7 +906,9 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     sMatchup         * (weights.matchup ?? 0)          +
     sPace            * (weights.pace ?? 0)             +
     sOdds            * (weights.oddsMovement ?? 0)     +
-    sBallHandler     * (weights.ballHandlerRole ?? 0),
+    sBallHandler     * (weights.ballHandlerRole ?? 0)  +
+    sInjury          * (weights.injury ?? 0)           +
+    sStreak          * (weights.streak ?? 0),
   ));
 
   // Only commit a direction if confidence is high enough and the gap is meaningful
@@ -894,6 +970,19 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   if (ctx?.gap >= 0.5) {
     keyFactors.push(`${ctx.gap} spread across books — sharp/square divergence`);
   }
+  if (injuryStatus === 'doubtful') {
+    keyFactors.push('Listed as DOUBTFUL — significant DNP risk');
+  }
+  if (injuryStatus === 'questionable') {
+    keyFactors.push('Questionable — monitor pre-game lineup news');
+  }
+  if (injuryStatus === 'gtd') {
+    keyFactors.push('Game-time decision — confirm active before betting');
+  }
+  const streakCount = recentValues.filter(v => v > seasonAvg).length;
+  const coldCount   = recentValues.filter(v => v < seasonAvg).length;
+  if (streakCount >= 4) keyFactors.push(`Hot — over season avg in ${streakCount} of last ${recentValues.length} games`);
+  if (coldCount >= 4)   keyFactors.push(`Cold — under season avg in ${coldCount} of last ${recentValues.length} games`);
   if (sBlowout < 40) {
     keyFactors.push(`Blowout risk — favored by ${Math.abs(homeSpread)} (starters may sit Q4)`);
   }
@@ -948,8 +1037,9 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     score_minutes_stability: round(sMinStabAdjusted),
     score_pace:              round(sPace),
     score_rest_context:      round(sRest),
-    score_injury_impact:     50,
+    score_injury_impact:     round(sInjury),
     score_odds_movement:     round(sOdds),
+    score_streak:            round(sStreak),
     score_referee:           round(refRating),
     risk_flags:              riskFlags,
     key_factors:             keyFactors,
@@ -1046,13 +1136,15 @@ async function calcConfidence(opts = {}) {
         continue;
       }
 
-      const [{ bestLines, oddsContext }, gameOddsContext, matchupRatings, paceRatings, opponentStats, refRatings] = await Promise.all([
+      const playerIds = eligible.map(player => player.id);
+      const [{ bestLines, oddsContext }, gameOddsContext, matchupRatings, paceRatings, opponentStats, refRatings, injuryMap] = await Promise.all([
         getOddsData(game.id),
         getGameOddsContext(game.id),
         getMatchupRatings(teamIds, gameSzn),
         getPaceRatings(gameSzn),
         getOpponentStats(gameSzn),
         getRefRatings(gameSzn),
+        getInjuryContext(playerIds, game.game_date),
       ]);
 
       const rows = [];
@@ -1060,6 +1152,9 @@ async function calcConfidence(opts = {}) {
       for (const player of eligible) {
         const m    = player.metrics;
         const logs = await getPlayerLogsCrossSeason(player.id, game.game_date, gameSzn);
+        const injuryStatus = injuryMap.get(player.id) ?? 'available';
+        const sInjury = scoreInjury(injuryStatus);
+        if (sInjury === null) continue;
 
         for (const field of PROP_TYPES) {
           // Determine the line to use
@@ -1091,6 +1186,8 @@ async function calcConfidence(opts = {}) {
             gameOddsContext,
             opponentStats,
             refRatings,
+            injuryStatus,
+            sInjury,
           ));
         }
       }

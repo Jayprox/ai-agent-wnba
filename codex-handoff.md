@@ -3333,3 +3333,309 @@ Once the scheduler is running (`node scripts/scheduler.js`), it handles all of t
 - `ingest-wnba-stats.js` passes `Season: "2026"` to the WNBA Stats API. Prior runs used `"2025"` successfully; `"2026"` should work the same way. If it returns empty rows, check the API's season format (sometimes `"2025-26"` is required — inspect the URL in `fetchWnbaStats()`).
 - `calc-confidence.js` cross-season lookback: `[season-1, season-2].filter(s => s >= 2024)` → for 2026 this is [2025, 2024]. Both seasons have data. ✅
 - Pace/matchup ratings for 2026 will be sparse until ~20 games in. The model falls back to league averages automatically (score = 50 neutral).
+
+---
+
+## Task Q — Injury Signal
+
+**Goal:** Wire the existing `injury_reports` data into `calc-confidence.js` so that injured players get suppressed confidence scores and OUT players are skipped entirely. Currently `score_injury_impact` is hardcoded to `50` on every row.
+
+**Status:** Ready to implement. The full pipeline already exists: `injury_reports` table (`db/006_create_injury_reports.sql`), ESPN ingestion (`scripts/ingest-injuries.js`), and status normalization (`out / doubtful / questionable / gtd / available`). Only `calc-confidence.js` needs changes.
+
+**Files to change:** `scripts/calc-confidence.js` only.
+
+### Step 1 — Add `getInjuryContext(playerIds, gameDate)`
+
+Add this function near the other DB helper functions (around line 450):
+
+```js
+async function getInjuryContext(playerIds, gameDate) {
+  if (!playerIds.length) return new Map();
+  const { data, error } = await supabase
+    .from('injury_reports')
+    .select('player_id, status')
+    .in('player_id', playerIds)
+    .eq('report_date', gameDate)
+    .order('updated_at', { ascending: false });
+  if (error) {
+    console.warn(`[calc-confidence] injury lookup failed: ${error.message}`);
+    return new Map();
+  }
+  const map = new Map();
+  for (const row of data || []) {
+    if (!map.has(row.player_id)) map.set(row.player_id, row.status);
+  }
+  return map;
+}
+```
+
+### Step 2 — Add `scoreInjury(status)`
+
+```js
+function scoreInjury(status) {
+  switch (status) {
+    case 'out':          return null; // skip prop entirely
+    case 'doubtful':     return 15;
+    case 'questionable': return 30;
+    case 'gtd':          return 40;
+    default:             return 50;  // available / unknown
+  }
+}
+```
+
+### Step 3 — Wire into the main game loop
+
+In `calcConfidenceForGame()` (or equivalent), add `getInjuryContext` to the parallel Promise.all fetch alongside `bestLines`, `gameOddsContext`, etc.:
+
+```js
+const [{ bestLines, oddsContext }, gameOddsContext, matchupRatings, paceRatings, opponentStats, refRatings, injuryMap] = await Promise.all([
+  getPlayerOddsContext(game.id),
+  getGameOddsContext(game.id),
+  getMatchupRatings(season),
+  getPaceRatings(season),
+  getOpponentStats(season),
+  getRefereeRatings(season, game.game_date),
+  getInjuryContext(playerIds, game.game_date),   // ← new
+]);
+```
+
+Then per-player, before generating the prop row:
+
+```js
+const injuryStatus = injuryMap.get(player.id) ?? 'available';
+const sInjury = scoreInjury(injuryStatus);
+if (sInjury === null) continue; // player is OUT — skip all props
+```
+
+### Step 4 — Update `PROP_WEIGHTS`
+
+Add `injury: 0.08` to every prop type. Reduce `restContext` from `0.06 → 0.02` and `oddsMovement` from `0.05 → 0.03` to keep weights summing to ~1.0. Example for `pts`:
+
+```js
+pts: {
+  baseline: 50, cap: 80,
+  weights: {
+    projectionEdge: 0.28, hitRate: 0.22, recentForm: 0.17,
+    minuteStability: 0.10, restContext: 0.02, matchup: 0.05,
+    pace: 0.07, oddsMovement: 0.03, injury: 0.06,
+  },
+},
+```
+
+Apply consistent adjustments across all 7 prop types. `stl` and `blk` currently have `oddsMovement: 0.00` — leave that as zero and take the full 0.08 from `restContext` there.
+
+### Step 5 — Key factors
+
+After computing `sInjury`, push to `keyFactors` if relevant:
+
+```js
+if (injuryStatus === 'doubtful')     keyFactors.push('Listed as DOUBTFUL — significant DNP risk');
+if (injuryStatus === 'questionable') keyFactors.push('Questionable — monitor pre-game lineup news');
+if (injuryStatus === 'gtd')          keyFactors.push('Game-time decision — confirm active before betting');
+```
+
+### Step 6 — Replace hardcoded value
+
+Change:
+```js
+score_injury_impact: 50,
+```
+To:
+```js
+score_injury_impact: round(sInjury),
+```
+
+### Acceptance checks
+- Run `node scripts/calc-confidence.js --date=<any date with injury reports>`. Query `SELECT player_id, score_injury_impact, recommendation FROM prop_analysis_results WHERE analyzed_at > now() - interval '10 minutes'`. Players listed OUT should have zero rows. DOUBTFUL players should show `score_injury_impact = 15`.
+- Verify `key_factors` array contains the injury string for affected players.
+- Row count should decrease on dates where OUT players would have generated props.
+
+---
+
+## Task R — STL/BLK Opponent Context Data
+
+**Goal:** Populate `opponent_stl_rate` and `opponent_blk_rate` in `team_opponent_stats` so that STL and BLK props use real opponent defensive context instead of falling back to neutral (50). `calc-confidence.js` already reads these columns at lines 866–872 — the data just isn't being fetched.
+
+**Status:** Ready to implement. `team_opponent_stats` table already has `opponent_stl_rate` and `opponent_blk_rate` columns. `ingest-wnba-stats.js` already has the pattern for fetching opponent context from `leaguedashteamstats`. Nothing in `calc-confidence.js` needs to change.
+
+**Files to change:** `scripts/ingest-wnba-stats.js` only.
+
+### Step 1 — Add `fetchOpponentStlBlkRates(season)`
+
+Follow the exact same pattern as `fetchOpponentTovPct(season)`. Call `leaguedashteamstats` with `MeasureType: 'Opponent'`:
+
+```js
+async function fetchOpponentStlBlkRates(season) {
+  console.log(`[ingest-wnba-stats] Fetching opponent STL/BLK rates for season ${season}`);
+
+  const json = await fetchWnbaStats('leaguedashteamstats', {
+    // ... same base params as fetchOpponentTovPct ...
+    MeasureType: 'Opponent',
+    Season: String(season),
+    SeasonType: 'Regular Season',
+    PerMode: 'PerGame',
+    LeagueID: '10',
+    // ... all other required empty params ...
+  });
+
+  const resultSet = resultSetArray(json, 'leaguedashteamstats');
+  const headers = indexHeaders(resultSet.headers);
+
+  // OPP_STL and OPP_BLK are per-game totals allowed by each team.
+  // Normalize to rate: divide by ~82 possessions per game to get per-possession rate.
+  const POSSESSIONS_PER_GAME = 82;
+  const rows = [];
+  for (const row of resultSet.rowSet || []) {
+    const wnbaTeamId = row[headers.get('TEAM_ID')];
+    const oppStl = Number(row[headers.get('OPP_STL')]) || 0;
+    const oppBlk = Number(row[headers.get('OPP_BLK')]) || 0;
+    rows.push({
+      wnba_team_id: String(wnbaTeamId),
+      opponent_stl_rate: round(oppStl / POSSESSIONS_PER_GAME, 4),
+      opponent_blk_rate: round(oppBlk / POSSESSIONS_PER_GAME, 4),
+    });
+  }
+  return rows;
+}
+```
+
+### Step 2 — Wire into `ingestWnbaStats()`
+
+After the existing upserts, call `fetchOpponentStlBlkRates(season)` and upsert only the two new columns into `team_opponent_stats`:
+
+```js
+const stlBlkRows = await fetchOpponentStlBlkRates(season);
+for (const r of stlBlkRows) {
+  const teamId = wnbaTeamIdToLocalId.get(r.wnba_team_id);
+  if (!teamId) continue;
+  await supabase
+    .from('team_opponent_stats')
+    .update({ opponent_stl_rate: r.opponent_stl_rate, opponent_blk_rate: r.opponent_blk_rate })
+    .eq('team_id', teamId)
+    .eq('season', season);
+}
+```
+
+Note: use `update` not `upsert` since the row should already exist from the earlier fetches. If it doesn't exist yet (cold DB), fall back to upsert with `onConflict: 'team_id,season'`.
+
+### Acceptance checks
+- Run `node scripts/ingest-wnba-stats.js --season=2025`.
+- Query `SELECT team_id, opponent_stl_rate, opponent_blk_rate FROM team_opponent_stats WHERE season=2025 LIMIT 5` — both columns should be non-null decimals (expect ~0.01–0.04 range).
+- Run `node scripts/calc-confidence.js --season=2025` and spot-check STL/BLK rows — `key_factors` should no longer contain "fallback neutral" for teams with data.
+
+---
+
+## Task S — Streak / Momentum Signal
+
+**Goal:** Add a `score_streak` signal that detects consecutive over/under performance vs. season average. A player hitting over their season average in 4 of their last 5 games is a meaningfully stronger pick than the current L5 trend captures.
+
+**Status:** Ready to implement. Game-by-game log data is already available in the per-player fetch. Needs a new DB column, a scoring function, and weight redistribution.
+
+**Files to change:** `scripts/calc-confidence.js` and one SQL migration.
+
+### Step 1 — DB migration
+
+Run in Supabase SQL editor:
+```sql
+ALTER TABLE prop_analysis_results
+  ADD COLUMN IF NOT EXISTS score_streak SMALLINT;
+```
+
+No migration file needed — apply directly.
+
+### Step 2 — Add `scoreStreak(recentValues, seasonAvg)`
+
+```js
+function scoreStreak(recentValues, seasonAvg) {
+  // recentValues: array of numbers, most recent first, max 5
+  if (!recentValues || recentValues.length < 3 || !seasonAvg) return 50;
+
+  let streak = 0;
+  for (const v of recentValues) {
+    if (v > seasonAvg) streak++;
+    else if (v < seasonAvg) streak--;
+    else break; // neutral game breaks the streak
+  }
+
+  // streak > 0 = hot (consecutive overs), streak < 0 = cold (consecutive unders)
+  if (streak >= 5)  return 82;
+  if (streak >= 4)  return 72;
+  if (streak >= 3)  return 62;
+  if (streak >= 2)  return 54;
+  if (streak <= -5) return 18;
+  if (streak <= -4) return 28;
+  if (streak <= -3) return 38;
+  if (streak <= -2) return 46;
+  return 50;
+}
+```
+
+### Step 3 — Extract recent per-game values and call scorer
+
+In the per-prop calculation block, after the L5 average is computed, extract the ordered per-game values for the field from the recent logs:
+
+```js
+const recentValues = recentLogs
+  .slice(0, 5)                               // most recent 5 games
+  .map(log => Number(log[field] ?? 0));      // e.g. log.pts, log.reb, etc.
+
+const sStreak = scoreStreak(recentValues, seasonAvg);
+```
+
+### Step 4 — Add `streak` weight to `PROP_WEIGHTS`
+
+Add `streak: 0.06` to pts / reb / ast / pra. Add `streak: 0.04` to stl / blk / fg3m. Redistribute by reducing `recentForm` weight by the same amount in each prop type (it partially overlaps with streak).
+
+### Step 5 — Key factors
+
+```js
+const streakCount = recentValues.filter(v => v > seasonAvg).length;
+const coldCount   = recentValues.filter(v => v < seasonAvg).length;
+if (streakCount >= 4) keyFactors.push(`Hot — over season avg in ${streakCount} of last ${recentValues.length} games`);
+if (coldCount >= 4)   keyFactors.push(`Cold — under season avg in ${coldCount} of last ${recentValues.length} games`);
+```
+
+### Step 6 — Add to output row
+
+Add alongside the other score columns:
+```js
+score_streak: round(sStreak),
+```
+
+And wire into the weighted sum:
+```js
+sStreak * (weights.streak ?? 0) +
+```
+
+### Acceptance checks
+- Run `node scripts/calc-confidence.js --season=2025`.
+- Query players with known hot/cold stretches in 2025: `SELECT player_id, score_streak, l5_avg, season_avg FROM prop_analysis_results WHERE score_streak IS NOT NULL ORDER BY score_streak DESC LIMIT 10`. Top rows should have `l5_avg > season_avg`.
+- Verify `key_factors` mentions the streak for `score_streak >= 72` cases.
+- Row count should be unchanged — this is additive only.
+
+### Completion note — 2026-05-06
+
+Codex completed Tasks Q, R, and S.
+
+**Task Q — Injury Signal:** implemented in `scripts/calc-confidence.js`. Added `getInjuryContext(playerIds, gameDate)` and `scoreInjury(status)`, wired injury lookup into the per-game parallel fetch, skips `out` players before prop generation, persists `score_injury_impact`, adds injury-specific key factors for `doubtful`, `questionable`, and `gtd`, and includes the injury component in all seven prop weight blocks.
+
+**Task R — STL/BLK Opponent Context Data:** implemented in `scripts/ingest-wnba-stats.js`. Added `fetchOpponentStlBlkRates(season)` using `leaguedashteamstats` with `MeasureType: 'Opponent'`, parsing `OPP_STL` and `OPP_BLK`, normalizing by 82 possessions, merging through the existing team lookup/mapping flow, and upserting `opponent_stl_rate` / `opponent_blk_rate` into `team_opponent_stats`.
+
+**Task S — Streak / Momentum Signal:** implemented in `scripts/calc-confidence.js`. Added `scoreStreak(recentValues, seasonAvg)` with the required SQL comment, extracts recent per-game values from the ordered log set, persists `score_streak`, adds hot/cold key factors, and includes streak in the weighted score. Weights were redistributed so each prop type remains normalized to 1.0 after adding injury and streak.
+
+**Manual SQL applied by user after first acceptance run surfaced missing columns:**
+```sql
+ALTER TABLE team_opponent_stats ADD COLUMN IF NOT EXISTS opponent_stl_rate DECIMAL(6,4);
+ALTER TABLE team_opponent_stats ADD COLUMN IF NOT EXISTS opponent_blk_rate DECIMAL(6,4);
+ALTER TABLE prop_analysis_results ADD COLUMN IF NOT EXISTS score_streak SMALLINT;
+```
+
+**Verification / acceptance results:**
+- `node --check scripts/calc-confidence.js` passed.
+- `node --check scripts/ingest-wnba-stats.js` passed.
+- `node scripts/ingest-wnba-stats.js --season=2025` completed with `13 rows upserted, 0 failed`.
+- Observed WNBA Stats league averages from the run: `OPP_TOV_PCT 0.1761`, `rim_fga_rate 0.2608`, `opp_fg3a_rate 0.3595`, `opponent_stl_rate 0.0901`, `opponent_blk_rate 0.0477`.
+- Team mapping modes were `{"name":52}`. No unmatched teams were reported.
+- `node scripts/calc-confidence.js --season=2025` completed with `33181 prop rows total; 0 correlated player-game(s), 0 row(s) flagged`.
+
+**Notes for Cowork:** `team_opponent_stats` currently has 13 rows for 2025 from WNBA Stats. This likely reflects the 2025 league including Golden State; local team mapping succeeded by name for every source row in this run.

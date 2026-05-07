@@ -271,6 +271,65 @@ async function fetchOppFg3aRate(season) {
   });
 }
 
+async function fetchOpponentStlBlkRates(season) {
+  console.log(`[ingest-wnba-stats] Fetching opponent STL/BLK rates for season ${season}`);
+
+  const json = await fetchWnbaStats('leaguedashteamstats', {
+    Conference: '',
+    DateFrom: '',
+    DateTo: '',
+    Division: '',
+    GameScope: '',
+    GameSegment: '',
+    Height: '',
+    LastNGames: '0',
+    LeagueID: '10',
+    Location: '',
+    MeasureType: 'Opponent',
+    Month: '0',
+    OpponentTeamID: '0',
+    Outcome: '',
+    PORound: '0',
+    PaceAdjust: 'N',
+    PerMode: 'PerGame',
+    Period: '0',
+    PlayerExperience: '',
+    PlayerPosition: '',
+    PlusMinus: 'N',
+    Rank: 'N',
+    Season: String(season),
+    SeasonSegment: '',
+    SeasonType: 'Regular Season',
+    ShotClockRange: '',
+    StarterBench: '',
+    TeamID: '0',
+    TwoWay: '0',
+    VsConference: '',
+    VsDivision: '',
+  });
+
+  const resultSet = resultSetArray(json, 'leaguedashteamstats-stl-blk');
+  const headers = indexHeaders(resultSet.headers);
+  const required = ['TEAM_ID', 'TEAM_NAME', 'OPP_STL', 'OPP_BLK'];
+  for (const header of required) {
+    if (!headers.has(header)) throw new Error(`leaguedashteamstats-stl-blk missing ${header}`);
+  }
+
+  const POSSESSIONS_PER_GAME = 82;
+  const teamAbbrevIndex = headers.get('TEAM_ABBREVIATION');
+  return (resultSet.rowSet || []).map(row => {
+    const oppStl = Number(row[headers.get('OPP_STL')]) || 0;
+    const oppBlk = Number(row[headers.get('OPP_BLK')]) || 0;
+    return {
+      wnbaTeamId:          Number(row[headers.get('TEAM_ID')]),
+      teamName:            row[headers.get('TEAM_NAME')],
+      teamAbbreviation:    teamAbbrevIndex == null ? null : row[teamAbbrevIndex],
+      opponent_stl_rate:   round(oppStl / POSSESSIONS_PER_GAME, 4),
+      opponent_blk_rate:   round(oppBlk / POSSESSIONS_PER_GAME, 4),
+    };
+  });
+}
+
 async function fetchRimFgaRate(season) {
   console.log(`[ingest-wnba-stats] Fetching leaguedashteamshotlocations for season ${season}`);
 
@@ -333,7 +392,7 @@ async function fetchRimFgaRate(season) {
   });
 }
 
-function mergeRows({ tovRows, rimRows, fg3aRows, lookups, season, asOfDate }) {
+function mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, asOfDate }) {
   const byStatsTeamId = new Map();
   const mappingModes = {};
   const failed = [];
@@ -352,6 +411,8 @@ function mergeRows({ tovRows, rimRows, fg3aRows, lookups, season, asOfDate }) {
       opp_tov_pct:   row.opp_tov_pct,
       rim_fga_rate:  null,
       opp_fg3a_rate: null,
+      opponent_stl_rate: null,
+      opponent_blk_rate: null,
       as_of_date:    asOfDate,
       teamName:      row.teamName,
     });
@@ -372,6 +433,8 @@ function mergeRows({ tovRows, rimRows, fg3aRows, lookups, season, asOfDate }) {
       opp_tov_pct:   null,
       rim_fga_rate:  null,
       opp_fg3a_rate: null,
+      opponent_stl_rate: null,
+      opponent_blk_rate: null,
       as_of_date:    asOfDate,
       teamName:      row.teamName,
     };
@@ -396,12 +459,41 @@ function mergeRows({ tovRows, rimRows, fg3aRows, lookups, season, asOfDate }) {
       opp_tov_pct:   null,
       rim_fga_rate:  null,
       opp_fg3a_rate: null,
+      opponent_stl_rate: null,
+      opponent_blk_rate: null,
       as_of_date:    asOfDate,
       teamName:      row.teamName,
     };
 
     existing.team_id      = mapped.team.id;
     existing.opp_fg3a_rate = row.opp_fg3a_rate;
+    byStatsTeamId.set(row.wnbaTeamId, existing);
+  }
+
+  for (const row of (stlBlkRows || [])) {
+    const mapped = mapTeam(row, lookups);
+    if (!mapped.team) {
+      failed.push({ source: 'stl_blk', teamName: row.teamName, wnbaTeamId: row.wnbaTeamId });
+      continue;
+    }
+
+    mappingModes[mapped.mode] = (mappingModes[mapped.mode] || 0) + 1;
+
+    const existing = byStatsTeamId.get(row.wnbaTeamId) || {
+      team_id:       mapped.team.id,
+      season,
+      opp_tov_pct:   null,
+      rim_fga_rate:  null,
+      opp_fg3a_rate: null,
+      opponent_stl_rate: null,
+      opponent_blk_rate: null,
+      as_of_date:    asOfDate,
+      teamName:      row.teamName,
+    };
+
+    existing.team_id = mapped.team.id;
+    existing.opponent_stl_rate = row.opponent_stl_rate;
+    existing.opponent_blk_rate = row.opponent_blk_rate;
     byStatsTeamId.set(row.wnbaTeamId, existing);
   }
 
@@ -414,14 +506,15 @@ async function ingestWnbaStats(opts = {}) {
   const asOfDate = opts.asOfDate ?? getArg('as-of-date') ?? todayIso();
 
   try {
-    const [lookups, tovRows, rimRows, fg3aRows] = await Promise.all([
+    const [lookups, tovRows, rimRows, fg3aRows, stlBlkRows] = await Promise.all([
       getTeamsByLookup(),
       fetchOpponentTovPct(season),
       fetchRimFgaRate(season),
       fetchOppFg3aRate(season),
+      fetchOpponentStlBlkRates(season),
     ]);
 
-    const { rows, failed, mappingModes } = mergeRows({ tovRows, rimRows, fg3aRows, lookups, season, asOfDate });
+    const { rows, failed, mappingModes } = mergeRows({ tovRows, rimRows, fg3aRows, stlBlkRows, lookups, season, asOfDate });
 
     if (failed.length) {
       for (const miss of failed) {
@@ -430,7 +523,7 @@ async function ingestWnbaStats(opts = {}) {
     }
 
     console.log(`[ingest-wnba-stats] Team mapping modes: ${JSON.stringify(mappingModes)}`);
-    console.log(`[ingest-wnba-stats] League averages — OPP_TOV_PCT ${round(avg(rows.map(row => row.opp_tov_pct)))}; rim_fga_rate ${round(avg(rows.map(row => row.rim_fga_rate)))}; opp_fg3a_rate ${round(avg(rows.map(row => row.opp_fg3a_rate)))}`);
+    console.log(`[ingest-wnba-stats] League averages — OPP_TOV_PCT ${round(avg(rows.map(row => row.opp_tov_pct)))}; rim_fga_rate ${round(avg(rows.map(row => row.rim_fga_rate)))}; opp_fg3a_rate ${round(avg(rows.map(row => row.opp_fg3a_rate)))}; opponent_stl_rate ${round(avg(rows.map(row => row.opponent_stl_rate)))}; opponent_blk_rate ${round(avg(rows.map(row => row.opponent_blk_rate)))}`);
 
     if (!rows.length) {
       console.log('[ingest-wnba-stats] Done — 0 rows upserted, 0 failed');
@@ -463,6 +556,7 @@ module.exports = {
   fetchOpponentTovPct,
   fetchRimFgaRate,
   fetchOppFg3aRate,
+  fetchOpponentStlBlkRates,
   ingestWnbaStats,
   mergeRows,
 };
