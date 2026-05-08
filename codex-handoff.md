@@ -3936,3 +3936,128 @@ if (useRolling && oppRating.pts_allowed_avg_l10 != null && oppRating.pts_allowed
 - `node scripts/calc-confidence.js --season=2025` — completes without error.
 - `SELECT player_id, key_factors FROM prop_analysis_results WHERE key_factors LIKE '%L10%' OR key_factors LIKE '%recently%' LIMIT 5` — at least some rows flag the rolling divergence.
 
+
+---
+
+## Task W — AI BOARD: AI-Powered Picks Tab
+
+**Goal:** Add a second board tab ("AI BOARD") alongside the existing algorithmic BOARD. Where the BOARD shows weighted-signal confidence picks, the AI BOARD layers Monte Carlo simulation, expected value modeling, Kelly Criterion sizing, parlay optimization, and an LLM-generated narrative on top of those same picks — giving a richer, probabilistic view of the slate.
+
+**Status:** Deferred — implement after 2–3 weeks of 2026 season data has accumulated (mid-to-late May 2026). The simulations are only meaningful with a real within-season distribution established.
+
+**Scope:** New API endpoint + new frontend tab. No changes to existing scripts or DB schema.
+
+---
+
+### What the AI BOARD shows
+
+**1 — Monte Carlo Confidence Intervals**
+
+For each top pick, simulate 10,000 game outcomes using the player's observed distribution (mean + std dev from L10 logs for the prop field). Return:
+- `p_over`: probability of hitting over the line (0.0–1.0)
+- `sim_median`: median simulated value
+- `sim_p10` / `sim_p90`: 10th/90th percentile range
+- `edge`: `p_over - implied_prob` (where `implied_prob` comes from the American odds line)
+
+This replaces the purely deterministic confidence score with a probabilistic one. A pick at 72 confidence with `p_over = 0.64` and `edge = +0.11` is a very different animal than one with `p_over = 0.52` and `edge = +0.01`.
+
+**2 — Expected Value**
+
+```
+EV = (p_over × payout) - ((1 - p_over) × 1.0)
+```
+
+Where `payout` is computed from the American line (e.g. -110 → 0.909). Display EV per $100 bet. Only surface picks with EV > 0 on the AI BOARD.
+
+**3 — Regression-to-Mean Flag**
+
+Using Bayesian shrinkage: when a player's L5 average deviates more than 1.5 standard deviations from their season average, flag the direction. A player running hot at 2σ over their mean is statistically likely to cool — the algorithm's streak signal rewards it, but the AI BOARD tempers it with a regression flag so the bettor sees both sides.
+
+```
+shrunk_proj = (n_recent × l5_avg + prior_weight × season_avg) / (n_recent + prior_weight)
+```
+
+Where `prior_weight = 5` (equivalent to 5 prior games at the season mean). Show both `adjustedProjection` (algorithm) and `shrunk_proj` (Bayesian) so the bettor can see how much the hot streak is inflating the raw projection.
+
+**4 — Kelly Criterion Sizing**
+
+For each positive-EV pick:
+```
+kelly_fraction = (p_over × (payout + 1) - 1) / payout
+```
+
+Display as a percentage of bankroll (e.g. "2.3% of bankroll"). Cap at 5% (quarter-Kelly by default — full Kelly is too aggressive for prop betting variance). This gives a sizing recommendation rather than just a direction.
+
+**5 — Parlay Optimizer**
+
+From the day's positive-EV singles, find 2- and 3-leg parlay combinations that maximize expected parlay EV. Exclude correlated props from the same player. Prefer legs with `p_over > 0.60` and `edge > 0.05`. Show the top 3 parlay suggestions with combined p_win, combined payout, and combined EV.
+
+**6 — LLM Narrative (Claude)**
+
+For the top 5 picks by EV, generate a 2–3 sentence plain-English narrative explaining the pick. The narrative should weave together the key factors, simulation result, and any notable context (injury boost, soft matchup, hot streak tempering, etc.).
+
+Call `/api/wnba/ai-narrative` which calls Claude Haiku with a structured prompt:
+
+```
+Player: {name}, {team} vs {opponent}
+Prop: {field} {line}
+Algorithm confidence: {score}/100
+Monte Carlo p(over): {p_over}
+Edge: {edge}
+Key factors: {key_factors joined}
+Write a 2-sentence betting narrative for a sharp bettor. Be direct. Include the edge and key reason.
+```
+
+---
+
+### Backend — new endpoint `/api/wnba/ai-picks`
+
+```
+GET /api/wnba/ai-picks?season=2026&date=2026-05-15
+```
+
+1. Load `prop_analysis_results` for the date where `recommendation IN ('OVER','UNDER')` and `confidence_score >= 60`
+2. For each pick, run Monte Carlo using `season_avg` + `l5_avg` + `l5_stddev` (compute stddev from L5 logs inline — no new DB column needed)
+3. Compute EV, Kelly fraction, regression-to-mean shrinkage
+4. Filter to `edge > 0` picks only
+5. Sort by EV descending
+6. Run parlay optimizer on top 10 singles
+7. For top 5 by EV, call Claude Haiku for narrative (cache 1 hour)
+8. Return JSON: `{ picks: [...], parlays: [...] }`
+
+---
+
+### Frontend — AI BOARD tab
+
+Add "AI BOARD" alongside "BOARD" in the top nav. Same orange-on-navy theme, but visually differentiated:
+
+- **Pick cards** show a probability bar (0–100% meter colored green→amber→red) alongside the existing confidence badge
+- **Confidence badge** replaced with `p_over %` (e.g. "64% p(over)")
+- **EV chip** in accent orange: "+$11.20 per $100"
+- **Kelly sizing** in small text below: "Size: 2.3% bankroll"
+- **Regression flag** (amber warning icon) when `|l5_avg - season_avg| > 1.5 × stddev` — tooltip explains
+- **AI narrative** in italic text below key factors — only shown for top 5 EV picks
+- **Parlays section** at the bottom of the page: 3 suggested parlay cards, each showing legs, combined p_win, estimated payout, EV
+
+---
+
+### Acceptance checks
+
+- `GET /api/wnba/ai-picks?season=2026&date=<real game date>` returns valid JSON with `picks` and `parlays` arrays
+- Each pick has `p_over`, `edge`, `kelly_fraction`, `sim_median`, `sim_p10`, `sim_p90`, `ev_per_100`, and `narrative` (for top 5)
+- Only positive-EV picks appear (`edge > 0`)
+- Parlays contain no two picks from the same player
+- Frontend renders without error; probability bars display correctly
+- LLM narrative is cached — repeated page loads do not re-call Claude
+
+---
+
+### Implementation notes
+
+- `l5_stddev` can be computed inline: pull the 5 most recent log values for the field, compute `Math.sqrt(variance)`. No new DB column needed.
+- If fewer than 3 L5 games are available, fall back to `season_avg * 0.15` as a rough stddev estimate (typical CV for basketball props)
+- Monte Carlo: use Box-Muller transform for Gaussian sampling (pure JS, no library needed)
+- Parlay optimizer: brute-force combinations up to 3 legs from top 10 singles (at most C(10,3) = 120 combos — trivially fast)
+- Kelly cap: always apply `Math.min(kelly_fraction, 0.05)` before displaying
+- Claude Haiku call: use server-side `@anthropic-ai/sdk`, never expose API key to frontend
+

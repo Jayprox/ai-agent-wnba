@@ -24,6 +24,25 @@ function mapStatus(status) {
   return 'scheduled';
 }
 
+function mapEspnStatus(espnEvent) {
+  const state = espnEvent.competitions?.[0]?.status?.type?.state || '';
+  if (state === 'post') return 'final';
+  if (state === 'in') return 'in_progress';
+  return 'scheduled';
+}
+
+function formatEspnEventTime(espnEvent) {
+  if (!espnEvent?.date) return null;
+  const date = new Date(espnEvent.date);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+    timeZoneName: 'short',
+  }).format(date);
+}
+
 async function getTeamsByBdlId() {
   const { data, error } = await supabase
     .from('teams')
@@ -31,6 +50,16 @@ async function getTeamsByBdlId() {
 
   if (error) throw error;
   return new Map((data || []).map(team => [team.bdl_id, team]));
+}
+
+async function getTeamsByAbbreviation() {
+  const { data, error } = await supabase
+    .from('teams')
+    .select('id, abbreviation, name')
+    .eq('league', 'WNBA');
+
+  if (error) throw error;
+  return new Map((data || []).map(team => [team.abbreviation.toUpperCase(), team]));
 }
 
 function mapGame(game, teamsByBdlId) {
@@ -60,27 +89,155 @@ function mapGame(game, teamsByBdlId) {
   };
 }
 
+/**
+ * ESPN fallback: fetch WNBA scoreboard for a date, return any games not already
+ * covered by BDL (identified by home+visitor team pair). Inserts with bdl_id: null.
+ */
+async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season) {
+  const dateCompact = date.replace(/-/g, '');
+  const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard?dates=${dateCompact}`;
+
+  let espnEvents;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`ESPN scoreboard ${res.status}`);
+    const json = await res.json();
+    espnEvents = json.events || [];
+  } catch (err) {
+    console.warn(`[ingest-games] ESPN fallback fetch failed: ${err.message}`);
+    return [];
+  }
+
+  const fallbackRows = [];
+  for (const event of espnEvents) {
+    const comp = event.competitions?.[0];
+    if (!comp) continue;
+
+    const competitors = comp.competitors || [];
+    const homeComp    = competitors.find(c => c.homeAway === 'home');
+    const visitorComp = competitors.find(c => c.homeAway === 'away');
+    if (!homeComp || !visitorComp) continue;
+
+    const homeAbbrev    = String(homeComp.team?.abbreviation    || '').toUpperCase();
+    const visitorAbbrev = String(visitorComp.team?.abbreviation || '').toUpperCase();
+
+    const homeTeam    = teamsByAbbrev.get(homeAbbrev);
+    const visitorTeam = teamsByAbbrev.get(visitorAbbrev);
+
+    if (!homeTeam || !visitorTeam) {
+      console.warn(`[ingest-games] ESPN fallback: unresolved teams ${homeAbbrev} vs ${visitorAbbrev}`);
+      continue;
+    }
+
+    const pairKey = `${homeTeam.id}:${visitorTeam.id}`;
+    if (coveredPairs.has(pairKey)) continue; // already ingested from BDL
+
+    const homeScore    = Number(homeComp.score)    || null;
+    const visitorScore = Number(visitorComp.score) || null;
+
+    fallbackRows.push({
+      bdl_id:             null,
+      espn_id:            String(event.id),
+      home_team_id:       homeTeam.id,
+      visitor_team_id:    visitorTeam.id,
+      game_date:          date,
+      status:             mapEspnStatus(event),
+      home_team_score:    homeScore > 0 ? homeScore : null,
+      visitor_team_score: visitorScore > 0 ? visitorScore : null,
+      season,
+      season_type:        'regular',
+      postseason:         false,
+      period:             null,
+      time:               formatEspnEventTime(event),
+      league:             'WNBA',
+      updated_at:         new Date().toISOString(),
+    });
+  }
+
+  if (!fallbackRows.length) return [];
+
+  // Insert only — these have no bdl_id conflict key, guard by espn_id
+  const { data: existing } = await supabase
+    .from('games')
+    .select('espn_id')
+    .in('espn_id', fallbackRows.map(r => r.espn_id));
+
+  const existingEspnIds = new Set((existing || []).map(r => r.espn_id));
+  const toUpdate = fallbackRows.filter(r => existingEspnIds.has(r.espn_id));
+  const toInsert = fallbackRows.filter(r => !existingEspnIds.has(r.espn_id));
+
+  let updated = [];
+  for (const row of toUpdate) {
+    const { data, error } = await supabase
+      .from('games')
+      .update({
+        status: row.status,
+        home_team_score: row.home_team_score,
+        visitor_team_score: row.visitor_team_score,
+        period: row.period,
+        time: row.time,
+        updated_at: row.updated_at,
+      })
+      .eq('espn_id', row.espn_id)
+      .select('id, espn_id, game_date');
+
+    if (error) {
+      console.warn(`[ingest-games] ESPN fallback update failed for ${row.espn_id}: ${error.message}`);
+      continue;
+    }
+    updated = updated.concat(data || []);
+  }
+
+  if (!toInsert.length) {
+    if (updated.length) console.log(`[ingest-games] ESPN fallback: updated ${updated.length} existing game(s)`);
+    return updated;
+  }
+
+  const { data, error } = await supabase
+    .from('games')
+    .insert(toInsert)
+    .select('id, espn_id, game_date');
+
+  if (error) {
+    console.error(`[ingest-games] ESPN fallback insert failed: ${error.message}`);
+    return [];
+  }
+
+  console.log(`[ingest-games] ESPN fallback: inserted ${data.length} game(s) missing from BDL (${toInsert.map(r => r.espn_id).join(', ')})${updated.length ? `; updated ${updated.length}` : ''}`);
+  return [...updated, ...data];
+}
+
 async function ingestGames(date = getArgValue('date') || todayIso()) {
-  const teamsByBdlId = await getTeamsByBdlId();
+  const [teamsByBdlId, teamsByAbbrev] = await Promise.all([
+    getTeamsByBdlId(),
+    getTeamsByAbbreviation(),
+  ]);
+
   const payload = await bdlFetch(`/wnba/v1/games?dates[]=${date}&per_page=40`);
   const rows = (payload.data || [])
     .map(game => mapGame(game, teamsByBdlId))
     .filter(Boolean);
 
-  if (!rows.length) {
-    console.log(`[ingest-games] No games fetched for ${date}`);
-    return [];
+  let upserted = [];
+  if (rows.length) {
+    const { data, error } = await supabase
+      .from('games')
+      .upsert(rows, { onConflict: 'bdl_id' })
+      .select('id, bdl_id, game_date');
+
+    if (error) throw error;
+    upserted = data;
+    console.log(`[ingest-games] ${date}: fetched ${rows.length}; upserted ${data.length}`);
+  } else {
+    console.log(`[ingest-games] ${date}: BDL returned 0 games — trying ESPN fallback`);
   }
 
-  const { data, error } = await supabase
-    .from('games')
-    .upsert(rows, { onConflict: 'bdl_id' })
-    .select('id, bdl_id, game_date');
+  // ESPN fallback: catch any games BDL is missing
+  const coveredPairs = new Set(rows.map(r => `${r.home_team_id}:${r.visitor_team_id}`));
+  const season = rows[0]?.season ?? new Date().getFullYear();
+  const fallback = await ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season);
 
-  if (error) throw error;
-
-  console.log(`[ingest-games] ${date}: fetched ${rows.length}; upserted ${data.length}`);
-  return data;
+  return [...upserted, ...fallback];
 }
 
 if (require.main === module) {
@@ -90,4 +247,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingestGames, mapGame, mapStatus };
+module.exports = { ingestGames, mapGame, mapStatus, formatEspnEventTime };

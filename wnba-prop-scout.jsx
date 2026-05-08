@@ -410,6 +410,23 @@ function fmtDate(value) {
   return new Date(value + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
 }
 
+function fmtGameTime(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (raw.toLowerCase() === 'scheduled') return null;
+  if (/\d/.test(raw) && /(?:am|pm|et|ct|mt|pt|edt|est|cdt|cst|mdt|mst|pdt|pst)/i.test(raw)) return raw;
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+    timeZoneName: 'short',
+  }).format(parsed);
+}
+
 function playerName(p) {
   return p.name || p.full_name || [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown';
 }
@@ -578,6 +595,8 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
   const aw    = game.visitor_team?.abbreviation || 'AWAY';
   const hw    = game.home_team?.abbreviation    || 'HOME';
   const venue = TEAM_VENUES[hw] ?? null;
+  const gameTime = fmtGameTime(game.time || game.start_time || game.scheduled_at);
+  const subline = [gameTime, venue].filter(Boolean).join(' · ');
 
   const spreadLabel  = game.spread   != null ? fmtGameSpread(hw, game.spread) : '—';
   const totalLabel   = game.total    != null ? fmtOne(game.total)              : '—';
@@ -612,7 +631,7 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
           <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>
             {game.visitor_record && game.home_record
               ? `${game.visitor_record}  ·  ${game.home_record}`
-              : (venue || ' ')}
+              : (subline || ' ')}
           </div>
         </div>
         <StatusBadge status={game.status} />
@@ -640,9 +659,7 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
         fontSize: 9, color: T.text3,
       }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 6 }}>
-          {venue ? `📍 ${venue}` : '📍 TBA'}
-          {' · '}
-          {fmtDate(game.game_date || game.date)}
+          {[gameTime, venue || 'TBA', fmtDate(game.game_date || game.date)].filter(Boolean).join(' · ')}
         </span>
         {game.odds_sportsbook && (
           <span style={{
