@@ -54,6 +54,14 @@ function startScheduler() {
 
   schedule('daytime odds refresh', '0 12-23/4 * * *', () => ingestOdds());
 
+  // Pre-game props: runs after games + odds + injuries are all ingested for the day.
+  // Generates confidence scores for tonight's slate so picks are visible before tip-off.
+  schedule('pre-game confidence', '0 13 * * *', async () => {
+    await ingestGames();   // catch any games BDL added since the 11am run (ESPN fallback fires automatically)
+    await ingestOdds();    // freshen lines before scoring
+    await calcConfidence();
+  });
+
   schedule('post-midnight logs + metrics', '30 0 * * *', async () => {
     await ingestEspnIds();   // link any new final games to ESPN event IDs
     await ingestPlayerLogs(); // pull box scores from ESPN

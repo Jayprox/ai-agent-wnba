@@ -225,7 +225,9 @@ async function getGames({ date, season }) {
   if (date) {
     q = q.eq('game_date', date);
   } else if (season) {
-    q = q.eq('season', Number(season)).eq('status', 'final');
+    // Include all statuses so pre-game props are generated for scheduled games,
+    // and retroactive scores are computed for completed ones.
+    q = q.eq('season', Number(season)).in('status', ['scheduled', 'in_progress', 'final']);
   } else {
     q = q.eq('game_date', todayIso());
   }
@@ -246,15 +248,19 @@ async function getPlayersWithMetrics(teamIds, season) {
 
   const ids = players.map(p => p.id);
 
+  // Try current season first; fall back to prior season(s) for start-of-season runs
+  // when no current-season metrics exist yet (e.g. 2026 before any games complete).
+  const lookbackSeasons = [season, season - 1, season - 2].filter(s => s >= 2024);
   const { data: metrics, error: mErr } = await supabase
     .from('player_research_metrics')
     .select('*')
     .in('player_id', ids)
-    .eq('season', season)
+    .in('season', lookbackSeasons)
+    .order('season', { ascending: false })
     .order('as_of_date', { ascending: false });
   if (mErr) throw mErr;
 
-  // Latest row per player
+  // Latest row per player — prefer current season, fall back to most recent prior season
   const metricsByPlayer = new Map();
   for (const m of metrics || []) {
     if (!metricsByPlayer.has(m.player_id)) metricsByPlayer.set(m.player_id, m);
@@ -478,11 +484,13 @@ async function getInjuryContext(playerIds, gameDate, season, players = []) {
     if (!injuryMap.has(row.player_id)) injuryMap.set(row.player_id, row.status);
   }
 
+  const usageSeasons = [season, season - 1, season - 2].filter(s => s >= 2024);
   const { data: usageRows, error: usageError } = await supabase
     .from('player_research_metrics')
-    .select('player_id, avg_usage_rate, as_of_date')
+    .select('player_id, avg_usage_rate, season, as_of_date')
     .in('player_id', playerIds)
-    .eq('season', season)
+    .in('season', usageSeasons)
+    .order('season', { ascending: false })
     .order('as_of_date', { ascending: false });
 
   if (usageError) {
