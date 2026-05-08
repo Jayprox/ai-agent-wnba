@@ -112,6 +112,49 @@ function formatPlayer(player) {
   };
 }
 
+const SPORTSBOOK_PRIORITY = [
+  'draftkings',
+  'fanduel',
+  'betmgm',
+  'caesars',
+  'bovada',
+];
+
+const SPORTSBOOK_LABELS = {
+  draftkings: 'DraftKings',
+  fanduel: 'FanDuel',
+  betmgm: 'BetMGM',
+  caesars: 'Caesars',
+  bovada: 'Bovada',
+};
+
+function normalizeSportsbook(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function sportsbookRank(value) {
+  const key = normalizeSportsbook(value);
+  const index = SPORTSBOOK_PRIORITY.indexOf(key);
+  return index === -1 ? SPORTSBOOK_PRIORITY.length : index;
+}
+
+function sportsbookLabel(value) {
+  const key = normalizeSportsbook(value);
+  return SPORTSBOOK_LABELS[key] || value || 'Unknown';
+}
+
+function sportsbookShortLabel(value) {
+  const key = normalizeSportsbook(value);
+  if (key === 'draftkings') return 'DK';
+  if (key === 'fanduel') return 'FD';
+  if (key === 'betmgm') return 'MGM';
+  if (key === 'caesars') return 'CZR';
+  if (key === 'bovada') return 'BOV';
+  return String(value || '').slice(0, 5).toUpperCase();
+}
+
 function groupOddsSnapshots(rows) {
   const grouped = new Map();
 
@@ -145,7 +188,8 @@ function groupOddsSnapshots(rows) {
     }
   }
 
-  return Array.from(grouped.values());
+  return Array.from(grouped.values())
+    .sort((a, b) => sportsbookRank(a.sportsbook) - sportsbookRank(b.sportsbook) || String(a.sportsbook).localeCompare(String(b.sportsbook)));
 }
 
 // ============================================================
@@ -228,13 +272,26 @@ app.get('/api/wnba/slate', async (req, res) => {
     const oddsByGame = new Map();
     for (const row of oddsRows || []) {
       if (!oddsByGame.has(row.game_id)) oddsByGame.set(row.game_id, {});
-      const byType = oddsByGame.get(row.game_id);
-      if (!byType[row.prop_type]) byType[row.prop_type] = row;
+      const byGame = oddsByGame.get(row.game_id);
+      const bookKey = normalizeSportsbook(row.sportsbook);
+      if (!byGame[bookKey]) {
+        byGame[bookKey] = {
+          sportsbook: row.sportsbook,
+          sportsbook_label: sportsbookLabel(row.sportsbook),
+          sportsbook_short: sportsbookShortLabel(row.sportsbook),
+          markets: {},
+        };
+      }
+      if (!byGame[bookKey].markets[row.prop_type]) byGame[bookKey].markets[row.prop_type] = row;
     }
 
     res.json({
       data: games.map(game => {
-        const odds = oddsByGame.get(game.id) || {};
+        const byBook = oddsByGame.get(game.id) || {};
+        const books = Object.values(byBook)
+          .sort((a, b) => sportsbookRank(a.sportsbook) - sportsbookRank(b.sportsbook) || String(a.sportsbook).localeCompare(String(b.sportsbook)));
+        const defaultBook = books.find(book => normalizeSportsbook(book.sportsbook) === 'draftkings') || books[0] || null;
+        const odds = defaultBook?.markets || {};
 
         return {
           id: game.id,
@@ -257,7 +314,17 @@ app.get('/api/wnba/slate', async (req, res) => {
           // ingest-odds stores h2h over_odds as home and under_odds as away.
           home_ml: odds.moneyline ? toNullableNumber(odds.moneyline.over_odds) : null,
           away_ml: odds.moneyline ? toNullableNumber(odds.moneyline.under_odds) : null,
-          odds_sportsbook: odds.spread?.sportsbook || odds.total?.sportsbook || odds.moneyline?.sportsbook || null,
+          odds_sportsbook: defaultBook?.sportsbook_label || null,
+          odds_sportsbook_short: defaultBook?.sportsbook_short || null,
+          odds_books: books.map(book => ({
+            sportsbook: sportsbookLabel(book.sportsbook),
+            sportsbook_short: sportsbookShortLabel(book.sportsbook),
+            is_default: book === defaultBook,
+            spread: book.markets.spread ? toNullableNumber(book.markets.spread.line) : null,
+            total: book.markets.total ? toNullableNumber(book.markets.total.line) : null,
+            home_ml: book.markets.moneyline ? toNullableNumber(book.markets.moneyline.over_odds) : null,
+            away_ml: book.markets.moneyline ? toNullableNumber(book.markets.moneyline.under_odds) : null,
+          })),
         };
       }),
     });

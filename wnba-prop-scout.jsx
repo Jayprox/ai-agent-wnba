@@ -377,6 +377,16 @@ function fmtML(value) {
   return n > 0 ? `+${n}` : String(n);
 }
 
+function sportsbookShort(value) {
+  const key = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (key === 'draftkings') return 'DK';
+  if (key === 'fanduel') return 'FD';
+  if (key === 'betmgm') return 'MGM';
+  if (key === 'caesars') return 'CZR';
+  if (key === 'bovada') return 'BOV';
+  return String(value || '').slice(0, 5).toUpperCase();
+}
+
 function pickResult(pick) {
   const raw = String(pick?.result_label || pick?.result || '').toLowerCase();
   if (raw === 'hit') return 'hit';
@@ -414,15 +424,17 @@ function fmtGameTime(value) {
   if (!value) return null;
   const raw = String(value).trim();
   if (!raw) return null;
+  if (/^0(?:\.0+)?$/.test(raw)) return null;
   if (raw.toLowerCase() === 'scheduled') return null;
-  if (/\d/.test(raw) && /(?:am|pm|et|ct|mt|pt|edt|est|cdt|cst|mdt|mst|pdt|pst)/i.test(raw)) return raw;
 
   const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return raw;
+  if (Number.isNaN(parsed.getTime())) {
+    if (/\d/.test(raw) && /(?:am|pm|et|ct|mt|pt|edt|est|cdt|cst|mdt|mst|pdt|pst)/i.test(raw)) return raw;
+    return null;
+  }
   return new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: 'America/New_York',
     timeZoneName: 'short',
   }).format(parsed);
 }
@@ -597,6 +609,10 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
   const venue = TEAM_VENUES[hw] ?? null;
   const gameTime = fmtGameTime(game.time || game.start_time || game.scheduled_at);
   const subline = [gameTime, venue].filter(Boolean).join(' · ');
+  const bookChips = Array.isArray(game.odds_books) && game.odds_books.length
+    ? game.odds_books.slice(0, 5)
+    : (game.odds_sportsbook ? [{ sportsbook: game.odds_sportsbook, sportsbook_short: game.odds_sportsbook_short || sportsbookShort(game.odds_sportsbook), is_default: true }] : []);
+  const defaultBookLabel = game.odds_sportsbook_short || sportsbookShort(game.odds_sportsbook);
 
   const spreadLabel  = game.spread   != null ? fmtGameSpread(hw, game.spread) : '—';
   const totalLabel   = game.total    != null ? fmtOne(game.total)              : '—';
@@ -652,7 +668,7 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
         ))}
       </div>
 
-      {/* Bottom info strip: venue · date · sportsbook */}
+      {/* Bottom info strip: venue · date · sportsbooks */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         marginTop: 8, paddingTop: 7, borderTop: `1px solid ${T.border}`,
@@ -661,15 +677,32 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 6 }}>
           {[gameTime, venue || 'TBA', fmtDate(game.game_date || game.date)].filter(Boolean).join(' · ')}
         </span>
-        {game.odds_sportsbook && (
-          <span style={{
-            background: T.card3, border: `1px solid ${T.border}`,
-            padding: '2px 6px', borderRadius: 4, fontSize: 8,
-            letterSpacing: 0.5, fontWeight: 700, color: T.text2,
-            flexShrink: 0, textTransform: 'uppercase',
-          }}>
-            {game.odds_sportsbook}
-          </span>
+        {bookChips.length > 0 && (
+          <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
+            {bookChips.map(book => {
+              const active = book.is_default || book.sportsbook_short === defaultBookLabel;
+              const label = book.sportsbook_short || sportsbookShort(book.sportsbook);
+              return (
+                <span
+                  key={`${book.sportsbook}-${label}`}
+                  title={book.sportsbook}
+                  style={{
+                    background: active ? T.accentDim : T.card3,
+                    border: `1px solid ${active ? T.accent : T.border}`,
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    fontSize: 8,
+                    letterSpacing: 0.5,
+                    fontWeight: 800,
+                    color: active ? T.accent : T.text2,
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {label}
+                </span>
+              );
+            })}
+          </div>
         )}
       </div>
 

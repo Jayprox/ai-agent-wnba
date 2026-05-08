@@ -35,12 +35,14 @@ function formatEspnEventTime(espnEvent) {
   if (!espnEvent?.date) return null;
   const date = new Date(espnEvent.date);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'America/New_York',
-    timeZoneName: 'short',
-  }).format(date);
+  return date.toISOString().replace(':00.000Z', 'Z');
+}
+
+function normalizeGameTime(value) {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw || raw === '0' || raw === '0.0') return null;
+  return raw;
 }
 
 async function getTeamsByBdlId() {
@@ -83,7 +85,7 @@ function mapGame(game, teamsByBdlId) {
     season_type: game.postseason ? 'playoffs' : 'regular',
     postseason: !!game.postseason,
     period: game.period || null,
-    time: game.time || null,
+    time: normalizeGameTime(game.time),
     league: 'WNBA',
     updated_at: new Date().toISOString(),
   };
@@ -108,7 +110,7 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
     return [];
   }
 
-  const fallbackRows = [];
+  const espnRows = [];
   for (const event of espnEvents) {
     const comp = event.competitions?.[0];
     if (!comp) continue;
@@ -130,12 +132,11 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
     }
 
     const pairKey = `${homeTeam.id}:${visitorTeam.id}`;
-    if (coveredPairs.has(pairKey)) continue; // already ingested from BDL
 
     const homeScore    = Number(homeComp.score)    || null;
     const visitorScore = Number(visitorComp.score) || null;
 
-    fallbackRows.push({
+    espnRows.push({
       bdl_id:             null,
       espn_id:            String(event.id),
       home_team_id:       homeTeam.id,
@@ -151,10 +152,49 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
       time:               formatEspnEventTime(event),
       league:             'WNBA',
       updated_at:         new Date().toISOString(),
+      covered_by_bdl:     coveredPairs.has(pairKey),
     });
   }
 
-  if (!fallbackRows.length) return [];
+  if (!espnRows.length) return [];
+
+  const toDbRow = row => {
+    const { covered_by_bdl, ...dbRow } = row;
+    return dbRow;
+  };
+
+  let updated = [];
+  const bdlCoveredRows = espnRows.filter(row => row.covered_by_bdl);
+  for (const row of bdlCoveredRows) {
+    const dbRow = toDbRow(row);
+    const { data, error } = await supabase
+      .from('games')
+      .update({
+        espn_id: dbRow.espn_id,
+        status: dbRow.status,
+        home_team_score: dbRow.home_team_score,
+        visitor_team_score: dbRow.visitor_team_score,
+        period: dbRow.period,
+        time: dbRow.time,
+        updated_at: dbRow.updated_at,
+      })
+      .eq('game_date', date)
+      .eq('home_team_id', dbRow.home_team_id)
+      .eq('visitor_team_id', dbRow.visitor_team_id)
+      .select('id, espn_id, game_date');
+
+    if (error) {
+      console.warn(`[ingest-games] ESPN schedule update failed for ${dbRow.espn_id}: ${error.message}`);
+      continue;
+    }
+    updated = updated.concat(data || []);
+  }
+
+  const fallbackRows = espnRows.filter(row => !row.covered_by_bdl).map(toDbRow);
+  if (!fallbackRows.length) {
+    if (updated.length) console.log(`[ingest-games] ESPN schedule: updated ${updated.length} BDL-backed game(s)`);
+    return updated;
+  }
 
   // Insert only — these have no bdl_id conflict key, guard by espn_id
   const { data: existing } = await supabase
@@ -166,7 +206,6 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
   const toUpdate = fallbackRows.filter(r => existingEspnIds.has(r.espn_id));
   const toInsert = fallbackRows.filter(r => !existingEspnIds.has(r.espn_id));
 
-  let updated = [];
   for (const row of toUpdate) {
     const { data, error } = await supabase
       .from('games')
@@ -247,4 +286,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingestGames, mapGame, mapStatus, formatEspnEventTime };
+module.exports = { ingestGames, mapGame, mapStatus, formatEspnEventTime, normalizeGameTime };

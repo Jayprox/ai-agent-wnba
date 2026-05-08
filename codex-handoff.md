@@ -1251,6 +1251,39 @@ Notes:
 
 ---
 
+## Backlog — Prediction Market Odds: Polymarket + Kalshi
+
+**Status:** Backlog item added 2026-05-08. Not implemented yet.
+
+**Goal:** Add Polymarket and Kalshi market data using their APIs, then surface those prices alongside the existing sportsbook odds from The Odds API.
+
+**Current state:** `scripts/ingest-odds.js` only ingests sportsbook data through The Odds API into `odds_snapshots`:
+- Game markets: moneyline, spread, totals.
+- Player prop markets: points, rebounds, assists, threes.
+- Cross-book movement/gap signals in `calc-confidence.js` are based only on sportsbook rows currently stored in `odds_snapshots`.
+
+**Implementation decision needed before coding:** Decide whether prediction-market rows should be stored in the existing `odds_snapshots` table or in a new table such as `prediction_market_snapshots`.
+
+Recommended direction:
+- Use a separate table if Polymarket/Kalshi contracts do not map cleanly to sportsbook-style `prop_type`, `line`, `over_odds`, `under_odds` rows.
+- Normalize prediction-market prices to implied probability, and optionally derive American odds for display.
+- Keep sportsbook odds and prediction-market signals separate in confidence scoring until the data quality/mapping is proven.
+
+**Future implementation scope:**
+- Add env vars for any required API keys/secrets, e.g. `KALSHI_API_KEY`, `KALSHI_API_SECRET`, and any Polymarket client config required by the selected endpoint.
+- Create shared API clients for Polymarket and Kalshi with clear rate-limit/error handling.
+- Build an ingestion script that searches WNBA-related markets/contracts for game outcomes and player props when available.
+- Map contracts to local `games`, `teams`, `players`, and prop types.
+- Persist raw provider IDs/contract IDs so snapshots are idempotent and auditable.
+- Add API/frontend display after backend data is validated: show a prediction-market chip or section separate from sportsbook odds.
+
+**Open questions:**
+- Which WNBA markets are consistently available on Polymarket/Kalshi: game winner, spread-like markets, totals, player props, first basket, championship/futures?
+- Do prediction-market prices affect `confidence_score`, or should they only appear as context until enough history exists?
+- Should market liquidity/volume be a gating signal before using a prediction-market price?
+
+---
+
 ## Task H — Algorithm Refinements: Confidence Cap, Implied Team Total, Blowout Modifier
 
 **Goal:** Three targeted improvements to `calc-confidence.js` using data already in `odds_snapshots`. No new tables, no new ingestion scripts. All signals are derivable from spread and total lines already being fetched by `ingest-odds.js`.
@@ -4060,4 +4093,3 @@ Add "AI BOARD" alongside "BOARD" in the top nav. Same orange-on-navy theme, but 
 - Parlay optimizer: brute-force combinations up to 3 legs from top 10 singles (at most C(10,3) = 120 combos — trivially fast)
 - Kelly cap: always apply `Math.min(kelly_fraction, 0.05)` before displaying
 - Claude Haiku call: use server-side `@anthropic-ai/sdk`, never expose API key to frontend
-
