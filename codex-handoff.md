@@ -1216,6 +1216,7 @@ Each slate card should eventually show:
 Implementation notes:
 - Current `games` API response may need venue fields if not already stored/displayed.
 - Odds should use the default sportsbook once that product decision is finalized.
+- Once a game starts, odds shown on game cards and player/prop cards should lock to the latest pregame snapshot. Do not display live odds movement yet; live betting is out of scope for now.
 - Keep the card compact and scannable, matching MLB Prop Scout's slate-card feel rather than adding a large marketing-style layout.
 - Visual reference from MLB Prop Scout screenshot:
   - Dark, dense slate screen with compact cards and subtle borders.
@@ -1248,6 +1249,30 @@ Notes:
   - Pts/Ast/Reb
 - First Basket depends on the Task G Q1/player scoring foundation and likely a future first-basket scoring worker/API.
 - Do not build these tab bodies yet; capture the navigation/design structure when the detailed spec arrives.
+
+---
+
+## Backlog — Odds Locking for Live Games
+
+**Status:** Backlog item added 2026-05-08. Not implemented yet.
+
+**Goal:** Preserve the pregame betting context once a game starts. The Odds API can continue returning updated/live lines during a game, but WNBA Prop Scout does not support live betting yet, so cards should not drift after tipoff.
+
+**Required behavior:**
+- For slate game cards, Full Analysis game cards, and player prop cards, display the latest **pregame** odds once `games.status` becomes `in_progress` or `final`.
+- Confidence scoring should also use locked pregame odds for live/final games, not live odds.
+- Keep collecting raw odds snapshots if useful, but mark or select the display/scoring odds so live changes do not overwrite the user-facing baseline.
+
+**Likely implementation approach:**
+- Prefer odds snapshots with `snapshot_at < scheduled_tip_time` when a reliable game start timestamp exists.
+- If scheduled tip time is unavailable, use the latest snapshot captured before the first observed `in_progress` status transition.
+- Consider adding a field/table later for `locked_odds_snapshot_id` or `locked_at` per game/book/market if selection logic becomes expensive or ambiguous.
+- Update `/api/wnba/slate`, `/api/odds/wnba`, `/api/wnba/props`, and `calc-confidence.js` odds lookup paths together so UI and model agree.
+
+**Open questions:**
+- Do we want to show a small `locked pregame` label on live/final cards?
+- Should the scheduler stop ingesting odds for games after tipoff, or keep ingesting but filter display/scoring to pregame rows?
+- What is the authoritative tipoff timestamp: `games.time`, ESPN event date, or Odds API commence time?
 
 ---
 
@@ -4093,3 +4118,210 @@ Add "AI BOARD" alongside "BOARD" in the top nav. Same orange-on-navy theme, but 
 - Parlay optimizer: brute-force combinations up to 3 legs from top 10 singles (at most C(10,3) = 120 combos — trivially fast)
 - Kelly cap: always apply `Math.min(kelly_fraction, 0.05)` before displaying
 - Claude Haiku call: use server-side `@anthropic-ai/sdk`, never expose API key to frontend
+
+---
+
+## UI Backlog — Slate Game Card Simplification
+
+**Status:** Backlog. Do not implement until directed.
+
+**Goal:** Clean up the SLATE tab game cards. Currently each card expands to show inline prop sub-tabs (PTS, REB, AST, PRA, STL, BLK, 3PM, FB). This clutters the slate view and duplicates functionality that belongs in the full game detail screen.
+
+### Changes
+
+**1 — Remove inline prop tabs from SLATE game cards**
+
+The expanded game card in the SLATE tab should not render the prop stat tab bar (PTS / REB / AST / PRA / STL / BLK / 3PM / FB) or the prop list beneath it. The card should show only:
+- Matchup header (visitor @ home, status badge)
+- Game time + venue
+- Odds strip (SPR, O/U, ML)
+- Sportsbook pill row (DK, FD, MGM, etc.)
+- Top pick callout line (already present — keep this)
+
+Remove all state and rendering logic related to the inline prop sub-tabs from the SLATE game card component.
+
+**2 — Clicking a game card opens the OVERVIEW tab**
+
+When the user clicks anywhere on a collapsed game card in the SLATE tab, navigate to the full game detail screen and land on the OVERVIEW tab by default (not PROPS or any prop sub-tab). The OVERVIEW tab shows the full matchup breakdown, odds, and form — giving context before the user drills into props.
+
+The existing "Full Analysis →" link and the card click handler should both route to the game detail screen with `activeTab = 'overview'`.
+
+### Acceptance checks
+- SLATE game cards no longer render any prop stat tabs or prop rows when expanded
+- Clicking a card (or "Full Analysis →") opens the game detail screen on the OVERVIEW tab
+- The BOARD tab and game detail screen prop tabs are unaffected
+
+---
+
+## Task X — Fuzzy Player Name Matching in `ingest-odds.js`
+
+**Goal:** Eliminate "No player match" warnings caused by name format differences between BDL (our players table) and the Odds API. Skylar Diggins-Smith is the first case — there will be more (trades, hyphenated names, nicknames, Jr./Sr. suffixes, accented characters). The fix has two layers: a smarter matching algorithm and a persistent alias table for manual overrides.
+
+**Status:** Ready to implement. Root cause confirmed: `normalizeName("Skylar Diggins-Smith")` → `"skylardigginssmith"` does not match `"skylardiggins"` via either exact or suffix check.
+
+**Files to change:** `scripts/ingest-odds.js` + one SQL migration.
+
+---
+
+### Step 1 — DB migration: `player_name_aliases` table
+
+Run in Supabase SQL editor:
+
+```sql
+CREATE TABLE IF NOT EXISTS player_name_aliases (
+  id          SERIAL PRIMARY KEY,
+  alias       TEXT NOT NULL,          -- normalized alias (lowercase, alphanumeric only)
+  player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  source      TEXT DEFAULT 'auto',    -- 'auto' | 'manual'
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (alias)
+);
+CREATE INDEX IF NOT EXISTS idx_player_name_aliases_alias ON player_name_aliases(alias);
+```
+
+---
+
+### Step 2 — Enhanced `findPlayerByName()` with three-tier fallback
+
+Replace the current `findPlayerByName` function with this cascade:
+
+```js
+async function findPlayerByName(name, playersByName, supabaseClient) {
+  const normalized = normalizeName(name);
+  if (!normalized) return null;
+
+  // Tier 1: exact normalized match (fastest, already works for most players)
+  if (playersByName.has(normalized)) return playersByName.get(normalized);
+
+  // Tier 2: alias table lookup (manual overrides + previously auto-resolved matches)
+  const { data: aliasRow } = await supabaseClient
+    .from('player_name_aliases')
+    .select('player_id')
+    .eq('alias', normalized)
+    .maybeSingle();
+  if (aliasRow) {
+    const player = Array.from(playersByName.values()).find(p => p.id === aliasRow.player_id);
+    if (player) return player;
+  }
+
+  // Tier 3: token intersection — split on word boundaries BEFORE stripping,
+  // check if every token in the DB name appears in the odds name or vice versa.
+  // Catches: "Skylar Diggins" ↔ "Skylar Diggins-Smith", "A'ja" ↔ "Aja", suffixes
+  const nameTokens = tokenize(name);
+  const entries = Array.from(playersByName.entries());
+
+  for (const [key, player] of entries) {
+    const dbTokens = tokenize(player.full_name);
+    // All DB name tokens must appear in the incoming name tokens
+    const allDbTokensMatch = dbTokens.every(t => nameTokens.some(nt => nt.startsWith(t) || t.startsWith(nt)));
+    // And the first token (first name) must match to avoid false positives
+    const firstNameMatch = dbTokens[0] && nameTokens[0] && (
+      dbTokens[0].startsWith(nameTokens[0]) || nameTokens[0].startsWith(dbTokens[0])
+    );
+    if (allDbTokensMatch && firstNameMatch) {
+      // Auto-persist so future lookups hit Tier 1 or Tier 2
+      await persistAlias(normalized, player.id, supabaseClient);
+      console.log(`[ingest-odds] Fuzzy match: "${name}" → "${player.full_name}" (token)`);
+      return player;
+    }
+  }
+
+  // Tier 4: Levenshtein distance — for remaining edge cases (typos, middle initials)
+  // Only attempt on names longer than 8 chars to avoid false positives on short names
+  if (normalized.length > 8) {
+    let bestMatch = null;
+    let bestDist  = Infinity;
+    for (const [, player] of entries) {
+      const dist = levenshtein(normalized, normalizeName(player.full_name));
+      const threshold = Math.floor(normalized.length * 0.25); // max 25% of name length
+      if (dist < bestDist && dist <= threshold && dist <= 4) {
+        bestDist  = dist;
+        bestMatch = player;
+      }
+    }
+    if (bestMatch) {
+      await persistAlias(normalized, bestMatch.id, supabaseClient);
+      console.log(`[ingest-odds] Fuzzy match: "${name}" → "${bestMatch.full_name}" (levenshtein d=${bestDist})`);
+      return bestMatch;
+    }
+  }
+
+  return null;
+}
+```
+
+---
+
+### Step 3 — Helper functions to add
+
+```js
+// Split a display name into lowercase tokens before stripping punctuation
+function tokenize(name) {
+  return String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .split(/[\s\-'.]+/)   // split on spaces, hyphens, apostrophes, dots
+    .map(t => t.replace(/[^a-z0-9]/g, ''))
+    .filter(Boolean);
+}
+
+// Iterative Levenshtein distance (pure JS, no library)
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i-1] === b[j-1]
+        ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    }
+  }
+  return dp[m][n];
+}
+
+// Persist a successful fuzzy match so it's instant next time
+async function persistAlias(alias, playerId, supabaseClient) {
+  await supabaseClient
+    .from('player_name_aliases')
+    .upsert({ alias, player_id: playerId, source: 'auto' }, { onConflict: 'alias' });
+}
+```
+
+---
+
+### Step 4 — Update call sites
+
+`findPlayerByName` now needs `supabase` as a third argument. Update all call sites in `ingestOdds()` accordingly. Change the "No player match" warning to only fire after all tiers fail:
+
+```js
+const player = await findPlayerByName(playerName, playersByName, supabase);
+if (!player) {
+  console.warn(`[ingest-odds] No player match for "${playerName}" — add to player_name_aliases if needed`);
+}
+```
+
+---
+
+### Step 5 — Seed the known alias for Skylar Diggins-Smith
+
+After the migration runs, insert the known alias manually (or let the auto-persist handle it on next run):
+
+```sql
+INSERT INTO player_name_aliases (alias, player_id, source)
+SELECT 'skylardigginssmith', id, 'manual'
+FROM players WHERE first_name = 'Skylar' AND last_name = 'Diggins'
+ON CONFLICT (alias) DO NOTHING;
+```
+
+---
+
+### Acceptance checks
+
+- `node scripts/ingest-odds.js` — zero "No player match" warnings for Skylar Diggins-Smith
+- Query `SELECT alias, player_id, source FROM player_name_aliases` — auto-resolved aliases appear with `source = 'auto'`
+- Introduce a test case: temporarily rename a player in the alias lookup to have a hyphenated suffix — confirm Tier 3 resolves it and persists the alias
+- No regressions: all previously matching players still match (Tier 1 still hits first for exact matches)
+- `node --check scripts/ingest-odds.js` passes
+
