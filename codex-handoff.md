@@ -4325,3 +4325,107 @@ ON CONFLICT (alias) DO NOTHING;
 - No regressions: all previously matching players still match (Tier 1 still hits first for exact matches)
 - `node --check scripts/ingest-odds.js` passes
 
+
+---
+
+## UI Backlog — Game Overview: Real Team Records + Odds Matching Fix
+
+**Status:** Backlog. Do not implement until directed.
+
+**Goal:** Fix two gaps visible in the game detail OVERVIEW tab:
+1. "Record unavailable" — W-L records are never computed from real game data
+2. "Odds unavailable" — game-level odds (spread, O/U, ML) not showing for some games due to odds event → game ID matching failures
+
+---
+
+### Fix 1 — Real W-L records in the server games endpoint
+
+**File:** `server.js`
+
+In the games endpoint (around line 243), after loading games for the date, compute each team's season record from the `games` table:
+
+```js
+// For all teams appearing in today's games, count their wins and losses
+const teamIds = [...new Set(games.flatMap(g => [g.home_team_id, g.visitor_team_id]))];
+
+const { data: seasonResults } = await supabase
+  .from('games')
+  .select('home_team_id, visitor_team_id, home_team_score, visitor_team_score')
+  .eq('season', currentSeason)
+  .eq('status', 'final')
+  .or(teamIds.map(id => `home_team_id.eq.${id},visitor_team_id.eq.${id}`).join(','));
+
+// Build wins/losses map per team
+const records = new Map(); // team_id → { wins, losses }
+for (const result of seasonResults || []) {
+  const homeWon = result.home_team_score > result.visitor_team_score;
+  for (const [teamId, won] of [
+    [result.home_team_id, homeWon],
+    [result.visitor_team_id, !homeWon],
+  ]) {
+    if (!records.has(teamId)) records.set(teamId, { wins: 0, losses: 0 });
+    const r = records.get(teamId);
+    if (won) r.wins++; else r.losses++;
+  }
+}
+
+const recordStr = teamId => {
+  const r = records.get(teamId);
+  return r ? `${r.wins}-${r.losses}` : '0-0';
+};
+```
+
+Then attach `home_record` and `visitor_record` to each game object in the response:
+```js
+home_record:    recordStr(game.home_team_id),
+visitor_record: recordStr(game.visitor_team_id),
+```
+
+---
+
+### Fix 2 — Odds game matching
+
+**File:** `scripts/ingest-odds.js`
+
+The `findMatchingGame()` function matches odds API events to local games by comparing the last word of each team name (e.g. "Wings", "Fever"). This fails when:
+- The odds API uses a city name instead of nickname ("Dallas" vs "Wings")
+- The team name in the odds API doesn't match the name stored in our `teams` table
+
+**Improved matching cascade in `findMatchingGame()`:**
+
+```js
+function findMatchingGame(event, games) {
+  const normalize = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+  const homeNorm = normalize(event.home_team);
+  const awayNorm = normalize(event.away_team);
+
+  return games.find(game => {
+    const h = normalize(game.home_name);
+    const a = normalize(game.away_name);
+    // Try full normalized name contains, last word, or any word overlap
+    const homeMatch = h.includes(homeNorm) || homeNorm.includes(h) ||
+                      lastWord(game.home_name) === lastWord(event.home_team);
+    const awayMatch = a.includes(awayNorm) || awayNorm.includes(a) ||
+                      lastWord(game.away_name) === lastWord(event.away_team);
+    return homeMatch && awayMatch;
+  }) ?? null;
+}
+```
+
+Also add a warning when an event fails to match so it's visible in logs:
+```js
+if (!matchedGame) {
+  console.warn(`[ingest-odds] No game match for event: ${event.home_team} vs ${event.away_team} (${event.commence_time})`);
+}
+```
+
+---
+
+### Acceptance checks
+
+- `GET /api/wnba/games?date=<any date with completed games>` — `home_record` and `visitor_record` are non-null and accurate (e.g. "3-1")
+- Season record resets correctly at 0-0 on opening day (no completed games yet)
+- `node scripts/ingest-odds.js` — no unmatched events for games that exist in our DB
+- All previously matched events still match (no regression)
+- OVERVIEW tab shows real record strings and populated odds strip for all games
+

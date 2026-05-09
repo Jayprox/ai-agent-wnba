@@ -65,8 +65,18 @@ async function fetchPlayerPropOdds(eventId) {
 }
 
 async function getGamesWithTeams() {
+  // Only look at games within a 7-day window (today ± 3 days) to avoid matching
+  // odds API events to old same-matchup games from prior seasons.
+  const today = new Date();
+  const from  = new Date(today); from.setDate(today.getDate() - 1);
+  const to    = new Date(today); to.setDate(today.getDate() + 6);
+  const fromIso = from.toISOString().slice(0, 10);
+  const toIso   = to.toISOString().slice(0, 10);
+
   const [{ data: games, error: gamesError }, { data: teams, error: teamsError }] = await Promise.all([
-    supabase.from('games').select('id, home_team_id, visitor_team_id, game_date'),
+    supabase.from('games').select('id, home_team_id, visitor_team_id, game_date')
+      .gte('game_date', fromIso)
+      .lte('game_date', toIso),
     supabase.from('teams').select('id, name'),
   ]);
 
