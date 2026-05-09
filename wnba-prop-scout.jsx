@@ -6,6 +6,8 @@ import { useState, useEffect, useCallback } from 'react';
 const IS_SANDBOX = false;
 const API_BASE   = import.meta.env.VITE_API_BASE || '';
 const SEASON     = 2025;
+const SLATE_RESET_TIME_ZONE = 'Pacific/Honolulu';
+const SLATE_LOOKAHEAD_DAYS = 14;
 
 // ============================================================
 // THEME — Direction A: Orange accent on deep navy
@@ -443,7 +445,36 @@ function playerName(p) {
   return p.name || p.full_name || [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown';
 }
 function playerPos(p) { return p.pos || p.position || '—'; }
-function today()      { return new Date().toISOString().slice(0, 10); }
+
+function dateInputValue(date = new Date(), timeZone) {
+  if (timeZone) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const byType = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    return `${byType.year}-${byType.month}-${byType.day}`;
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function today() { return dateInputValue(new Date(), SLATE_RESET_TIME_ZONE); }
+
+function shiftDateValue(value, days) {
+  const date = new Date(value + 'T12:00:00');
+  date.setDate(date.getDate() + days);
+  return dateInputValue(date);
+}
+
+function maxSlateDate() {
+  return shiftDateValue(today(), SLATE_LOOKAHEAD_DAYS);
+}
 
 // ============================================================
 // API LAYER
@@ -1968,13 +1999,24 @@ export default function App() {
   }
 
   function shiftDate(days) {
-    const d = new Date(selectedDate + 'T12:00:00');
-    d.setDate(d.getDate() + days);
-    const next = d.toISOString().slice(0, 10);
-    if (next > today()) return;
+    const next = shiftDateValue(selectedDate, days);
+    if (next > maxSlateDate()) return;
     setSelectedDate(next);
     setSelectedGame(null);
     setExpandedGameId(null);
+  }
+
+  async function loadSlateWithFallback(date) {
+    const data = await apiGetSlate(date);
+    if (data.length || date < today()) return { date, data };
+
+    for (let offset = 1; offset <= SLATE_LOOKAHEAD_DAYS; offset += 1) {
+      const nextDate = shiftDateValue(date, offset);
+      const nextData = await apiGetSlate(nextDate);
+      if (nextData.length) return { date: nextDate, data: nextData };
+    }
+
+    return { date, data };
   }
 
   useEffect(() => {
@@ -1983,10 +2025,19 @@ export default function App() {
     async function loadAll() {
       setLoadingSlate(true); setLoadingPicks(true);
       setSlateError(null);   setPicksError(null);
+      let picksDate = selectedDate;
 
       try {
-        const data = await apiGetSlate(selectedDate);
-        if (!cancelled) setGames(data);
+        const slate = await loadSlateWithFallback(selectedDate);
+        picksDate = slate.date;
+        if (!cancelled) {
+          if (slate.date !== selectedDate) {
+            setSelectedDate(slate.date);
+            setSelectedGame(null);
+            setExpandedGameId(null);
+          }
+          setGames(slate.data);
+        }
       } catch {
         if (!cancelled) setSlateError('Failed to load slate.');
       } finally {
@@ -1994,7 +2045,7 @@ export default function App() {
       }
 
       try {
-        const data = await apiGetTopPicks(selectedDate);
+        const data = await apiGetTopPicks(picksDate);
         if (!cancelled) setTopPicks(data);
       } catch {
         if (!cancelled) setPicksError('Failed to load picks.');
@@ -2042,15 +2093,15 @@ export default function App() {
               <input
                 type="date"
                 value={selectedDate}
-                max={today()}
+                max={maxSlateDate()}
                 onChange={e => { if (e.target.value) { setSelectedDate(e.target.value); setSelectedGame(null); setExpandedGameId(null); } }}
                 style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', top: 0, left: 0, cursor: 'pointer' }}
               />
             </label>
             <button
               onClick={() => shiftDate(1)}
-              disabled={selectedDate >= today()}
-              style={{ background: 'none', border: 'none', color: selectedDate >= today() ? T.border : T.text3, cursor: selectedDate >= today() ? 'default' : 'pointer', fontSize: 18, padding: '0 5px', lineHeight: 1 }}
+              disabled={selectedDate >= maxSlateDate()}
+              style={{ background: 'none', border: 'none', color: selectedDate >= maxSlateDate() ? T.border : T.text3, cursor: selectedDate >= maxSlateDate() ? 'default' : 'pointer', fontSize: 18, padding: '0 5px', lineHeight: 1 }}
             >›</button>
           </div>
         </div>
