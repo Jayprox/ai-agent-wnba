@@ -163,6 +163,57 @@ async function calcMetrics(season = getSeason()) {
   return { season, upserted, failed };
 }
 
+async function calcTeamRecords(season = getSeason()) {
+  const { data: games, error } = await supabase
+    .from('games')
+    .select('home_team_id, visitor_team_id, home_team_score, visitor_team_score')
+    .eq('season', season)
+    .eq('status', 'final');
+
+  if (error) throw error;
+
+  const records = new Map(); // team_id → { wins, losses }
+  for (const game of games || []) {
+    const hs = Number(game.home_team_score);
+    const vs = Number(game.visitor_team_score);
+    if (!Number.isFinite(hs) || !Number.isFinite(vs) || hs === vs) continue;
+    const homeWon = hs > vs;
+
+    for (const [teamId, won] of [
+      [game.home_team_id, homeWon],
+      [game.visitor_team_id, !homeWon],
+    ]) {
+      if (teamId == null) continue;
+      if (!records.has(teamId)) records.set(teamId, { wins: 0, losses: 0 });
+      const r = records.get(teamId);
+      won ? r.wins++ : r.losses++;
+    }
+  }
+
+  const rows = Array.from(records.entries()).map(([team_id, r]) => ({
+    team_id,
+    season,
+    wins: r.wins,
+    losses: r.losses,
+    record: `${r.wins}-${r.losses}`,
+    updated_at: new Date().toISOString(),
+  }));
+
+  if (!rows.length) {
+    console.log(`[calc-metrics] calcTeamRecords: no final games — nothing to upsert`);
+    return { season, upserted: 0 };
+  }
+
+  const { data, error: uErr } = await supabase
+    .from('team_season_records')
+    .upsert(rows, { onConflict: 'team_id,season' })
+    .select('id');
+
+  if (uErr) throw uErr;
+  console.log(`[calc-metrics] Team records updated — ${data?.length ?? 0} teams (season ${season})`);
+  return { season, upserted: data?.length ?? 0 };
+}
+
 if (require.main === module) {
   calcMetrics().catch(error => {
     console.error('[calc-metrics] Failed:', error.message);
@@ -170,4 +221,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { calcMetrics, buildMetricRow };
+module.exports = { calcMetrics, buildMetricRow, calcTeamRecords };

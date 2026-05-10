@@ -16,7 +16,7 @@ require('dotenv').config();
 const { ingestGames } = require('./ingest-games');
 const { ingestEspnIds } = require('./ingest-espn-ids');
 const { ingestPlayerLogs } = require('./ingest-player-logs');
-const { calcMetrics } = require('./calc-metrics');
+const { calcMetrics, calcTeamRecords } = require('./calc-metrics');
 const { calcMatchupRatings } = require('./calc-matchup-ratings');
 const { calcPaceRatings } = require('./calc-pace-ratings');
 const { ingestWnbaStats } = require('./ingest-wnba-stats');
@@ -99,6 +99,13 @@ async function backfill() {
     console.log(`[backfill] Metrics done — upserted ${result.upserted}, failed ${result.failed}`);
   } catch (err) {
     console.error(`[backfill] calcMetrics failed: ${err.message}`);
+  }
+
+  try {
+    const tr = await calcTeamRecords(season);
+    console.log(`[backfill] Team records done — upserted ${tr.upserted}`);
+  } catch (err) {
+    console.error(`[backfill] calcTeamRecords failed: ${err.message}`);
   }
 
   console.log(`[backfill] Step 5/8: calculating matchup ratings for season ${season}...`);

@@ -4429,3 +4429,225 @@ if (!matchedGame) {
 - All previously matched events still match (no regression)
 - OVERVIEW tab shows real record strings and populated odds strip for all games
 
+
+---
+
+## Task Y — Production Hardening: Scheduler Reliability + Slate Completeness
+
+**Goal:** Make the app fully self-operating. On opening day, several things required manual intervention: no pre-game props job, odds matching to wrong season, records never computed, no visibility when jobs fail. This task fixes all of it so the slate is solid every day without touching anything.
+
+**Status:** Ready to implement. All root causes confirmed.
+
+**Files to change:** `scripts/scheduler.js`, `server.js`, `scripts/ingest-games.js`, `scripts/calc-metrics.js`, `.env.example`
+
+---
+
+### Fix 1 — Richer `/health` endpoint
+
+**File:** `server.js`
+
+Replace the current minimal health check with one that reports pipeline state — when each job last ran and whether today's data is populated:
+
+```js
+app.get('/health', async (_req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [{ count: gameCount }, { count: propCount }, { count: oddsCount }] = await Promise.all([
+    supabase.from('games').select('*', { count: 'exact', head: true }).eq('game_date', today),
+    supabase.from('prop_analysis_results').select('*', { count: 'exact', head: true }).eq('game_date', today),
+    supabase.from('odds_snapshots').select('*', { count: 'exact', head: true }).gte('snapshot_at', today + 'T00:00:00Z'),
+  ]);
+
+  res.json({
+    status: 'ok',
+    date: today,
+    today: {
+      games:   gameCount  ?? 0,
+      props:   propCount  ?? 0,
+      odds:    oddsCount  ?? 0,
+    },
+    env: {
+      supabaseUrlSet:          !!process.env.SUPABASE_URL,
+      supabaseServiceRoleSet:  !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      oddsApiKeySet:           !!process.env.ODDS_API_KEY,
+      bdlApiKeySet:            !!process.env.BDL_API_KEY,
+    },
+  });
+});
+```
+
+---
+
+### Fix 2 — Startup bootstrap in `server.js`
+
+On server boot, check if today's games exist but have no props. If so, trigger the pre-game chain automatically. This handles the "Railway restarted mid-afternoon and props are missing" failure mode.
+
+Add after `app.listen(...)`:
+
+```js
+async function bootstrapToday() {
+  const today = new Date().toISOString().slice(0, 10);
+  const hour  = new Date().getHours(); // ET hour — skip bootstrap if before 11am or after 8pm
+
+  if (hour < 11 || hour > 20) return;
+
+  const { count: gameCount } = await supabase
+    .from('games').select('*', { count: 'exact', head: true }).eq('game_date', today);
+  const { count: propCount } = await supabase
+    .from('prop_analysis_results').select('*', { count: 'exact', head: true }).eq('game_date', today);
+
+  if ((gameCount ?? 0) === 0) {
+    console.log('[bootstrap] No games for today — running ingest-games + ESPN fallback');
+    const { ingestGames } = require('./scripts/ingest-games');
+    await ingestGames().catch(err => console.error('[bootstrap] ingestGames failed:', err.message));
+  }
+
+  if ((propCount ?? 0) === 0 && (gameCount ?? 0) > 0) {
+    console.log('[bootstrap] Games exist but no props — running odds + confidence');
+    const { ingestOdds }    = require('./scripts/ingest-odds');
+    const { calcConfidence } = require('./scripts/calc-confidence');
+    await ingestOdds().catch(err => console.error('[bootstrap] ingestOdds failed:', err.message));
+    await calcConfidence({ date: today }).catch(err => console.error('[bootstrap] calcConfidence failed:', err.message));
+  }
+}
+
+bootstrapToday().catch(err => console.error('[bootstrap] Failed:', err.message));
+```
+
+---
+
+### Fix 3 — Scheduler failure alerting via webhook
+
+**File:** `scripts/scheduler.js`, `.env.example`
+
+Add an optional `ALERT_WEBHOOK_URL` env var (works with Discord, Slack, or any webhook endpoint). When any scheduled job throws, post a one-line alert:
+
+```js
+async function sendAlert(jobName, error) {
+  const url = process.env.ALERT_WEBHOOK_URL;
+  if (!url) return;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: `🚨 **WNBA Prop Scout** — \`${jobName}\` failed at ${new Date().toISOString()}\n\`\`\`${error.message}\`\`\``,
+      }),
+    });
+  } catch (_) { /* never let alerting crash the process */ }
+}
+
+async function runJob(name, fn) {
+  console.log(`[scheduler] ${timestamp()} starting ${name}`);
+  try {
+    await fn();
+    console.log(`[scheduler] ${timestamp()} completed ${name}`);
+  } catch (error) {
+    console.error(`[scheduler] ${timestamp()} ${name} failed:`, error.message);
+    await sendAlert(name, error);
+  }
+}
+```
+
+Add to `.env.example`:
+```
+# Optional: Discord/Slack webhook for scheduler failure alerts
+# ALERT_WEBHOOK_URL=https://discord.com/api/webhooks/your-webhook-id/your-token
+```
+
+---
+
+### Fix 4 — Team W-L records computed nightly
+
+**File:** `scripts/calc-metrics.js` (add a new exported function) and `server.js`
+
+Add `calcTeamRecords(season)` to `calc-metrics.js`:
+
+```js
+async function calcTeamRecords(season) {
+  const { data: games, error } = await supabase
+    .from('games')
+    .select('home_team_id, visitor_team_id, home_team_score, visitor_team_score')
+    .eq('season', season)
+    .eq('status', 'final');
+
+  if (error) throw error;
+
+  const records = new Map(); // team_id → { wins, losses }
+  for (const game of games || []) {
+    const homeWon = Number(game.home_team_score) > Number(game.visitor_team_score);
+    for (const [teamId, won] of [
+      [game.home_team_id, homeWon],
+      [game.visitor_team_id, !homeWon],
+    ]) {
+      if (!records.has(teamId)) records.set(teamId, { wins: 0, losses: 0 });
+      const r = records.get(teamId);
+      won ? r.wins++ : r.losses++;
+    }
+  }
+
+  const rows = Array.from(records.entries()).map(([team_id, r]) => ({
+    team_id,
+    season,
+    wins:   r.wins,
+    losses: r.losses,
+    record: `${r.wins}-${r.losses}`,
+    updated_at: new Date().toISOString(),
+  }));
+
+  if (!rows.length) return { upserted: 0 };
+
+  const { data, error: uErr } = await supabase
+    .from('team_season_records')
+    .upsert(rows, { onConflict: 'team_id,season' })
+    .select('id');
+
+  if (uErr) throw uErr;
+  console.log(`[calc-metrics] Team records updated — ${data.length} teams`);
+  return { upserted: data.length };
+}
+```
+
+**DB migration** (run in Supabase SQL editor):
+```sql
+CREATE TABLE IF NOT EXISTS team_season_records (
+  id         SERIAL PRIMARY KEY,
+  team_id    INTEGER NOT NULL REFERENCES teams(id),
+  season     SMALLINT NOT NULL,
+  wins       SMALLINT NOT NULL DEFAULT 0,
+  losses     SMALLINT NOT NULL DEFAULT 0,
+  record     TEXT NOT NULL DEFAULT '0-0',
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (team_id, season)
+);
+```
+
+Wire `calcTeamRecords` into the post-midnight scheduler job after `calcMetrics()`. Wire it into `backfill-season.js` as well.
+
+In `server.js` games endpoint, join `team_season_records` to attach `home_record` and `visitor_record` to each game object. Fall back to `'0-0'` when no record row exists yet (opening day).
+
+---
+
+### Fix 5 — Injury summary on slate card
+
+**File:** `server.js` (games endpoint) and `wnba-prop-scout.jsx` (game card)
+
+In the games endpoint, for each game load the latest `injury_reports` for players on both teams where `status IN ('out', 'doubtful', 'questionable', 'gtd')`. Attach as `injury_notes: ['Clark GTD', 'Stewart OUT']` on the game object. Limit to 3 most notable (out > doubtful > questionable > gtd).
+
+In the SLATE game card, render injury notes as a small amber line below the odds strip:
+```
+⚠ IND: Clark GTD · CON: DeShields OUT
+```
+
+---
+
+### Acceptance checks
+
+- `GET /health` returns `today.games`, `today.props`, `today.odds` with real counts
+- Server boot when props are missing auto-triggers ingest + confidence (test by clearing today's props and restarting)
+- `ALERT_WEBHOOK_URL` set to a Discord webhook → artificially throw in a scheduler job → alert appears in Discord within 30 seconds
+- `team_season_records` table populated after running `calcTeamRecords(2026)` with completed games
+- SLATE game cards show "3-1" style records instead of "Record unavailable"
+- SLATE game cards show injury summary line when players are listed
+- No regressions on existing endpoints
+

@@ -207,6 +207,7 @@ const SANDBOX = {
         { date:'2024-07-14', home:'NY',  away:'LV',  score:'82-79' },
       ],
       spread: -2.5, total: 162.5, home_ml: -140, away_ml: 118,
+      injury_notes: ['LV: Wilson GTD', 'NY: Jones QUESTIONABLE'],
     },
     {
       id: 'g2',
@@ -698,6 +699,12 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
           </div>
         ))}
       </div>
+
+      {Array.isArray(game.injury_notes) && game.injury_notes.length > 0 && (
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', marginTop: 8, lineHeight: 1.4 }}>
+          ⚠ {game.injury_notes.join(' · ')}
+        </div>
+      )}
 
       {/* Bottom info strip: venue · date · sportsbooks */}
       <div style={{

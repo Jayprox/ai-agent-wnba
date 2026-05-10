@@ -9,7 +9,7 @@ const { ingestPlayerLogs } = require('./ingest-player-logs');
 const { ingestTeamLogs } = require('./ingest-team-logs');
 const { ingestOdds } = require('./ingest-odds');
 const { ingestInjuries } = require('./ingest-injuries');
-const { calcMetrics } = require('./calc-metrics');
+const { calcMetrics, calcTeamRecords } = require('./calc-metrics');
 const { calcMatchupRatings } = require('./calc-matchup-ratings');
 const { calcPaceRatings } = require('./calc-pace-ratings');
 const { ingestWnbaStats } = require('./ingest-wnba-stats');
@@ -23,6 +23,24 @@ function timestamp() {
   return new Date().toISOString();
 }
 
+async function sendAlert(jobName, error) {
+  const url = process.env.ALERT_WEBHOOK_URL;
+  if (!url) return;
+  try {
+    const safeMsg = error?.message || String(error);
+    const plain = `WNBA Prop Scout — ${jobName} failed at ${new Date().toISOString()}: ${safeMsg}`;
+    const discordBody =
+      `🚨 **WNBA Prop Scout** — \`${jobName}\` failed at ${new Date().toISOString()}\n` +
+      `\`\`\`${safeMsg}\`\`\``;
+    const isDiscord = /\.discord(?:app)?\.com\/api\/webhooks\//i.test(url);
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(isDiscord ? { content: discordBody } : { text: plain }),
+    });
+  } catch (_) { /* never let alerting crash the process */ }
+}
+
 async function runJob(name, fn) {
   console.log(`[scheduler] ${timestamp()} starting ${name}`);
   try {
@@ -30,6 +48,7 @@ async function runJob(name, fn) {
     console.log(`[scheduler] ${timestamp()} completed ${name}`);
   } catch (error) {
     console.error(`[scheduler] ${timestamp()} ${name} failed:`, error.message);
+    await sendAlert(name, error);
   }
 }
 
@@ -67,6 +86,7 @@ function startScheduler() {
     await ingestPlayerLogs(); // pull box scores from ESPN
     await ingestTeamLogs();
     await calcMetrics();
+    await calcTeamRecords(Number(process.env.SEASON || new Date().getFullYear()));
     await calcMatchupRatings();
     await calcPaceRatings();
     await ingestWnbaStats();

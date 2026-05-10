@@ -192,6 +192,179 @@ function groupOddsSnapshots(rows) {
     .sort((a, b) => sportsbookRank(a.sportsbook) - sportsbookRank(b.sportsbook) || String(a.sportsbook).localeCompare(String(b.sportsbook)));
 }
 
+// Pipeline / slate helpers — Task Y
+function easternHour() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(new Date());
+  const h = parts.find(p => p.type === 'hour');
+  return h ? Number(h.value) : NaN;
+}
+
+const INJURY_STATUS_WEIGHT = {
+  out: 4,
+  doubtful: 3,
+  questionable: 2,
+  gtd: 1,
+};
+
+function injurySeverity(status) {
+  const key = String(status || '').toLowerCase().trim();
+  return INJURY_STATUS_WEIGHT[key] ?? 0;
+}
+
+function fmtInjuryStatus(status) {
+  const u = String(status || '').trim().toUpperCase();
+  if (u === 'GTD') return 'GTD';
+  return u.slice(0, 8);
+}
+
+async function pipelineCountsForDate(dateIso) {
+  if (!supabase) throw new Error('Supabase client not initialized');
+
+  const { count: gameCount, error: gErr } = await supabase
+    .from('games')
+    .select('*', { count: 'exact', head: true })
+    .eq('game_date', dateIso);
+  if (gErr) throw gErr;
+
+  const { data: gameRows, error: idErr } = await supabase
+    .from('games')
+    .select('id')
+    .eq('game_date', dateIso);
+
+  if (idErr) throw idErr;
+
+  const ids = (gameRows || []).map(row => row.id);
+  let propCount = 0;
+  if (ids.length > 0) {
+    const { count: pc, error: pErr } = await supabase
+      .from('prop_analysis_results')
+      .select('*', { count: 'exact', head: true })
+      .in('game_id', ids);
+    if (pErr) throw pErr;
+    propCount = pc ?? 0;
+  }
+
+  const dayStartZ = `${dateIso}T00:00:00.000Z`;
+  const { count: oddsCount, error: oErr } = await supabase
+    .from('odds_snapshots')
+    .select('*', { count: 'exact', head: true })
+    .gte('snapshot_at', dayStartZ);
+
+  if (oErr) throw oErr;
+
+  return {
+    games: gameCount ?? 0,
+    props: propCount,
+    odds: oddsCount ?? 0,
+  };
+}
+
+async function loadTeamSeasonRecords(gameRows) {
+  const lookup = new Map();
+  if (!supabase || !gameRows?.length) return lookup;
+
+  const yr = new Date().getFullYear();
+  const seasons = [...new Set(gameRows.map(g => {
+    const sn = Number(g.season);
+    return Number.isFinite(sn) ? sn : yr;
+  }))];
+  const teamIds = new Set();
+  for (const g of gameRows) {
+    if (g.home_team_id != null) teamIds.add(g.home_team_id);
+    if (g.visitor_team_id != null) teamIds.add(g.visitor_team_id);
+  }
+
+  const tids = Array.from(teamIds);
+  if (!tids.length || !seasons.length) return lookup;
+
+  const { data, error } = await supabase
+    .from('team_season_records')
+    .select('team_id, season, record')
+    .in('team_id', tids)
+    .in('season', seasons);
+
+  if (error) throw error;
+  for (const row of data || []) {
+    lookup.set(`${Number(row.season)}:${row.team_id}`, row.record ?? '0-0');
+  }
+  return lookup;
+}
+
+async function buildInjuryNotesByGameId(gameRows, teamsById) {
+  const notesByGame = new Map(); // game_id → string[]
+  if (!supabase || !gameRows?.length) return notesByGame;
+
+  const teamIds = new Set();
+  for (const g of gameRows) {
+    if (g.home_team_id != null) teamIds.add(g.home_team_id);
+    if (g.visitor_team_id != null) teamIds.add(g.visitor_team_id);
+  }
+  const tids = Array.from(teamIds);
+  if (!tids.length) return notesByGame;
+
+  const { data: players, error: pErr } = await supabase
+    .from('players')
+    .select('id, team_id, last_name')
+    .in('team_id', tids);
+
+  if (pErr) throw pErr;
+
+  const roster = players || [];
+  if (!roster.length) return notesByGame;
+
+  const pidList = roster.map(p => p.id);
+  const { data: injuries, error: iErr } = await supabase
+    .from('injury_reports')
+    .select('player_id, status, report_date')
+    .in('player_id', pidList)
+    .order('report_date', { ascending: false });
+
+  if (iErr) throw iErr;
+
+  /** player_id → { status, severity, last_name-ish } */
+  const latestFlag = new Map();
+  for (const row of injuries || []) {
+    const sev = injurySeverity(row.status);
+    if (sev < 1 || latestFlag.has(row.player_id)) continue;
+    latestFlag.set(row.player_id, { status: row.status, severity: sev });
+  }
+
+  const playerById = new Map(roster.map(p => [p.id, p]));
+
+  for (const game of gameRows) {
+    const candidates = [];
+    for (const [pid, info] of latestFlag.entries()) {
+      const p = playerById.get(pid);
+      if (!p || (p.team_id !== game.home_team_id && p.team_id !== game.visitor_team_id)) continue;
+      const team = teamsById.get(p.team_id);
+      const abbr = team?.abbreviation ?? '?';
+      const lastName = String(p.last_name || 'Player').trim();
+      candidates.push({
+        severity: info.severity,
+        line: `${abbr}: ${lastName} ${fmtInjuryStatus(info.status)}`,
+      });
+    }
+    candidates.sort((a, b) => b.severity - a.severity);
+    notesByGame.set(game.id, candidates.slice(0, 3).map(c => c.line));
+  }
+
+  return notesByGame;
+}
+
+function gameSeasonFallback(gameSeason) {
+  const sn = Number(gameSeason);
+  return Number.isFinite(sn) ? sn : new Date().getFullYear();
+}
+
+function recordLookupGet(lookup, season, teamId) {
+  if (teamId == null || season == null || season === '') return '0-0';
+  return lookup.get(`${Number(season)}:${teamId}`) || '0-0';
+}
+
 // ============================================================
 // ENDPOINTS
 // ============================================================
@@ -214,8 +387,14 @@ app.get('/api/wnba/games', async (req, res) => {
 
     if (error) throw error;
 
+    const list = games || [];
+    const [recordsLookup, injuryByGameId] = await Promise.all([
+      loadTeamSeasonRecords(list),
+      buildInjuryNotesByGameId(list, teamsById),
+    ]);
+
     res.json({
-      data: (games || []).map(game => ({
+      data: list.map(game => ({
         id: game.id,
         bdl_id: game.bdl_id,
         date: game.game_date,
@@ -231,6 +410,9 @@ app.get('/api/wnba/games', async (req, res) => {
         time: game.time,
         home_team: formatTeam(teamsById.get(game.home_team_id)),
         visitor_team: formatTeam(teamsById.get(game.visitor_team_id)),
+        home_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.home_team_id),
+        visitor_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.visitor_team_id),
+        injury_notes: injuryByGameId.get(game.id) || [],
       })),
     });
   } catch (e) {
@@ -259,13 +441,17 @@ app.get('/api/wnba/slate', async (req, res) => {
     if (!games?.length) return res.json({ data: [] });
 
     const gameIds = games.map(game => game.id);
-    const { data: oddsRows, error: oddsError } = await supabase
-      .from('odds_snapshots')
-      .select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at')
-      .in('game_id', gameIds)
-      .is('player_id', null)
-      .in('prop_type', ['spread', 'total', 'moneyline'])
-      .order('snapshot_at', { ascending: false });
+    const [{ data: oddsRows, error: oddsError }, recordsLookup, injuryByGameId] = await Promise.all([
+      supabase
+        .from('odds_snapshots')
+        .select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at')
+        .in('game_id', gameIds)
+        .is('player_id', null)
+        .in('prop_type', ['spread', 'total', 'moneyline'])
+        .order('snapshot_at', { ascending: false }),
+      loadTeamSeasonRecords(games),
+      buildInjuryNotesByGameId(games, teamsById),
+    ]);
 
     if (oddsError) throw oddsError;
 
@@ -314,6 +500,9 @@ app.get('/api/wnba/slate', async (req, res) => {
           // ingest-odds stores h2h over_odds as home and under_odds as away.
           home_ml: odds.moneyline ? toNullableNumber(odds.moneyline.over_odds) : null,
           away_ml: odds.moneyline ? toNullableNumber(odds.moneyline.under_odds) : null,
+          home_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.home_team_id),
+          visitor_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.visitor_team_id),
+          injury_notes: injuryByGameId.get(game.id) || [],
           odds_sportsbook: defaultBook?.sportsbook_label || null,
           odds_sportsbook_short: defaultBook?.sportsbook_short || null,
           odds_books: books.map(book => ({
@@ -728,14 +917,51 @@ app.get('/api/wnba/top-picks', async (req, res) => {
 
 /**
  * GET /health
- * Simple health check — useful for confirming the server is up.
+ * Reports pipeline freshness (today's game / prop / odds counts) plus env flags.
  */
-app.get('/health', (_req, res) => {
-  res.json({
+app.get('/health', async (_req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const base = {
     status: 'ok',
-    supabaseUrlSet: !!process.env.SUPABASE_URL,
-    supabaseServiceRoleSet: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-  });
+    date: today,
+    today: {
+      games: null,
+      props: null,
+      odds: null,
+    },
+    env: {
+      supabaseUrlSet: !!process.env.SUPABASE_URL,
+      supabaseServiceRoleSet: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      oddsApiKeySet: !!process.env.ODDS_API_KEY,
+      bdlApiKeySet: !!process.env.BDL_API_KEY,
+    },
+  };
+
+  if (!supabase) {
+    return res.status(503).json({
+      ...base,
+      status: 'degraded',
+      error: 'Supabase client not initialized',
+      today: { games: null, props: null, odds: null },
+    });
+  }
+
+  try {
+    const counts = await pipelineCountsForDate(today);
+    return res.json({
+      ...base,
+      today: counts,
+    });
+  } catch (e) {
+    console.error('[health]', e.message);
+    return res.status(503).json({
+      ...base,
+      status: 'degraded',
+      error: e.message,
+      today: { games: null, props: null, odds: null },
+    });
+  }
 });
 
 if (process.env.NODE_ENV === 'production') {
@@ -751,9 +977,71 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // ============================================================
-// BOOT
+// BOOT — pre-game self-healing (Railway redeploy gaps)
 // ============================================================
+
+async function bootstrapToday() {
+  try {
+    if (!supabase) {
+      console.warn('[bootstrap] Skipping — Supabase not initialized');
+      return;
+    }
+
+    let hourEt = easternHour();
+    if (!Number.isFinite(hourEt)) {
+      hourEt = new Date().getHours();
+      console.warn('[bootstrap] Falling back to server local hour for bootstrap window');
+    }
+    if (hourEt < 11 || hourEt > 20) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const todayGameCounts = async () => {
+      const gc = await supabase
+        .from('games')
+        .select('*', { count: 'exact', head: true })
+        .eq('game_date', today);
+      if (gc.error) throw gc.error;
+
+      const idsRes = await supabase.from('games').select('id').eq('game_date', today);
+      if (idsRes.error) throw idsRes.error;
+      const ids = (idsRes.data || []).map(r => r.id);
+      let propCount = 0;
+      if (ids.length > 0) {
+        const pr = await supabase
+          .from('prop_analysis_results')
+          .select('*', { count: 'exact', head: true })
+          .in('game_id', ids);
+        if (pr.error) throw pr.error;
+        propCount = pr.count ?? 0;
+      }
+
+      return { gameCount: gc.count ?? 0, propCount };
+    };
+
+    let { gameCount, propCount } = await todayGameCounts();
+
+    if ((gameCount ?? 0) === 0) {
+      console.log('[bootstrap] No games for today — running ingestGames');
+      const { ingestGames } = require('./scripts/ingest-games');
+      await ingestGames(today).catch(err => console.error('[bootstrap] ingestGames failed:', err.message));
+      ({ gameCount, propCount } = await todayGameCounts());
+    }
+
+    if ((propCount ?? 0) === 0 && (gameCount ?? 0) > 0) {
+      console.log('[bootstrap] Games exist but no props — running ingestOdds + calcConfidence');
+      const { ingestOdds } = require('./scripts/ingest-odds');
+      const { calcConfidence } = require('./scripts/calc-confidence');
+      await ingestOdds().catch(err => console.error('[bootstrap] ingestOdds failed:', err.message));
+      await calcConfidence({ date: today }).catch(err => console.error('[bootstrap] calcConfidence failed:', err.message));
+    }
+  } catch (err) {
+    console.error('[bootstrap] Failed:', err.message);
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`\n🏀 WNBA Prop Scout server running on http://localhost:${PORT}`);
   console.log(`   Health check → http://localhost:${PORT}/health\n`);
+  bootstrapToday().catch(err => console.error('[bootstrap] Failed:', err.message));
 });
