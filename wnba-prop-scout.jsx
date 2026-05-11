@@ -578,6 +578,11 @@ function Badge({ children, color }) {
 }
 
 // ---- Status badge ----
+function isOddsLocked(game) {
+  const s = String(game?.status || '').toLowerCase();
+  return s === 'in_progress' || s === 'final' || s.startsWith('q') || s.includes('live') || s.includes('ht');
+}
+
 function StatusBadge({ status }) {
   if (!status) return null;
   const s       = String(status).toUpperCase();
@@ -684,6 +689,12 @@ function SlateCard({ game, onClick, topPick }) {
           </div>
         ))}
       </div>
+
+      {isOddsLocked(game) && (
+        <div style={{ fontSize: 9, color: T.text3, marginTop: 4, letterSpacing: 0.5 }}>
+          🔒 PRE-GAME ODDS
+        </div>
+      )}
 
       {Array.isArray(game.injury_notes) && game.injury_notes.length > 0 && (
         <div style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', marginTop: 8, lineHeight: 1.4 }}>
@@ -835,6 +846,11 @@ function OverviewTab({ game, odds }) {
               </div>
             ))}
           </div>
+          {isOddsLocked(game) && (
+            <div style={{ fontSize: 9, color: T.text3, marginTop: 6, letterSpacing: 0.5 }}>
+              🔒 PRE-GAME ODDS
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: 18, background: 'rgba(20,29,56,0.72)', fontSize: 12, color: T.text3, textAlign: 'center' }}>

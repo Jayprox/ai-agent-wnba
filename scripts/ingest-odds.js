@@ -118,7 +118,7 @@ async function getGamesWithTeams() {
   const toIso   = to.toISOString().slice(0, 10);
 
   const [{ data: games, error: gamesError }, { data: teams, error: teamsError }] = await Promise.all([
-    supabase.from('games').select('id, home_team_id, visitor_team_id, game_date')
+    supabase.from('games').select('id, home_team_id, visitor_team_id, game_date, status')
       .gte('game_date', fromIso)
       .lte('game_date', toIso),
     supabase.from('teams').select('id, name'),
@@ -230,9 +230,6 @@ function findMatchingGame(event, games) {
     return homeMatch && awayMatch;
   }) ?? null;
 
-  if (!match) {
-    console.warn(`[ingest-odds] No game match for: ${event.away_team} at ${event.home_team} (${event.commence_time ?? event.id})`);
-  }
   return match;
 }
 
@@ -362,7 +359,12 @@ async function ingestOdds() {
   for (const event of events || []) {
     const game = findMatchingGame(event, games);
     if (!game) {
-      console.warn(`[ingest-odds] No DB game match for ${event.away_team} at ${event.home_team}`);
+      console.warn(`[ingest-odds] No game match for: ${event.away_team} at ${event.home_team}`);
+      continue;
+    }
+    const st = String(game.status || '').toLowerCase();
+    if (st === 'in_progress' || st === 'final') {
+      console.log(`[ingest-odds] Skipping locked game ${game.id} (${game.status})`);
       continue;
     }
 
