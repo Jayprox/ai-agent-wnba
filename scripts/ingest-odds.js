@@ -31,6 +31,50 @@ function normalizeName(value) {
     .replace(/[^a-z0-9]/g, '');
 }
 
+/** Lowercase tokens split on spaces, hyphens, apostrophes, dots; then strip punctuation per token */
+function tokenize(name) {
+  return String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[\s\-'.]+/)
+    .map(t => t.replace(/[^a-z0-9]/g, ''))
+    .filter(Boolean);
+}
+
+/** Iterative Levenshtein distance (pure JS, two-row DP). */
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const cur = new Array(n + 1);
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+async function persistAlias(alias, playerId, supabaseClient) {
+  const { error } = await supabaseClient
+    .from('player_name_aliases')
+    .upsert({ alias, player_id: playerId, source: 'auto' }, { onConflict: 'alias' });
+  if (error) console.warn(`[ingest-odds] persistAlias("${alias}") failed: ${error.message}`);
+}
+
+function tokenContainedPrefix(incomingTok, dbTok) {
+  if (!incomingTok || !dbTok) return false;
+  if (incomingTok === dbTok) return true;
+  return incomingTok.startsWith(dbTok) || dbTok.startsWith(incomingTok);
+}
+
 async function fetchGameOdds() {
   if (!ODDS_API_KEY) throw new Error('ODDS_API_KEY not set');
 
@@ -106,14 +150,69 @@ async function getPlayersByName() {
   return map;
 }
 
-function findPlayerByName(name, playersByName) {
+async function findPlayerByName(name, playersByName, supabaseClient) {
   const normalized = normalizeName(name);
   if (!normalized) return null;
+
+  // Tier 1: exact normalized match (no DB)
   if (playersByName.has(normalized)) return playersByName.get(normalized);
 
+  // Tier 2: alias table
+  const { data: aliasRow } = await supabaseClient
+    .from('player_name_aliases')
+    .select('player_id')
+    .eq('alias', normalized)
+    .maybeSingle();
+  if (aliasRow?.player_id != null) {
+    const byId = Array.from(playersByName.values()).find(p => p.id === aliasRow.player_id);
+    if (byId) return byId;
+  }
+
+  const incomingTokens = tokenize(name);
   const entries = Array.from(playersByName.entries());
-  const suffixMatch = entries.find(([key]) => key.endsWith(normalized) || normalized.endsWith(key));
-  return suffixMatch ? suffixMatch[1] : null;
+
+  // Tier 3: token intersection + first-token prefix tolerance
+  for (const [, player] of entries) {
+    const dbTokens = tokenize(player.full_name);
+    if (!dbTokens.length || !incomingTokens.length) continue;
+
+    const firstOk =
+      dbTokens[0]
+      && incomingTokens[0]
+      && tokenContainedPrefix(incomingTokens[0], dbTokens[0]);
+
+    const allDbInIncoming =
+      dbTokens.every(dbTok =>
+        incomingTokens.some(inTok => tokenContainedPrefix(inTok, dbTok)),
+      );
+
+    if (firstOk && allDbInIncoming) {
+      await persistAlias(normalized, player.id, supabaseClient);
+      console.log(`[ingest-odds] Fuzzy match: "${name}" → "${player.full_name}" (token)`);
+      return player;
+    }
+  }
+
+  // Tier 4: Levenshtein on normalized full-name keys (length > 8 only)
+  if (normalized.length > 8) {
+    const threshold = Math.min(4, Math.floor(normalized.length * 0.25));
+    let bestMatch = null;
+    let bestDist = Infinity;
+    for (const [key, player] of entries) {
+      const dist = levenshtein(normalized, key);
+      if (dist < bestDist && dist <= threshold) {
+        bestDist = dist;
+        bestMatch = player;
+      }
+    }
+    if (bestMatch) {
+      await persistAlias(normalized, bestMatch.id, supabaseClient);
+      console.log(`[ingest-odds] Fuzzy match: "${name}" → "${bestMatch.full_name}" (levenshtein d=${bestDist})`);
+      return bestMatch;
+    }
+  }
+
+  return null;
 }
 
 function findMatchingGame(event, games) {
@@ -164,7 +263,7 @@ function parseMarket(event, bookmaker, market, gameId) {
   return row;
 }
 
-function parsePlayerPropMarket(bookmaker, market, gameId, playersByName) {
+async function parsePlayerPropMarket(bookmaker, market, gameId, playersByName, supabaseClient) {
   const propType = PLAYER_MARKET_MAP[market.key];
   if (!propType) return [];
 
@@ -172,7 +271,7 @@ function parsePlayerPropMarket(bookmaker, market, gameId, playersByName) {
   for (const outcome of market.outcomes || []) {
     const side = String(outcome.name || '').toLowerCase();
     const playerName = outcome.description || outcome.participant || outcome.player || outcome.player_name;
-    const player = findPlayerByName(playerName, playersByName);
+    const player = await findPlayerByName(playerName, playersByName, supabaseClient);
 
     if (!player) {
       console.warn(`[ingest-odds] No player match for prop outcome "${playerName || outcome.name}"`);
@@ -265,7 +364,7 @@ async function ingestOdds() {
       const propPayload = await fetchPlayerPropOdds(event.id);
       for (const bookmaker of propPayload?.bookmakers || []) {
         for (const market of bookmaker.markets || []) {
-          const propRows = parsePlayerPropMarket(bookmaker, market, game.id, playersByName)
+          const propRows = (await parsePlayerPropMarket(bookmaker, market, game.id, playersByName, supabase))
             .filter(row => row.player_id && row.line != null);
           await markOpeningRows(propRows, seenThisRun);
           playerPropRows += propRows.length;
