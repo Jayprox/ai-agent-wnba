@@ -216,9 +216,24 @@ async function findPlayerByName(name, playersByName, supabaseClient) {
 }
 
 function findMatchingGame(event, games) {
-  const home = lastWord(event.home_team);
-  const away = lastWord(event.away_team);
-  return games.find(game => lastWord(game.home_name) === home && lastWord(game.away_name) === away);
+  const norm = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+  const homeNorm = norm(event.home_team);
+  const awayNorm = norm(event.away_team);
+
+  const match = games.find(game => {
+    const h = norm(game.home_name);
+    const a = norm(game.away_name);
+    const homeMatch = h === homeNorm || h.includes(homeNorm) || homeNorm.includes(h)
+      || lastWord(game.home_name) === lastWord(event.home_team);
+    const awayMatch = a === awayNorm || a.includes(awayNorm) || awayNorm.includes(a)
+      || lastWord(game.away_name) === lastWord(event.away_team);
+    return homeMatch && awayMatch;
+  }) ?? null;
+
+  if (!match) {
+    console.warn(`[ingest-odds] No game match for: ${event.away_team} at ${event.home_team} (${event.commence_time ?? event.id})`);
+  }
+  return match;
 }
 
 function parseMarket(event, bookmaker, market, gameId) {

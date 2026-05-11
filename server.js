@@ -263,33 +263,49 @@ async function pipelineCountsForDate(dateIso) {
   };
 }
 
-async function loadTeamSeasonRecords(gameRows) {
-  const lookup = new Map();
+async function loadTeamRecordsLive(gameRows) {
+  const lookup = new Map(); // "season:team_id" → "W-L"
   if (!supabase || !gameRows?.length) return lookup;
 
   const yr = new Date().getFullYear();
-  const seasons = [...new Set(gameRows.map(g => {
-    const sn = Number(g.season);
+  const season = (() => {
+    const sn = Number(gameRows[0]?.season);
     return Number.isFinite(sn) ? sn : yr;
-  }))];
-  const teamIds = new Set();
-  for (const g of gameRows) {
-    if (g.home_team_id != null) teamIds.add(g.home_team_id);
-    if (g.visitor_team_id != null) teamIds.add(g.visitor_team_id);
+  })();
+
+  const teamIds = [...new Set(gameRows.flatMap(g => [g.home_team_id, g.visitor_team_id].filter(Boolean)))];
+  if (!teamIds.length) return lookup;
+
+  const orClause = teamIds.map(id => `home_team_id.eq.${id},visitor_team_id.eq.${id}`).join(',');
+  const { data: results, error } = await supabase
+    .from('games')
+    .select('home_team_id, visitor_team_id, home_team_score, visitor_team_score')
+    .eq('season', season)
+    .eq('status', 'final')
+    .or(orClause);
+
+  if (error) {
+    console.warn('[server] loadTeamRecordsLive error:', error.message);
+    return lookup;
   }
 
-  const tids = Array.from(teamIds);
-  if (!tids.length || !seasons.length) return lookup;
+  const records = new Map(); // team_id → { wins, losses }
+  for (const r of results || []) {
+    const hs = Number(r.home_team_score);
+    const vs = Number(r.visitor_team_score);
+    if (!Number.isFinite(hs) || !Number.isFinite(vs) || hs === vs) continue;
+    const homeWon = hs > vs;
+    for (const [tid, won] of [[r.home_team_id, homeWon], [r.visitor_team_id, !homeWon]]) {
+      if (tid == null) continue;
+      if (!records.has(tid)) records.set(tid, { wins: 0, losses: 0 });
+      const rec = records.get(tid);
+      if (won) rec.wins += 1;
+      else rec.losses += 1;
+    }
+  }
 
-  const { data, error } = await supabase
-    .from('team_season_records')
-    .select('team_id, season, record')
-    .in('team_id', tids)
-    .in('season', seasons);
-
-  if (error) throw error;
-  for (const row of data || []) {
-    lookup.set(`${Number(row.season)}:${row.team_id}`, row.record ?? '0-0');
+  for (const [tid, rec] of records) {
+    lookup.set(`${season}:${tid}`, `${rec.wins}-${rec.losses}`);
   }
   return lookup;
 }
@@ -389,7 +405,7 @@ app.get('/api/wnba/games', async (req, res) => {
 
     const list = games || [];
     const [recordsLookup, injuryByGameId] = await Promise.all([
-      loadTeamSeasonRecords(list),
+      loadTeamRecordsLive(list),
       buildInjuryNotesByGameId(list, teamsById),
     ]);
 
@@ -449,7 +465,7 @@ app.get('/api/wnba/slate', async (req, res) => {
         .is('player_id', null)
         .in('prop_type', ['spread', 'total', 'moneyline'])
         .order('snapshot_at', { ascending: false }),
-      loadTeamSeasonRecords(games),
+      loadTeamRecordsLive(games),
       buildInjuryNotesByGameId(games, teamsById),
     ]);
 
