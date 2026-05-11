@@ -620,22 +620,8 @@ function ScoreGauge({ score }) {
   );
 }
 
-// ---- Confidence bar ----
-function ConfidenceBar({ score }) {
-  const s     = Number.isFinite(Number(score)) ? Math.max(0, Math.min(100, Number(score))) : 0;
-  const color = scoreColor(s);
-  return (
-    <div style={{ width: 62 }}>
-      <div style={{ height: 3, borderRadius: 2, background: T.card3, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${s}%`, background: color }} />
-      </div>
-      <div style={{ fontSize: 9, color, fontWeight: 700, marginTop: 3, textAlign: 'right' }}>{fmtOne(s)}</div>
-    </div>
-  );
-}
-
 // ---- Slate card (redesigned) ----
-function SlateCard({ game, isSelected, onClick, topPick }) {
+function SlateCard({ game, onClick, topPick }) {
   const aw    = game.visitor_team?.abbreviation || 'AWAY';
   const hw    = game.home_team?.abbreviation    || 'HOME';
   const venue = TEAM_VENUES[hw] ?? null;
@@ -660,14 +646,13 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
     <div
       onClick={onClick}
       style={{
-        background:   isSelected ? T.card2 : T.card,
-        border:       `1px solid ${isSelected ? T.accent : T.border}`,
-        borderRadius: isSelected ? '12px 12px 0 0' : 12,
+        background:   T.card,
+        border:       `1px solid ${T.border}`,
+        borderRadius: 12,
         padding:      '14px 16px 12px',
-        marginBottom: isSelected ? 0 : 10,
+        marginBottom: 10,
         cursor:       'pointer',
         transition:   'border-color 0.15s, background 0.15s',
-        boxShadow:    isSelected ? `0 0 0 1px ${T.accentDim}` : 'none',
       }}
     >
       {/* Row 1: matchup + status */}
@@ -763,30 +748,9 @@ function SlateCard({ game, isSelected, onClick, topPick }) {
         </div>
       )}
 
-      {/* Expand cue */}
       <div style={{ textAlign: 'right', marginTop: topPick ? 4 : 8 }}>
-        <span style={{ fontSize: 9, color: T.text3 }}>{isSelected ? '▴ COLLAPSE' : '▾ VIEW PROPS'}</span>
+        <span style={{ fontSize: 9, color: T.text3 }}>→ Game overview</span>
       </div>
-    </div>
-  );
-}
-
-// ---- Inner prop tab bar ----
-function GameTabBar({ tabs, active, onSelect }) {
-  const labels = { pts:'PTS', reb:'REB', ast:'AST', pra:'PRA', stl:'STL', blk:'BLK', fg3m:'3PM', fb:'FB' };
-  return (
-    <div className="ps-subnav">
-      {tabs.map(t => (
-        <button key={t} onClick={() => onSelect(t)} style={{
-          background: active === t ? T.accent : T.card,
-          border: `1px solid ${active === t ? T.accent : T.border}`,
-          padding: '8px 13px', fontSize: 11, fontWeight: 800,
-          color: active === t ? '#fff' : T.text3,
-          cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s, background 0.1s, border-color 0.1s',
-        }}>
-          {labels[t] || t.toUpperCase()}
-        </button>
-      ))}
     </div>
   );
 }
@@ -1196,162 +1160,6 @@ function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// ---- GamePropsPanel (inline beneath SlateCard) ----
-function GamePropsPanel({ game, onOpenFull }) {
-  const [activeTab, setActiveTab]     = useState('pts');
-  const [props, setProps]             = useState([]);
-  const [firstBasket, setFirstBasket] = useState([]);
-  const [loading, setLoading]         = useState(true);
-  const [fbLoading, setFbLoading]     = useState(false);
-  const [error, setError]             = useState(null);
-  const [fbError, setFbError]         = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        setLoading(true); setError(null);
-        const grouped = await apiGetProps(game.id);
-        if (!cancelled) setProps(Object.values(grouped).flat());
-      } catch {
-        if (!cancelled) { setError('Failed to load props.'); setProps([]); }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    load();
-    return () => { cancelled = true; };
-  }, [game.id]);
-
-  useEffect(() => {
-    if (activeTab !== 'fb') return undefined;
-    let cancelled = false;
-    async function loadFB() {
-      try {
-        setFbLoading(true); setFbError(null);
-        const rows = await apiGetFirstBasket(game.id);
-        if (!cancelled) setFirstBasket(rows);
-      } catch {
-        if (!cancelled) { setFbError('Failed to load first basket.'); setFirstBasket([]); }
-      } finally {
-        if (!cancelled) setFbLoading(false);
-      }
-    }
-    loadFB();
-    return () => { cancelled = true; };
-  }, [activeTab, game.id]);
-
-  const visibleProps = props
-    .filter(p => String(p.prop_type || '').toLowerCase() === activeTab)
-    .sort((a, b) => Number(b.confidence_score || 0) - Number(a.confidence_score || 0))
-    .slice(0, 5);
-  const showFB = activeTab === 'fb';
-
-  return (
-    <div style={{
-      marginBottom: 10,
-      borderLeft:   `1px solid ${T.accent}`,
-      borderRight:  `1px solid ${T.accent}`,
-      borderBottom: `1px solid ${T.accent}`,
-      borderBottomLeftRadius:  10,
-      borderBottomRightRadius: 10,
-      background: T.card,
-      overflow: 'hidden',
-    }}>
-      <GameTabBar tabs={['pts','reb','ast','pra','stl','blk','fg3m','fb']} active={activeTab} onSelect={setActiveTab} />
-
-      <div style={{ padding: '0 14px' }}>
-        {!showFB && loading && (
-          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>Loading props…</div>
-        )}
-        {!showFB && !loading && error && (
-          <div style={{ textAlign: 'center', padding: 18, color: T.red, fontSize: 12 }}>{error}</div>
-        )}
-        {!showFB && !loading && !error && visibleProps.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>No prop analysis yet.</div>
-        )}
-
-        {!showFB && !loading && !error && visibleProps.map(prop => {
-          const player = prop.player || prop.players || {};
-          const rec    = prop.recommendation || 'PASS';
-          const type   = String(prop.prop_type || prop.type || '').toUpperCase();
-          const recBg  = rec === 'OVER'  ? T.greenDim : rec === 'UNDER' ? T.redDim : T.card3;
-          const recFg  = rec === 'OVER'  ? T.green    : rec === 'UNDER' ? T.red    : T.text3;
-
-          return (
-            <div key={prop.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${T.border}` }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {player.full_name || player.name || 'Unknown'}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 9, color: T.text3 }}>{player.position || '—'}</span>
-                  <span style={{ fontSize: 10, color: T.text2 }}>{type} {rec === 'UNDER' ? 'U' : rec === 'OVER' ? 'O' : ''} {fmtOne(prop.line)}</span>
-                  {prop.correlated_opportunity && (
-                    <span style={{ background: T.greenDim, color: T.green, border: `1px solid ${T.green}`, borderRadius: 4, fontSize: 9, padding: '1px 5px' }}>CORR</span>
-                  )}
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                <ConfidenceBar score={prop.confidence_score} />
-                <span style={{ background: recBg, color: recFg, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4, letterSpacing: 0.3 }}>{rec}</span>
-              </div>
-            </div>
-          );
-        })}
-
-        {showFB && fbLoading && (
-          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>Loading first basket…</div>
-        )}
-        {showFB && !fbLoading && fbError && (
-          <div style={{ textAlign: 'center', padding: 18, color: T.red, fontSize: 12 }}>{fbError}</div>
-        )}
-        {showFB && !fbLoading && !fbError && firstBasket.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 18, color: T.text3, fontSize: 12 }}>No first basket analysis yet.</div>
-        )}
-        {showFB && !fbLoading && !fbError && firstBasket.map(row => {
-          const player  = row.players || {};
-          const team    = player.teams || row.teams || {};
-          const signals = row.signals || {};
-          const rec     = row.recommendation === 'strong_look' ? 'STRONG LOOK' : 'VALUE LOOK';
-          const recColor = row.recommendation === 'strong_look' ? T.green : T.yellow;
-          const chips = [];
-          if (signals.starter_score      >= 80) chips.push('STARTER');
-          if (signals.usage_score        >= 65) chips.push('HIGH USAGE');
-          if (signals.pace_score         >= 65) chips.push('FAST PACE');
-          if (signals.q1_tendency_score  >= 65) chips.push('Q1 SCORER');
-
-          return (
-            <div key={row.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: `1px solid ${T.border}` }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {player.full_name || 'Unknown'}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 9, color: T.text3 }}>{team.abbreviation || '—'} · {player.position || '—'}</span>
-                  {chips.map(chip => (
-                    <span key={chip} style={{ border: `1px solid ${T.border}`, borderRadius: 4, color: T.text2, fontSize: 9, padding: '1px 5px' }}>{chip}</span>
-                  ))}
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                <ConfidenceBar score={row.first_basket_score} />
-                <span style={{ background: `${recColor}22`, color: recColor, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>{rec}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div style={{ textAlign: 'right', padding: '6px 14px 10px' }}>
-        <button onClick={() => onOpenFull(game)} style={{ background: 'none', border: 'none', color: T.accent, fontSize: 11, cursor: 'pointer', fontWeight: 700 }}>
-          Full Analysis →
-        </button>
-      </div>
     </div>
   );
 }
@@ -1989,7 +1797,6 @@ export default function App() {
   const [games, setGames]                   = useState([]);
   const [topPicks, setTopPicks]             = useState([]);
   const [selectedGame, setSelectedGame]     = useState(null);
-  const [expandedGameId, setExpandedGameId] = useState(null);
   const [loadingSlate, setLoadingSlate]     = useState(true);
   const [loadingPicks, setLoadingPicks]     = useState(true);
   const [slateError, setSlateError]         = useState(null);
@@ -2010,7 +1817,6 @@ export default function App() {
     if (next > maxSlateDate()) return;
     setSelectedDate(next);
     setSelectedGame(null);
-    setExpandedGameId(null);
   }
 
   async function loadSlateWithFallback(date) {
@@ -2041,7 +1847,6 @@ export default function App() {
           if (slate.date !== selectedDate) {
             setSelectedDate(slate.date);
             setSelectedGame(null);
-            setExpandedGameId(null);
           }
           setGames(slate.data);
         }
@@ -2101,7 +1906,7 @@ export default function App() {
                 type="date"
                 value={selectedDate}
                 max={maxSlateDate()}
-                onChange={e => { if (e.target.value) { setSelectedDate(e.target.value); setSelectedGame(null); setExpandedGameId(null); } }}
+                onChange={e => { if (e.target.value) { setSelectedDate(e.target.value); setSelectedGame(null); } }}
                 style={{ position: 'absolute', opacity: 0, width: '100%', height: '100%', top: 0, left: 0, cursor: 'pointer' }}
               />
             </label>
@@ -2157,17 +1962,12 @@ export default function App() {
           {games.length > 0 && (
             <div className="ps-slate-grid">
               {games.map(g => (
-                <div key={g.id}>
-                  <SlateCard
-                    game={g}
-                    isSelected={expandedGameId === g.id}
-                    topPick={topPicksByGame.get(g.id) || null}
-                    onClick={() => setExpandedGameId(prev => prev === g.id ? null : g.id)}
-                  />
-                  {expandedGameId === g.id && (
-                    <GamePropsPanel game={g} onOpenFull={setSelectedGame} />
-                  )}
-                </div>
+                <SlateCard
+                  key={g.id}
+                  game={g}
+                  topPick={topPicksByGame.get(g.id) || null}
+                  onClick={() => setSelectedGame(g)}
+                />
               ))}
             </div>
           )}
