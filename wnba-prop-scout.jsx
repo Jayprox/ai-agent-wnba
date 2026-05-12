@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 // ============================================================
 const IS_SANDBOX = false;
 const API_BASE   = import.meta.env.VITE_API_BASE || '';
-const SEASON     = 2025;
+const SEASON     = 2026;
 const SLATE_RESET_TIME_ZONE = 'America/Los_Angeles';
 const SLATE_LOOKAHEAD_DAYS = 14;
 
@@ -527,10 +527,22 @@ async function apiGetOdds(gameId) {
 
 async function apiGetMatchups(gameId) { if (IS_SANDBOX) return {}; return {}; }
 
-async function apiGetGameLogs(playerId) {
-  if (IS_SANDBOX) return [];
-  const r = await fetch(`${API_BASE}/api/wnba/stats?player_ids[]=${playerId}&seasons[]=${SEASON}`);
-  return ((await r.json()).data || []).slice(0, 5);
+/** Fetch game logs for ALL players in one request; returns { [playerId]: log[] } */
+async function apiGetAllGameLogs(playerIds) {
+  if (IS_SANDBOX || !playerIds.length) return {};
+  const params = playerIds.map(id => `player_ids[]=${id}`).join('&') + `&seasons[]=${SEASON}`;
+  const r = await fetch(`${API_BASE}/api/wnba/stats?${params}`);
+  if (!r.ok) return {};
+  const rows = (await r.json()).data || [];
+  // Group by player_id, keep last 5 logs per player
+  const map = {};
+  for (const row of rows) {
+    const pid = row.player_id;
+    if (!pid) continue;
+    if (!map[pid]) map[pid] = [];
+    if (map[pid].length < 5) map[pid].push(row);
+  }
+  return map;
 }
 
 async function apiGetProps(gameId) {
@@ -1137,9 +1149,7 @@ function GameCard({ game, onClose }) {
       setAllPlayers({ [game.visitor_team.id]: awayMerged, [game.home_team.id]: homeMerged });
 
       const allP = [...awayMerged, ...homeMerged];
-      const logResults = await Promise.all(allP.map(p => apiGetGameLogs(p.id)));
-      const logMap = {};
-      allP.forEach((p, i) => { logMap[p.id] = logResults[i]; });
+      const logMap = await apiGetAllGameLogs(allP.map(p => p.id));
       setGameLogs(logMap);
     } finally {
       setLoading(false);

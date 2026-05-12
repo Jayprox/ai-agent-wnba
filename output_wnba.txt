@@ -1,0 +1,228 @@
+
+> wnba-prop-scout@0.1.0 dev
+> concurrently -n server,vite -c cyan,magenta "node server.js" "vite"
+
+[server] 
+[server] 🏀 WNBA Prop Scout server running on http://localhost:3001
+[server]    Health check → http://localhost:3001/health
+[server] 
+[vite] [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+[vite] 
+[vite]   VITE v5.4.21  ready in 109 ms
+[vite] 
+[vite]   ➜  Local:   http://localhost:5173/
+[vite]   ➜  Network: use --host to expose
+[server] [2026-05-12T14:19:03.239Z] GET /api/wnba/slate?date=2026-05-12
+[server] [2026-05-12T14:19:03.569Z] GET /api/wnba/slate?date=2026-05-12
+[server] [2026-05-12T14:19:03.572Z] GET /api/wnba/top-picks?date=2026-05-12&limit=50
+[server] [2026-05-12T14:19:03.855Z] GET /api/wnba/top-picks?date=2026-05-12&limit=50
+[server] [2026-05-12T14:19:07.430Z] GET /api/odds/wnba?gameId=1116
+[server] [2026-05-12T14:19:07.432Z] GET /api/wnba/props?gameId=1116
+[server] [2026-05-12T14:19:07.787Z] GET /api/wnba/props?gameId=1116
+[server] [2026-05-12T14:19:07.789Z] GET /api/odds/wnba?gameId=1116
+[server] [2026-05-12T14:19:07.791Z] GET /api/wnba/players?team_id=4&season=2025
+[server] [2026-05-12T14:19:07.793Z] GET /api/wnba/players?team_id=11&season=2025
+[server] [players] team_id=4 season=2025: 72 total, 10 with metrics, returning 10
+[server] [2026-05-12T14:19:07.984Z] GET /api/wnba/players?team_id=4&season=2025
+[server] [players] team_id=11 season=2025: 83 total, 17 with metrics, returning 17
+[server] [2026-05-12T14:19:07.991Z] GET /api/wnba/players?team_id=11&season=2025
+[server] [2026-05-12T14:19:07.995Z] GET /api/wnba/season_averages?player_ids[]=220&player_ids[]=219&player_ids[]=227&player_ids[]=226&player_ids[]=218&player_ids[]=228&player_ids[]=819&player_ids[]=232&player_ids[]=230&player_ids[]=233&player_ids[]=661&player_ids[]=673&player_ids[]=680&player_ids[]=645&player_ids[]=681&player_ids[]=683&player_ids[]=663&player_ids[]=684&player_ids[]=686&player_ids[]=682&player_ids[]=666&player_ids[]=675&player_ids[]=652&player_ids[]=665&player_ids[]=685&player_ids[]=678&player_ids[]=672&season=2025
+[server] [2026-05-12T14:19:08.009Z] GET /api/wnba/stats?player_ids[]=220&seasons[]=2025
+[server] [2026-05-12T14:19:08.011Z] GET /api/wnba/stats?player_ids[]=219&seasons[]=2025
+[server] [2026-05-12T14:19:08.012Z] GET /api/wnba/stats?player_ids[]=227&seasons[]=2025
+[server] [2026-05-12T14:19:08.014Z] GET /api/wnba/stats?player_ids[]=226&seasons[]=2025
+[server] [players] team_id=11 season=2025: 83 total, 17 with metrics, returning 17
+[server] [2026-05-12T14:19:08.633Z] GET /api/wnba/stats?player_ids[]=218&seasons[]=2025
+[server] [2026-05-12T14:19:08.635Z] GET /api/wnba/stats?player_ids[]=228&seasons[]=2025
+[server] [2026-05-12T14:19:08.636Z] GET /api/wnba/stats?player_ids[]=819&seasons[]=2025
+[server] [2026-05-12T14:19:08.637Z] GET /api/wnba/stats?player_ids[]=232&seasons[]=2025
+[server] [2026-05-12T14:19:08.638Z] GET /api/wnba/stats?player_ids[]=230&seasons[]=2025
+[server] [players] team_id=4 season=2025: 72 total, 10 with metrics, returning 10
+[server] [2026-05-12T14:19:08.664Z] GET /api/wnba/stats?player_ids[]=233&seasons[]=2025
+[server] [2026-05-12T14:19:08.741Z] GET /api/wnba/stats?player_ids[]=661&seasons[]=2025
+[server] [2026-05-12T14:19:08.745Z] GET /api/wnba/stats?player_ids[]=673&seasons[]=2025
+[server] [2026-05-12T14:19:08.748Z] GET /api/wnba/stats?player_ids[]=680&seasons[]=2025
+[server] [2026-05-12T14:19:08.751Z] GET /api/wnba/stats?player_ids[]=645&seasons[]=2025
+[server] [2026-05-12T14:19:08.769Z] GET /api/wnba/stats?player_ids[]=681&seasons[]=2025
+[server] [2026-05-12T14:19:08.779Z] GET /api/wnba/stats?player_ids[]=683&seasons[]=2025
+[server] [2026-05-12T14:19:08.844Z] GET /api/wnba/stats?player_ids[]=663&seasons[]=2025
+[server] [2026-05-12T14:19:08.853Z] GET /api/wnba/stats?player_ids[]=684&seasons[]=2025
+[server] [2026-05-12T14:19:08.854Z] GET /api/wnba/stats?player_ids[]=686&seasons[]=2025
+[server] [2026-05-12T14:19:08.855Z] GET /api/wnba/stats?player_ids[]=682&seasons[]=2025
+[server] [2026-05-12T14:19:08.861Z] GET /api/wnba/stats?player_ids[]=666&seasons[]=2025
+[server] [2026-05-12T14:19:08.870Z] GET /api/wnba/stats?player_ids[]=675&seasons[]=2025
+[server] [2026-05-12T14:19:08.938Z] GET /api/wnba/stats?player_ids[]=652&seasons[]=2025
+[server] [2026-05-12T14:19:08.946Z] GET /api/wnba/stats?player_ids[]=665&seasons[]=2025
+[server] [2026-05-12T14:19:08.947Z] GET /api/wnba/stats?player_ids[]=685&seasons[]=2025
+[server] [2026-05-12T14:19:08.948Z] GET /api/wnba/stats?player_ids[]=678&seasons[]=2025
+[server] [2026-05-12T14:19:08.953Z] GET /api/wnba/stats?player_ids[]=672&seasons[]=2025
+[server] [2026-05-12T14:19:08.958Z] GET /api/wnba/season_averages?player_ids[]=220&player_ids[]=219&player_ids[]=227&player_ids[]=226&player_ids[]=218&player_ids[]=228&player_ids[]=819&player_ids[]=232&player_ids[]=230&player_ids[]=233&player_ids[]=661&player_ids[]=673&player_ids[]=680&player_ids[]=645&player_ids[]=681&player_ids[]=683&player_ids[]=663&player_ids[]=684&player_ids[]=686&player_ids[]=682&player_ids[]=666&player_ids[]=675&player_ids[]=652&player_ids[]=665&player_ids[]=685&player_ids[]=678&player_ids[]=672&season=2025
+[server] [2026-05-12T14:19:08.964Z] GET /api/wnba/stats?player_ids[]=220&seasons[]=2025
+[server] [2026-05-12T14:19:09.038Z] GET /api/wnba/stats?player_ids[]=219&seasons[]=2025
+[server] [2026-05-12T14:19:09.041Z] GET /api/wnba/stats?player_ids[]=227&seasons[]=2025
+[server] [2026-05-12T14:19:09.043Z] GET /api/wnba/stats?player_ids[]=226&seasons[]=2025
+[server] [2026-05-12T14:19:09.046Z] GET /api/wnba/stats?player_ids[]=218&seasons[]=2025
+[server] [2026-05-12T14:19:09.048Z] GET /api/wnba/stats?player_ids[]=228&seasons[]=2025
+[server] [2026-05-12T14:19:09.055Z] GET /api/wnba/stats?player_ids[]=819&seasons[]=2025
+[server] [2026-05-12T14:19:09.148Z] GET /api/wnba/stats?player_ids[]=232&seasons[]=2025
+[server] [2026-05-12T14:19:09.151Z] GET /api/wnba/stats?player_ids[]=230&seasons[]=2025
+[server] [2026-05-12T14:19:09.152Z] GET /api/wnba/stats?player_ids[]=233&seasons[]=2025
+[server] [2026-05-12T14:19:09.154Z] GET /api/wnba/stats?player_ids[]=661&seasons[]=2025
+[server] [2026-05-12T14:19:09.155Z] GET /api/wnba/stats?player_ids[]=673&seasons[]=2025
+[server] [2026-05-12T14:19:09.157Z] GET /api/wnba/stats?player_ids[]=680&seasons[]=2025
+[server] [2026-05-12T14:19:09.257Z] GET /api/wnba/stats?player_ids[]=645&seasons[]=2025
+[server] [2026-05-12T14:19:09.262Z] GET /api/wnba/stats?player_ids[]=681&seasons[]=2025
+[server] [2026-05-12T14:19:09.263Z] GET /api/wnba/stats?player_ids[]=683&seasons[]=2025
+[server] [2026-05-12T14:19:09.264Z] GET /api/wnba/stats?player_ids[]=663&seasons[]=2025
+[server] [2026-05-12T14:19:09.265Z] GET /api/wnba/stats?player_ids[]=684&seasons[]=2025
+[server] [2026-05-12T14:19:09.266Z] GET /api/wnba/stats?player_ids[]=686&seasons[]=2025
+[server] [2026-05-12T14:19:09.355Z] GET /api/wnba/stats?player_ids[]=682&seasons[]=2025
+[server] [2026-05-12T14:19:09.365Z] GET /api/wnba/stats?player_ids[]=666&seasons[]=2025
+[server] [2026-05-12T14:19:09.367Z] GET /api/wnba/stats?player_ids[]=675&seasons[]=2025
+[server] [2026-05-12T14:19:09.367Z] GET /api/wnba/stats?player_ids[]=652&seasons[]=2025
+[server] [2026-05-12T14:19:09.368Z] GET /api/wnba/stats?player_ids[]=678&seasons[]=2025
+[server] [2026-05-12T14:19:09.369Z] GET /api/wnba/stats?player_ids[]=685&seasons[]=2025
+[server] [2026-05-12T14:19:09.445Z] GET /api/wnba/stats?player_ids[]=665&seasons[]=2025
+[server] [2026-05-12T14:19:09.467Z] GET /api/wnba/stats?player_ids[]=672&seasons[]=2025
+[server] [2026-05-12T14:19:13.078Z] GET /api/wnba/slate?date=2026-05-12
+[server] [2026-05-12T14:19:13.343Z] GET /api/wnba/slate?date=2026-05-12
+[server] [2026-05-12T14:19:13.345Z] GET /api/wnba/top-picks?date=2026-05-12&limit=50
+[server] [2026-05-12T14:19:13.619Z] GET /api/wnba/top-picks?date=2026-05-12&limit=50
+[server] [2026-05-12T14:19:15.004Z] GET /api/odds/wnba?gameId=1116
+[server] [2026-05-12T14:19:15.005Z] GET /api/wnba/props?gameId=1116
+[server] [2026-05-12T14:19:15.098Z] GET /api/wnba/props?gameId=1116
+[server] [2026-05-12T14:19:15.100Z] GET /api/odds/wnba?gameId=1116
+[server] [2026-05-12T14:19:15.104Z] GET /api/wnba/players?team_id=4&season=2025
+[server] [2026-05-12T14:19:15.105Z] GET /api/wnba/players?team_id=11&season=2025
+[server] [players] team_id=4 season=2025: 72 total, 10 with metrics, returning 10
+[server] [players] team_id=11 season=2025: 83 total, 17 with metrics, returning 17
+[server] [2026-05-12T14:19:15.285Z] GET /api/wnba/players?team_id=4&season=2025
+[server] [2026-05-12T14:19:15.286Z] GET /api/wnba/players?team_id=11&season=2025
+[server] [2026-05-12T14:19:15.288Z] GET /api/wnba/season_averages?player_ids[]=220&player_ids[]=219&player_ids[]=227&player_ids[]=226&player_ids[]=218&player_ids[]=228&player_ids[]=819&player_ids[]=232&player_ids[]=230&player_ids[]=233&player_ids[]=661&player_ids[]=673&player_ids[]=680&player_ids[]=645&player_ids[]=681&player_ids[]=683&player_ids[]=663&player_ids[]=684&player_ids[]=686&player_ids[]=682&player_ids[]=666&player_ids[]=675&player_ids[]=652&player_ids[]=665&player_ids[]=685&player_ids[]=678&player_ids[]=672&season=2025
+[server] [2026-05-12T14:19:15.295Z] GET /api/wnba/stats?player_ids[]=220&seasons[]=2025
+[server] [2026-05-12T14:19:15.297Z] GET /api/wnba/stats?player_ids[]=219&seasons[]=2025
+[server] [2026-05-12T14:19:15.298Z] GET /api/wnba/stats?player_ids[]=227&seasons[]=2025
+[server] [2026-05-12T14:19:15.299Z] GET /api/wnba/stats?player_ids[]=226&seasons[]=2025
+[server] [2026-05-12T14:19:15.391Z] GET /api/wnba/stats?player_ids[]=218&seasons[]=2025
+[server] [2026-05-12T14:19:15.399Z] GET /api/wnba/stats?player_ids[]=228&seasons[]=2025
+[server] [2026-05-12T14:19:15.401Z] GET /api/wnba/stats?player_ids[]=819&seasons[]=2025
+[server] [2026-05-12T14:19:15.402Z] GET /api/wnba/stats?player_ids[]=232&seasons[]=2025
+[server] [players] team_id=11 season=2025: 83 total, 17 with metrics, returning 17
+[server] [2026-05-12T14:19:15.461Z] GET /api/wnba/stats?player_ids[]=230&seasons[]=2025
+[server] [players] team_id=4 season=2025: 72 total, 10 with metrics, returning 10
+[server] [2026-05-12T14:19:15.480Z] GET /api/wnba/stats?player_ids[]=233&seasons[]=2025
+[server] [2026-05-12T14:19:15.500Z] GET /api/wnba/stats?player_ids[]=661&seasons[]=2025
+[server] [2026-05-12T14:19:15.502Z] GET /api/wnba/stats?player_ids[]=673&seasons[]=2025
+[server] [2026-05-12T14:19:15.505Z] GET /api/wnba/stats?player_ids[]=680&seasons[]=2025
+[server] [2026-05-12T14:19:15.506Z] GET /api/wnba/stats?player_ids[]=645&seasons[]=2025
+[server] [2026-05-12T14:19:15.551Z] GET /api/wnba/stats?player_ids[]=681&seasons[]=2025
+[server] [2026-05-12T14:19:15.572Z] GET /api/wnba/stats?player_ids[]=683&seasons[]=2025
+[server] [2026-05-12T14:19:15.592Z] GET /api/wnba/stats?player_ids[]=663&seasons[]=2025
+[server] [2026-05-12T14:19:15.597Z] GET /api/wnba/stats?player_ids[]=684&seasons[]=2025
+[server] [2026-05-12T14:19:15.604Z] GET /api/wnba/stats?player_ids[]=686&seasons[]=2025
+[server] [2026-05-12T14:19:15.605Z] GET /api/wnba/stats?player_ids[]=682&seasons[]=2025
+[server] [2026-05-12T14:19:15.648Z] GET /api/wnba/stats?player_ids[]=666&seasons[]=2025
+[server] [2026-05-12T14:19:15.665Z] GET /api/wnba/stats?player_ids[]=675&seasons[]=2025
+[server] [2026-05-12T14:19:15.684Z] GET /api/wnba/stats?player_ids[]=652&seasons[]=2025
+[server] [2026-05-12T14:19:15.686Z] GET /api/wnba/stats?player_ids[]=665&seasons[]=2025
+[server] [2026-05-12T14:19:15.692Z] GET /api/wnba/stats?player_ids[]=685&seasons[]=2025
+[server] [2026-05-12T14:19:15.694Z] GET /api/wnba/stats?player_ids[]=678&seasons[]=2025
+[server] [2026-05-12T14:19:15.742Z] GET /api/wnba/stats?player_ids[]=672&seasons[]=2025
+[server] [2026-05-12T14:19:15.760Z] GET /api/wnba/season_averages?player_ids[]=220&player_ids[]=219&player_ids[]=227&player_ids[]=226&player_ids[]=218&player_ids[]=228&player_ids[]=819&player_ids[]=232&player_ids[]=230&player_ids[]=233&player_ids[]=661&player_ids[]=673&player_ids[]=680&player_ids[]=645&player_ids[]=681&player_ids[]=683&player_ids[]=663&player_ids[]=684&player_ids[]=686&player_ids[]=682&player_ids[]=666&player_ids[]=675&player_ids[]=652&player_ids[]=665&player_ids[]=685&player_ids[]=678&player_ids[]=672&season=2025
+[server] [2026-05-12T14:19:15.768Z] GET /api/wnba/stats?player_ids[]=220&seasons[]=2025
+[server] [2026-05-12T14:19:15.779Z] GET /api/wnba/stats?player_ids[]=219&seasons[]=2025
+[server] [2026-05-12T14:19:15.781Z] GET /api/wnba/stats?player_ids[]=227&seasons[]=2025
+[server] [2026-05-12T14:19:15.787Z] GET /api/wnba/stats?player_ids[]=226&seasons[]=2025
+[server] [2026-05-12T14:19:15.788Z] GET /api/wnba/stats?player_ids[]=218&seasons[]=2025
+[server] [2026-05-12T14:19:15.831Z] GET /api/wnba/stats?player_ids[]=228&seasons[]=2025
+[server] [2026-05-12T14:19:15.864Z] GET /api/wnba/stats?player_ids[]=819&seasons[]=2025
+[server] [2026-05-12T14:19:15.871Z] GET /api/wnba/stats?player_ids[]=232&seasons[]=2025
+[server] [2026-05-12T14:19:15.872Z] GET /api/wnba/stats?player_ids[]=230&seasons[]=2025
+[server] [2026-05-12T14:19:15.877Z] GET /api/wnba/stats?player_ids[]=233&seasons[]=2025
+[server] [2026-05-12T14:19:15.879Z] GET /api/wnba/stats?player_ids[]=661&seasons[]=2025
+[server] [2026-05-12T14:19:15.923Z] GET /api/wnba/stats?player_ids[]=673&seasons[]=2025
+[server] [2026-05-12T14:19:15.959Z] GET /api/wnba/stats?player_ids[]=680&seasons[]=2025
+[server] [2026-05-12T14:19:15.960Z] GET /api/wnba/stats?player_ids[]=645&seasons[]=2025
+[server] [2026-05-12T14:19:15.968Z] GET /api/wnba/stats?player_ids[]=681&seasons[]=2025
+[server] [2026-05-12T14:19:15.970Z] GET /api/wnba/stats?player_ids[]=683&seasons[]=2025
+[server] [2026-05-12T14:19:15.973Z] GET /api/wnba/stats?player_ids[]=663&seasons[]=2025
+[server] [2026-05-12T14:19:16.016Z] GET /api/wnba/stats?player_ids[]=684&seasons[]=2025
+[server] [2026-05-12T14:19:16.051Z] GET /api/wnba/stats?player_ids[]=686&seasons[]=2025
+[server] [2026-05-12T14:19:16.054Z] GET /api/wnba/stats?player_ids[]=682&seasons[]=2025
+[server] [2026-05-12T14:19:16.060Z] GET /api/wnba/stats?player_ids[]=666&seasons[]=2025
+[server] [2026-05-12T14:19:16.065Z] GET /api/wnba/stats?player_ids[]=675&seasons[]=2025
+[server] [2026-05-12T14:19:16.069Z] GET /api/wnba/stats?player_ids[]=652&seasons[]=2025
+[server] [2026-05-12T14:19:16.104Z] GET /api/wnba/stats?player_ids[]=665&seasons[]=2025
+[server] [2026-05-12T14:19:16.137Z] GET /api/wnba/stats?player_ids[]=678&seasons[]=2025
+[server] [2026-05-12T14:19:16.151Z] GET /api/wnba/stats?player_ids[]=685&seasons[]=2025
+[server] [2026-05-12T14:19:16.161Z] GET /api/wnba/stats?player_ids[]=672&seasons[]=2025
+[server] [2026-05-12T14:19:18.111Z] GET /api/odds/wnba?gameId=1116
+[server] [2026-05-12T14:19:18.112Z] GET /api/wnba/props?gameId=1116
+[server] [2026-05-12T14:19:18.202Z] GET /api/wnba/props?gameId=1116
+[server] [2026-05-12T14:19:18.204Z] GET /api/odds/wnba?gameId=1116
+[server] [2026-05-12T14:19:18.205Z] GET /api/wnba/players?team_id=4&season=2025
+[server] [2026-05-12T14:19:18.206Z] GET /api/wnba/players?team_id=11&season=2025
+[server] [players] team_id=4 season=2025: 72 total, 10 with metrics, returning 10
+[server] [2026-05-12T14:19:18.386Z] GET /api/wnba/players?team_id=4&season=2025
+[server] [players] team_id=11 season=2025: 83 total, 17 with metrics, returning 17
+[server] [2026-05-12T14:19:18.409Z] GET /api/wnba/players?team_id=11&season=2025
+[server] [2026-05-12T14:19:18.411Z] GET /api/wnba/season_averages?player_ids[]=220&player_ids[]=219&player_ids[]=227&player_ids[]=226&player_ids[]=218&player_ids[]=228&player_ids[]=819&player_ids[]=232&player_ids[]=230&player_ids[]=233&player_ids[]=661&player_ids[]=673&player_ids[]=680&player_ids[]=645&player_ids[]=681&player_ids[]=683&player_ids[]=663&player_ids[]=684&player_ids[]=686&player_ids[]=682&player_ids[]=666&player_ids[]=675&player_ids[]=652&player_ids[]=665&player_ids[]=685&player_ids[]=678&player_ids[]=672&season=2025
+[server] [2026-05-12T14:19:18.419Z] GET /api/wnba/stats?player_ids[]=220&seasons[]=2025
+[server] [2026-05-12T14:19:18.421Z] GET /api/wnba/stats?player_ids[]=219&seasons[]=2025
+[server] [2026-05-12T14:19:18.422Z] GET /api/wnba/stats?player_ids[]=227&seasons[]=2025
+[server] [2026-05-12T14:19:18.423Z] GET /api/wnba/stats?player_ids[]=226&seasons[]=2025
+[server] [2026-05-12T14:19:18.520Z] GET /api/wnba/stats?player_ids[]=218&seasons[]=2025
+[server] [2026-05-12T14:19:18.526Z] GET /api/wnba/stats?player_ids[]=228&seasons[]=2025
+[server] [2026-05-12T14:19:18.527Z] GET /api/wnba/stats?player_ids[]=819&seasons[]=2025
+[server] [2026-05-12T14:19:18.528Z] GET /api/wnba/stats?player_ids[]=232&seasons[]=2025
+[server] [players] team_id=4 season=2025: 72 total, 10 with metrics, returning 10
+[server] [2026-05-12T14:19:18.559Z] GET /api/wnba/stats?player_ids[]=230&seasons[]=2025
+[server] [players] team_id=11 season=2025: 83 total, 17 with metrics, returning 17
+[server] [2026-05-12T14:19:18.617Z] GET /api/wnba/stats?player_ids[]=233&seasons[]=2025
+[server] [2026-05-12T14:19:18.626Z] GET /api/wnba/stats?player_ids[]=661&seasons[]=2025
+[server] [2026-05-12T14:19:18.627Z] GET /api/wnba/stats?player_ids[]=673&seasons[]=2025
+[server] [2026-05-12T14:19:18.628Z] GET /api/wnba/stats?player_ids[]=680&seasons[]=2025
+[server] [2026-05-12T14:19:18.628Z] GET /api/wnba/stats?player_ids[]=645&seasons[]=2025
+[server] [2026-05-12T14:19:18.647Z] GET /api/wnba/stats?player_ids[]=681&seasons[]=2025
+[server] [2026-05-12T14:19:18.710Z] GET /api/wnba/stats?player_ids[]=683&seasons[]=2025
+[server] [2026-05-12T14:19:18.724Z] GET /api/wnba/stats?player_ids[]=663&seasons[]=2025
+[server] [2026-05-12T14:19:18.727Z] GET /api/wnba/stats?player_ids[]=684&seasons[]=2025
+[server] [2026-05-12T14:19:18.730Z] GET /api/wnba/stats?player_ids[]=686&seasons[]=2025
+[server] [2026-05-12T14:19:18.731Z] GET /api/wnba/stats?player_ids[]=682&seasons[]=2025
+[server] [2026-05-12T14:19:18.740Z] GET /api/wnba/stats?player_ids[]=666&seasons[]=2025
+[server] [2026-05-12T14:19:18.797Z] GET /api/wnba/stats?player_ids[]=675&seasons[]=2025
+[server] [2026-05-12T14:19:18.828Z] GET /api/wnba/stats?player_ids[]=652&seasons[]=2025
+[server] [2026-05-12T14:19:18.831Z] GET /api/wnba/stats?player_ids[]=665&seasons[]=2025
+[server] [2026-05-12T14:19:18.833Z] GET /api/wnba/stats?player_ids[]=685&seasons[]=2025
+[server] [2026-05-12T14:19:18.834Z] GET /api/wnba/stats?player_ids[]=678&seasons[]=2025
+[server] [2026-05-12T14:19:18.848Z] GET /api/wnba/stats?player_ids[]=672&seasons[]=2025
+[server] [2026-05-12T14:19:18.887Z] GET /api/wnba/season_averages?player_ids[]=220&player_ids[]=219&player_ids[]=227&player_ids[]=226&player_ids[]=218&player_ids[]=228&player_ids[]=819&player_ids[]=232&player_ids[]=230&player_ids[]=233&player_ids[]=661&player_ids[]=673&player_ids[]=680&player_ids[]=645&player_ids[]=681&player_ids[]=683&player_ids[]=663&player_ids[]=684&player_ids[]=686&player_ids[]=682&player_ids[]=666&player_ids[]=675&player_ids[]=652&player_ids[]=665&player_ids[]=685&player_ids[]=678&player_ids[]=672&season=2025
+[server] [2026-05-12T14:19:18.894Z] GET /api/wnba/stats?player_ids[]=220&seasons[]=2025
+[server] [2026-05-12T14:19:18.920Z] GET /api/wnba/stats?player_ids[]=219&seasons[]=2025
+[server] [2026-05-12T14:19:18.929Z] GET /api/wnba/stats?player_ids[]=227&seasons[]=2025
+[server] [2026-05-12T14:19:18.930Z] GET /api/wnba/stats?player_ids[]=226&seasons[]=2025
+[server] [2026-05-12T14:19:18.935Z] GET /api/wnba/stats?player_ids[]=218&seasons[]=2025
+[server] [2026-05-12T14:19:18.937Z] GET /api/wnba/stats?player_ids[]=228&seasons[]=2025
+[server] [2026-05-12T14:19:18.983Z] GET /api/wnba/stats?player_ids[]=819&seasons[]=2025
+[server] [2026-05-12T14:19:19.014Z] GET /api/wnba/stats?player_ids[]=232&seasons[]=2025
+[server] [2026-05-12T14:19:19.025Z] GET /api/wnba/stats?player_ids[]=230&seasons[]=2025
+[server] [2026-05-12T14:19:19.027Z] GET /api/wnba/stats?player_ids[]=233&seasons[]=2025
+[server] [2026-05-12T14:19:19.032Z] GET /api/wnba/stats?player_ids[]=661&seasons[]=2025
+[server] [2026-05-12T14:19:19.033Z] GET /api/wnba/stats?player_ids[]=673&seasons[]=2025
+[server] [2026-05-12T14:19:19.084Z] GET /api/wnba/stats?player_ids[]=680&seasons[]=2025
+[server] [2026-05-12T14:19:19.105Z] GET /api/wnba/stats?player_ids[]=645&seasons[]=2025
+[server] [2026-05-12T14:19:19.118Z] GET /api/wnba/stats?player_ids[]=681&seasons[]=2025
+[server] [2026-05-12T14:19:19.122Z] GET /api/wnba/stats?player_ids[]=683&seasons[]=2025
+[server] [2026-05-12T14:19:19.125Z] GET /api/wnba/stats?player_ids[]=663&seasons[]=2025
+[server] [2026-05-12T14:19:19.128Z] GET /api/wnba/stats?player_ids[]=684&seasons[]=2025
+[server] [2026-05-12T14:19:19.173Z] GET /api/wnba/stats?player_ids[]=686&seasons[]=2025
+[server] [2026-05-12T14:19:19.200Z] GET /api/wnba/stats?player_ids[]=682&seasons[]=2025
+[server] [2026-05-12T14:19:19.211Z] GET /api/wnba/stats?player_ids[]=666&seasons[]=2025
+[server] [2026-05-12T14:19:19.213Z] GET /api/wnba/stats?player_ids[]=675&seasons[]=2025
+[server] [2026-05-12T14:19:19.227Z] GET /api/wnba/stats?player_ids[]=685&seasons[]=2025
+[server] [2026-05-12T14:19:19.236Z] GET /api/wnba/stats?player_ids[]=678&seasons[]=2025
+[server] [2026-05-12T14:19:19.260Z] GET /api/wnba/stats?player_ids[]=652&seasons[]=2025
+[server] [2026-05-12T14:19:19.292Z] GET /api/wnba/stats?player_ids[]=665&seasons[]=2025
+[server] [2026-05-12T14:19:19.304Z] GET /api/wnba/stats?player_ids[]=672&seasons[]=2025
+[server] node server.js exited with code SIGINT
+[vite] vite exited with code SIGINT
