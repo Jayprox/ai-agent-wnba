@@ -761,6 +761,7 @@ app.get('/api/wnba/props', async (req, res) => {
         teams(id, bdl_id, name, abbreviation)
       `)
       .eq('game_id', gameId)
+      .not('season_avg', 'is', null)
       .order('confidence_score', { ascending: false });
 
     if (error) throw error;

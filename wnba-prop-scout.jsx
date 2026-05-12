@@ -255,15 +255,6 @@ const SANDBOX = {
     ],
   },
 
-  intel: {
-    g1: {
-      avgPace: 76.2, homePace: 74.8, visitorPace: 77.6,
-      homeATS: ['W','L','W','W','L'], visitorATS: ['W','W','L','W','W'],
-      homeOU:  ['U','O','U','U','O'], visitorOU:  ['O','O','U','O','O'],
-      homePPG: { home:74.8, away:71.2 }, visitorPPG: { home:81.4, away:77.6 },
-    },
-  },
-
   odds: {
     g1: {
       spread:    { home:-2.5, away:+2.5 },
@@ -535,7 +526,6 @@ async function apiGetOdds(gameId) {
 }
 
 async function apiGetMatchups(gameId) { if (IS_SANDBOX) return {}; return {}; }
-async function apiGetIntel(gameId)    { if (IS_SANDBOX) return SANDBOX.intel[gameId] || null; return null; }
 
 async function apiGetGameLogs(playerId) {
   if (IS_SANDBOX) return [];
@@ -1013,71 +1003,8 @@ function MatchupTab({ game, allPlayers, matchups, gameLogs, intel }) {
   );
 }
 
-// ---- Intel tab ----
-function IntelTab({ game, intel }) {
-  if (!intel) return (
-    <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: T.text3 }}>Intel unavailable</div>
-  );
-  const aw = game.visitor_team;
-  const hw = game.home_team;
-
-  return (
-    <div style={{ padding: 16 }}>
-      {/* Pace */}
-      <div style={{ background: T.card2, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${T.border}` }}>
-        <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>PACE</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, textAlign: 'center' }}>
-          {[{l:aw.abbreviation,v:intel.visitorPace},{l:'AVG',v:intel.avgPace},{l:hw.abbreviation,v:intel.homePace}].map(({l,v}) => (
-            <div key={l} style={{ background: T.card3, borderRadius: 7, padding: '8px 4px' }}>
-              <div style={{ fontSize: 9, color: T.text3 }}>{l}</div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: T.text, marginTop: 2 }}>{fmtOne(v)}</div>
-              <div style={{ fontSize: 8,  color: T.text3 }}>POSS/G</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ATS / O-U */}
-      <div style={{ background: T.card2, borderRadius: 10, padding: 14, marginBottom: 12, border: `1px solid ${T.border}` }}>
-        <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 6 }}>LAST 5 ATS</div>
-        {[{label:aw.abbreviation,ats:intel.visitorATS},{label:hw.abbreviation,ats:intel.homeATS}].map(({label,ats}) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-            <span style={{ fontSize: 11, color: T.text2, minWidth: 36 }}>{label}</span>
-            {(ats||[]).map((r,i) => (
-              <span key={i} style={{ fontSize: 11, fontWeight: 700, color: r==='W' ? T.green : T.red, width: 16, textAlign: 'center' }}>{r}</span>
-            ))}
-          </div>
-        ))}
-        <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, margin: '12px 0 6px' }}>LAST 5 O/U</div>
-        {[{label:aw.abbreviation,ou:intel.visitorOU},{label:hw.abbreviation,ou:intel.homeOU}].map(({label,ou}) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-            <span style={{ fontSize: 11, color: T.text2, minWidth: 36 }}>{label}</span>
-            {(ou||[]).map((r,i) => (
-              <span key={i} style={{ fontSize: 11, fontWeight: 700, color: r==='O' ? T.green : T.yellow, width: 16, textAlign: 'center' }}>{r}</span>
-            ))}
-          </div>
-        ))}
-      </div>
-
-      {/* H2H */}
-      {game.head_to_head?.length > 0 && (
-        <div style={{ background: T.card2, borderRadius: 10, padding: 14, border: `1px solid ${T.border}` }}>
-          <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 10 }}>HEAD TO HEAD</div>
-          {game.head_to_head.map((g, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: i < game.head_to_head.length - 1 ? `1px solid ${T.border}` : 'none' }}>
-              <span style={{ fontSize: 11, color: T.text2 }}>{g.date}</span>
-              <span style={{ fontSize: 11, color: T.text3 }}>{g.home} vs {g.away}</span>
-              <span style={{ fontSize: 11, color: T.text,  fontWeight: 700 }}>{g.score}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ---- Props tab ----
-function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
+function PropsTab({ game, allPlayers, matchups, gameLogs, props }) {
   const awayId = game.visitor_team.id;
   const homeId = game.home_team.id;
   const allP   = [...(allPlayers[awayId] || []), ...(allPlayers[homeId] || [])];
@@ -1099,7 +1026,7 @@ function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
         const logs    = gameLogs[p.id] || [];
         const pLines  = props[p.id] || [];
         const topConf = pLines.reduce((best, prop) => Math.max(best, Number(prop.confidence_score ?? 0)), 0);
-        const score   = IS_SANDBOX ? calcMatchupScore(p, mu, intel, logs) : topConf;
+        const score   = IS_SANDBOX ? calcMatchupScore(p, mu, null, logs) : topConf;
         const color   = scoreColor(score);
         const teamAbbr = p.team_id === awayId ? game.visitor_team.abbreviation
                        : p.team_id === homeId  ? game.home_team.abbreviation
@@ -1181,8 +1108,8 @@ function PropsTab({ game, allPlayers, matchups, intel, gameLogs, props }) {
 }
 
 // ---- GameCard (full-screen drill-down) ----
-const GAME_TABS   = ['overview','lineup','matchup','intel','props'];
-const GAME_LABELS = { overview:'OVERVIEW', lineup:'LINEUP', matchup:'MATCHUP', intel:'INTEL', props:'PROPS' };
+const GAME_TABS   = ['overview','lineup','matchup','props'];
+const GAME_LABELS = { overview:'OVERVIEW', lineup:'LINEUP', matchup:'MATCHUP', props:'PROPS' };
 
 function GameCard({ game, onClose }) {
   const [activeTab, setActiveTab]   = useState('overview');
@@ -1191,17 +1118,16 @@ function GameCard({ game, onClose }) {
   const [gameLogs, setGameLogs]     = useState({});
   const [odds, setOdds]             = useState(null);
   const [matchups, setMatchups]     = useState({});
-  const [intel, setIntel]           = useState(null);
   const [props, setProps]           = useState({});
   const [loading, setLoading]       = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [oddsData, matchupData, intelData, propsData] = await Promise.all([
-        apiGetOdds(game.id), apiGetMatchups(game.id), apiGetIntel(game.id), apiGetProps(game.id),
+      const [oddsData, matchupData, propsData] = await Promise.all([
+        apiGetOdds(game.id), apiGetMatchups(game.id), apiGetProps(game.id),
       ]);
-      setOdds(oddsData); setMatchups(matchupData); setIntel(intelData); setProps(propsData);
+      setOdds(oddsData); setMatchups(matchupData); setProps(propsData);
 
       const [awayPl, homePl] = await Promise.all([apiGetPlayers(game.visitor_team.id), apiGetPlayers(game.home_team.id)]);
       const allFetched = [...awayPl, ...homePl];
@@ -1279,9 +1205,8 @@ function GameCard({ game, onClose }) {
         <div className="ps-shell" style={{ flex: 1, padding: '0 16px' }}>
           {activeTab === 'overview' && <OverviewTab game={game} odds={odds} />}
           {activeTab === 'lineup'   && <LineupTab game={game} allPlayers={allPlayers} gameLogs={gameLogs} expandedId={expandedId} setExpandedId={setExpandedId} />}
-          {activeTab === 'matchup'  && <MatchupTab game={game} allPlayers={allPlayers} matchups={matchups} gameLogs={gameLogs} intel={intel} />}
-          {activeTab === 'intel'    && <IntelTab game={game} intel={intel} />}
-          {activeTab === 'props'    && <PropsTab game={game} allPlayers={allPlayers} matchups={matchups} intel={intel} gameLogs={gameLogs} props={props} />}
+          {activeTab === 'matchup'  && <MatchupTab game={game} allPlayers={allPlayers} matchups={matchups} gameLogs={gameLogs} />}
+          {activeTab === 'props'    && <PropsTab game={game} allPlayers={allPlayers} matchups={matchups} gameLogs={gameLogs} props={props} />}
         </div>
       )}
     </div>
