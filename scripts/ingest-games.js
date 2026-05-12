@@ -13,8 +13,8 @@ function getArgValue(name) {
   return inline ? inline.slice(flag.length + 1) : null;
 }
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+function todayEastern() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
 function mapStatus(status) {
@@ -36,6 +36,13 @@ function formatEspnEventTime(espnEvent) {
   const date = new Date(espnEvent.date);
   if (Number.isNaN(date.getTime())) return null;
   return date.toISOString().replace(':00.000Z', 'Z');
+}
+
+function espnEventDateEastern(espnEvent) {
+  if (!espnEvent?.date) return null;
+  const d = new Date(espnEvent.date);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
 function normalizeGameTime(value) {
@@ -141,7 +148,7 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
       espn_id:            String(event.id),
       home_team_id:       homeTeam.id,
       visitor_team_id:    visitorTeam.id,
-      game_date:          date,
+      game_date:          espnEventDateEastern(event) || date,
       status:             mapEspnStatus(event),
       home_team_score:    homeScore > 0 ? homeScore : null,
       visitor_team_score: visitorScore > 0 ? visitorScore : null,
@@ -246,7 +253,7 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
   return [...updated, ...data];
 }
 
-async function ingestGames(date = getArgValue('date') || todayIso()) {
+async function ingestGames(date = getArgValue('date') || todayEastern()) {
   const [teamsByBdlId, teamsByAbbrev] = await Promise.all([
     getTeamsByBdlId(),
     getTeamsByAbbreviation(),
