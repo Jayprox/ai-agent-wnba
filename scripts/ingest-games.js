@@ -53,22 +53,25 @@ function normalizeGameTime(value) {
 }
 
 async function getTeamsByBdlId() {
-  const { data, error } = await supabase
-    .from('teams')
-    .select('id, bdl_id, name');
+  const { data, error } = await supabase.from('teams').select('id, bdl_id, name');
 
   if (error) throw error;
-  return new Map((data || []).map(team => [team.bdl_id, team]));
+  return new Map(
+    (data || [])
+      .filter(team => team.bdl_id != null)
+      .map(team => [team.bdl_id, team]),
+  );
 }
 
-async function getTeamsByAbbreviation() {
+async function getTeamsByEspnId() {
   const { data, error } = await supabase
     .from('teams')
-    .select('id, abbreviation, name')
-    .eq('league', 'WNBA');
+    .select('id, espn_id, abbreviation, name')
+    .eq('league', 'WNBA')
+    .not('espn_id', 'is', null);
 
   if (error) throw error;
-  return new Map((data || []).map(team => [team.abbreviation.toUpperCase(), team]));
+  return new Map((data || []).map(team => [String(team.espn_id), team]));
 }
 
 function mapGame(game, teamsByBdlId) {
@@ -99,10 +102,9 @@ function mapGame(game, teamsByBdlId) {
 }
 
 /**
- * ESPN fallback: fetch WNBA scoreboard for a date, return any games not already
- * covered by BDL (identified by home+visitor team pair). Inserts with bdl_id: null.
+ * ESPN primary: scoreboard for a date. Inserts/updates by espn_id; preserves bdl_id when present.
  */
-async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season) {
+async function ingestEspnGames(date, teamsByEspnId, season) {
   const dateCompact = date.replace(/-/g, '');
   const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard?dates=${dateCompact}`;
 
@@ -113,7 +115,7 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
     const json = await res.json();
     espnEvents = json.events || [];
   } catch (err) {
-    console.warn(`[ingest-games] ESPN fallback fetch failed: ${err.message}`);
+    console.warn(`[ingest-games] ESPN scoreboard fetch failed: ${err.message}`);
     return [];
   }
 
@@ -123,95 +125,72 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
     if (!comp) continue;
 
     const competitors = comp.competitors || [];
-    const homeComp    = competitors.find(c => c.homeAway === 'home');
+    const homeComp = competitors.find(c => c.homeAway === 'home');
     const visitorComp = competitors.find(c => c.homeAway === 'away');
     if (!homeComp || !visitorComp) continue;
 
-    const homeAbbrev    = String(homeComp.team?.abbreviation    || '').toUpperCase();
-    const visitorAbbrev = String(visitorComp.team?.abbreviation || '').toUpperCase();
-
-    const homeTeam    = teamsByAbbrev.get(homeAbbrev);
-    const visitorTeam = teamsByAbbrev.get(visitorAbbrev);
+    const homeTeam = teamsByEspnId.get(String(homeComp.team?.id || ''));
+    const visitorTeam = teamsByEspnId.get(String(visitorComp.team?.id || ''));
 
     if (!homeTeam || !visitorTeam) {
-      console.warn(`[ingest-games] ESPN fallback: unresolved teams ${homeAbbrev} vs ${visitorAbbrev}`);
+      const ha = homeComp.team?.abbreviation || '?';
+      const va = visitorComp.team?.abbreviation || '?';
+      console.warn(`[ingest-games] ESPN: unresolved teams ${ha} vs ${va} (check teams.espn_id)`);
       continue;
     }
 
-    const pairKey = `${homeTeam.id}:${visitorTeam.id}`;
-
-    const homeScore    = Number(homeComp.score)    || null;
+    const homeScore = Number(homeComp.score) || null;
     const visitorScore = Number(visitorComp.score) || null;
 
     espnRows.push({
-      bdl_id:             null,
-      espn_id:            String(event.id),
-      home_team_id:       homeTeam.id,
-      visitor_team_id:    visitorTeam.id,
-      game_date:          espnEventDateEastern(event) || date,
-      status:             mapEspnStatus(event),
-      home_team_score:    homeScore > 0 ? homeScore : null,
+      bdl_id: null,
+      espn_id: String(event.id),
+      home_team_id: homeTeam.id,
+      visitor_team_id: visitorTeam.id,
+      game_date: espnEventDateEastern(event) || date,
+      status: mapEspnStatus(event),
+      home_team_score: homeScore > 0 ? homeScore : null,
       visitor_team_score: visitorScore > 0 ? visitorScore : null,
       season,
-      season_type:        'regular',
-      postseason:         false,
-      period:             null,
-      time:               formatEspnEventTime(event),
-      league:             'WNBA',
-      updated_at:         new Date().toISOString(),
-      covered_by_bdl:     coveredPairs.has(pairKey),
+      season_type: 'regular',
+      postseason: false,
+      period: null,
+      time: formatEspnEventTime(event),
+      league: 'WNBA',
+      updated_at: new Date().toISOString(),
     });
   }
 
-  if (!espnRows.length) return [];
-
-  const toDbRow = row => {
-    const { covered_by_bdl, ...dbRow } = row;
-    return dbRow;
-  };
-
-  let updated = [];
-  const bdlCoveredRows = espnRows.filter(row => row.covered_by_bdl);
-  for (const row of bdlCoveredRows) {
-    const dbRow = toDbRow(row);
-    const { data, error } = await supabase
-      .from('games')
-      .update({
-        espn_id: dbRow.espn_id,
-        status: dbRow.status,
-        home_team_score: dbRow.home_team_score,
-        visitor_team_score: dbRow.visitor_team_score,
-        period: dbRow.period,
-        time: dbRow.time,
-        updated_at: dbRow.updated_at,
-      })
-      .eq('game_date', date)
-      .eq('home_team_id', dbRow.home_team_id)
-      .eq('visitor_team_id', dbRow.visitor_team_id)
-      .select('id, espn_id, game_date');
-
-    if (error) {
-      console.warn(`[ingest-games] ESPN schedule update failed for ${dbRow.espn_id}: ${error.message}`);
-      continue;
-    }
-    updated = updated.concat(data || []);
+  if (!espnRows.length) {
+    console.log(`[ingest-games] ${date}: ESPN returned 0 games`);
+    return [];
   }
 
-  const fallbackRows = espnRows.filter(row => !row.covered_by_bdl).map(toDbRow);
-  if (!fallbackRows.length) {
-    if (updated.length) console.log(`[ingest-games] ESPN schedule: updated ${updated.length} BDL-backed game(s)`);
-    return updated;
-  }
-
-  // Insert only — these have no bdl_id conflict key, guard by espn_id
-  const { data: existing } = await supabase
+  const espnIds = espnRows.map(r => r.espn_id);
+  const { data: existingByEspn, error: existErr } = await supabase
     .from('games')
-    .select('espn_id')
-    .in('espn_id', fallbackRows.map(r => r.espn_id));
+    .select('id, espn_id, bdl_id')
+    .in('espn_id', espnIds);
 
-  const existingEspnIds = new Set((existing || []).map(r => r.espn_id));
-  const toUpdate = fallbackRows.filter(r => existingEspnIds.has(r.espn_id));
-  const toInsert = fallbackRows.filter(r => !existingEspnIds.has(r.espn_id));
+  if (existErr) {
+    console.warn(`[ingest-games] ESPN: could not load existing games: ${existErr.message}`);
+  }
+
+  const existingMap = new Map((existingByEspn || []).map(r => [r.espn_id, r]));
+
+  const toInsert = [];
+  const toUpdate = [];
+
+  for (const row of espnRows) {
+    const ex = existingMap.get(row.espn_id);
+    if (!ex) {
+      toInsert.push(row);
+    } else {
+      toUpdate.push(row);
+    }
+  }
+
+  const results = [];
 
   for (const row of toUpdate) {
     const { data, error } = await supabase
@@ -223,67 +202,76 @@ async function ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season
         period: row.period,
         time: row.time,
         updated_at: row.updated_at,
+        home_team_id: row.home_team_id,
+        visitor_team_id: row.visitor_team_id,
+        game_date: row.game_date,
+        season: row.season,
       })
       .eq('espn_id', row.espn_id)
       .select('id, espn_id, game_date');
 
     if (error) {
-      console.warn(`[ingest-games] ESPN fallback update failed for ${row.espn_id}: ${error.message}`);
+      console.warn(`[ingest-games] ESPN update failed for ${row.espn_id}: ${error.message}`);
       continue;
     }
-    updated = updated.concat(data || []);
+    results.push(...(data || []));
   }
 
-  if (!toInsert.length) {
-    if (updated.length) console.log(`[ingest-games] ESPN fallback: updated ${updated.length} existing game(s)`);
-    return updated;
+  if (toInsert.length) {
+    const { data, error } = await supabase.from('games').insert(toInsert).select('id, espn_id, game_date');
+
+    if (error) {
+      console.error(`[ingest-games] ESPN insert failed: ${error.message}`);
+    } else {
+      console.log(
+        `[ingest-games] ESPN: inserted ${data.length} game(s) (${data.map(r => r.espn_id).join(', ')})`,
+      );
+      results.push(...(data || []));
+    }
   }
 
-  const { data, error } = await supabase
-    .from('games')
-    .insert(toInsert)
-    .select('id, espn_id, game_date');
-
-  if (error) {
-    console.error(`[ingest-games] ESPN fallback insert failed: ${error.message}`);
-    return [];
+  if (toUpdate.length) {
+    console.log(`[ingest-games] ESPN: processed ${toUpdate.length} existing game(s) by espn_id`);
   }
 
-  console.log(`[ingest-games] ESPN fallback: inserted ${data.length} game(s) missing from BDL (${toInsert.map(r => r.espn_id).join(', ')})${updated.length ? `; updated ${updated.length}` : ''}`);
-  return [...updated, ...data];
+  return results;
 }
 
 async function ingestGames(date = getArgValue('date') || todayEastern()) {
-  const [teamsByBdlId, teamsByAbbrev] = await Promise.all([
-    getTeamsByBdlId(),
-    getTeamsByAbbreviation(),
-  ]);
+  const [teamsByBdlId, teamsByEspnId] = await Promise.all([getTeamsByBdlId(), getTeamsByEspnId()]);
 
-  const payload = await bdlFetch(`/wnba/v1/games?dates[]=${date}&per_page=40`);
-  const rows = (payload.data || [])
-    .map(game => mapGame(game, teamsByBdlId))
-    .filter(Boolean);
+  const season = Number(date.slice(0, 4)) || new Date().getFullYear();
 
-  let upserted = [];
-  if (rows.length) {
-    const { data, error } = await supabase
+  const espnGames = await ingestEspnGames(date, teamsByEspnId, season);
+
+  const bdlPayload = await bdlFetch(`/wnba/v1/games?dates[]=${date}&per_page=40`).catch(err => {
+    console.warn(`[ingest-games] BDL enrichment skipped: ${err.message}`);
+    return { data: [] };
+  });
+
+  for (const bdlGame of bdlPayload.data || []) {
+    const homeTeam = teamsByBdlId.get(bdlGame.home_team?.id);
+    const visitorTeam = teamsByBdlId.get(bdlGame.visitor_team?.id);
+    if (!homeTeam || !visitorTeam) continue;
+
+    const { error } = await supabase
       .from('games')
-      .upsert(rows, { onConflict: 'bdl_id' })
-      .select('id, bdl_id, game_date');
+      .update({
+        bdl_id: bdlGame.id,
+        status: mapStatus(bdlGame.status),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('game_date', date)
+      .eq('home_team_id', homeTeam.id)
+      .eq('visitor_team_id', visitorTeam.id)
+      .is('bdl_id', null);
 
-    if (error) throw error;
-    upserted = data;
-    console.log(`[ingest-games] ${date}: fetched ${rows.length}; upserted ${data.length}`);
-  } else {
-    console.log(`[ingest-games] ${date}: BDL returned 0 games — trying ESPN fallback`);
+    if (error) {
+      console.warn(`[ingest-games] BDL backfill failed for game ${bdlGame.id}: ${error.message}`);
+    }
   }
 
-  // ESPN fallback: catch any games BDL is missing
-  const coveredPairs = new Set(rows.map(r => `${r.home_team_id}:${r.visitor_team_id}`));
-  const season = rows[0]?.season ?? new Date().getFullYear();
-  const fallback = await ingestEspnFallbackGames(date, coveredPairs, teamsByAbbrev, season);
-
-  return [...upserted, ...fallback];
+  return espnGames;
 }
 
 if (require.main === module) {
@@ -293,4 +281,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingestGames, mapGame, mapStatus, formatEspnEventTime, normalizeGameTime };
+module.exports = { ingestGames, mapGame, mapStatus, formatEspnEventTime, normalizeGameTime, ingestEspnGames };

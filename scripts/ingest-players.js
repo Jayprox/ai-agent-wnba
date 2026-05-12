@@ -3,50 +3,85 @@ require('dotenv').config();
 const { supabase } = require('../lib/supabase');
 const { bdlFetch } = require('../lib/bdl-client');
 
-// Verify after running: players should contain active WNBA rows with team_id populated.
-
-async function getTeamsByBdlId() {
-  const { data, error } = await supabase
-    .from('teams')
-    .select('id, bdl_id, name')
-    .eq('league', 'WNBA');
-
-  if (error) throw error;
-  return new Map((data || []).map(team => [team.bdl_id, team]));
+function rosterUrl(espnTeamId) {
+  return `https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/teams/${espnTeamId}/roster`;
 }
 
-function mapPlayer(player, teamId) {
+async function getTeamsByEspnId() {
+  const { data, error } = await supabase
+    .from('teams')
+    .select('id, espn_id, abbreviation, name')
+    .eq('league', 'WNBA')
+    .not('espn_id', 'is', null);
+
+  if (error) throw error;
+  return data || [];
+}
+
+function mapEspnPlayer(espnPlayer, teamId) {
+  const display = espnPlayer.displayName || '';
+  const parts = display.trim().split(/\s+/);
+  const firstName =
+    espnPlayer.firstName || (parts.length ? parts[0] : '') || '';
+  const lastName =
+    espnPlayer.lastName ||
+    (parts.length > 1 ? parts.slice(1).join(' ') : '') ||
+    '';
+
+  const jersey = espnPlayer.jersey;
+  const jersey_number =
+    jersey === undefined || jersey === null || jersey === ''
+      ? null
+      : String(jersey);
+
   return {
-    bdl_id: player.id,
+    espn_id: String(espnPlayer.id),
     team_id: teamId,
-    first_name: player.first_name,
-    last_name: player.last_name,
-    position: player.position_abbreviation || player.position || null,
-    jersey_number: player.jersey_number || null,
-    height_feet: player.height_feet || null,
-    height_inches: player.height_inches || null,
-    weight_pounds: player.weight_pounds || null,
-    country: player.country || null,
-    draft_year: player.draft_year || null,
-    draft_round: player.draft_round || null,
-    draft_number: player.draft_number || null,
-    is_active: true,
+    first_name: firstName,
+    last_name: lastName,
+    position: espnPlayer.position?.abbreviation || null,
+    jersey_number,
+    is_active: espnPlayer.active !== false,
     league: 'WNBA',
     updated_at: new Date().toISOString(),
   };
 }
 
+async function fetchEspnRoster(espnTeamId) {
+  const res = await fetch(rosterUrl(espnTeamId));
+  if (!res.ok) throw new Error(`ESPN roster ${espnTeamId}: ${res.status}`);
+  return res.json();
+}
+
+function rosterAthletes(json) {
+  const raw = json?.athletes;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'object') {
+    return Object.values(raw).flat();
+  }
+  return [];
+}
+
 async function ingestPlayers() {
-  const teamsByBdlId = await getTeamsByBdlId();
+  const teams = await getTeamsByEspnId();
   const rows = [];
 
-  for (const team of teamsByBdlId.values()) {
-    const payload = await bdlFetch(`/wnba/v1/players?team_ids[]=${team.bdl_id}&per_page=100`);
-    const players = payload.data || [];
-    console.log(`[ingest-players] ${team.name}: fetched ${players.length}`);
+  for (const team of teams) {
+    let json;
+    try {
+      json = await fetchEspnRoster(team.espn_id);
+    } catch (err) {
+      console.warn(`[ingest-players] ${team.name}: ${err.message}`);
+      continue;
+    }
 
-    for (const player of players) {
-      rows.push(mapPlayer(player, team.id));
+    const athletes = rosterAthletes(json);
+    console.log(`[ingest-players] ${team.name}: fetched ${athletes.length}`);
+
+    for (const athlete of athletes) {
+      if (!athlete?.id) continue;
+      rows.push(mapEspnPlayer(athlete, team.id));
     }
   }
 
@@ -57,12 +92,41 @@ async function ingestPlayers() {
 
   const { data, error } = await supabase
     .from('players')
-    .upsert(rows, { onConflict: 'bdl_id' })
-    .select('id, bdl_id, full_name');
+    .upsert(rows, { onConflict: 'espn_id' })
+    .select('id, espn_id, full_name');
 
   if (error) throw error;
 
-  console.log(`[ingest-players] Fetched ${rows.length}; upserted ${data.length}`);
+  const activeEspnIds = new Set(rows.map(r => r.espn_id));
+
+  const { data: candidates, error: selErr } = await supabase
+    .from('players')
+    .select('id, espn_id')
+    .eq('league', 'WNBA')
+    .not('espn_id', 'is', null);
+
+  if (selErr) throw selErr;
+
+  const toDeactivate = (candidates || [])
+    .filter(p => p.espn_id && !activeEspnIds.has(String(p.espn_id)))
+    .map(p => p.id);
+
+  const chunkSize = 200;
+  for (let i = 0; i < toDeactivate.length; i += chunkSize) {
+    const chunk = toDeactivate.slice(i, i + chunkSize);
+    const { error: deactErr } = await supabase
+      .from('players')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .in('id', chunk);
+
+    if (deactErr) throw deactErr;
+  }
+
+  if (toDeactivate.length) {
+    console.log(`[ingest-players] Marked ${toDeactivate.length} player(s) inactive (not on ESPN rosters)`);
+  }
+
+  console.log(`[ingest-players] Upserted ${data.length} player row(s)`);
   return data;
 }
 
@@ -73,4 +137,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingestPlayers, mapPlayer };
+module.exports = { ingestPlayers, mapEspnPlayer, getTeamsByEspnId };
