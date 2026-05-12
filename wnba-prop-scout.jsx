@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 const IS_SANDBOX = false;
 const API_BASE   = import.meta.env.VITE_API_BASE || '';
 const SEASON     = 2025;
-const SLATE_RESET_TIME_ZONE = 'Pacific/Honolulu';
+const SLATE_RESET_TIME_ZONE = 'America/Los_Angeles';
 const SLATE_LOOKAHEAD_DAYS = 14;
 
 // ============================================================
@@ -1762,7 +1762,14 @@ export default function App() {
 
   async function loadSlateWithFallback(date) {
     const data = await apiGetSlate(date);
-    if (data.length || date < today()) return { date, data };
+
+    const allFinal = data.length > 0 && data.every(g => {
+      const s = String(g.status || '').toLowerCase();
+      return s === 'final' || s.includes('final');
+    });
+
+    if (data.length && !allFinal) return { date, data };
+    if (date < today()) return { date, data };
 
     for (let offset = 1; offset <= SLATE_LOOKAHEAD_DAYS; offset += 1) {
       const nextDate = shiftDateValue(date, offset);
