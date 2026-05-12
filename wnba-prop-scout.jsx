@@ -1774,7 +1774,12 @@ export default function App() {
     for (let offset = 1; offset <= SLATE_LOOKAHEAD_DAYS; offset += 1) {
       const nextDate = shiftDateValue(date, offset);
       const nextData = await apiGetSlate(nextDate);
-      if (nextData.length) return { date: nextDate, data: nextData };
+      if (!nextData.length) continue;
+      const nextAllFinal = nextData.every(g => {
+        const s = String(g.status || '').toLowerCase();
+        return s === 'final' || s.includes('final');
+      });
+      if (!nextAllFinal) return { date: nextDate, data: nextData };
     }
 
     return { date, data };

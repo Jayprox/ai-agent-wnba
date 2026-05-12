@@ -9,6 +9,10 @@ const express = require('express');
 const cors    = require('cors');
 const { supabase } = require('./lib/supabase');
 
+function etDateString() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
@@ -391,7 +395,7 @@ function recordLookupGet(lookup, season, teamId) {
  */
 app.get('/api/wnba/games', async (req, res) => {
   try {
-    const date = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const date = req.query.date || etDateString();
     const [teamsById, { data: games, error }] = await Promise.all([
       getTeamsById(),
       supabase
@@ -442,7 +446,7 @@ app.get('/api/wnba/games', async (req, res) => {
  */
 app.get('/api/wnba/slate', async (req, res) => {
   try {
-    const date = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const date = req.query.date || etDateString();
 
     const [teamsById, { data: games, error: gamesError }] = await Promise.all([
       getTeamsById(),
@@ -862,7 +866,7 @@ app.get('/api/wnba/injuries', async (req, res) => {
  */
 app.get('/api/wnba/top-picks', async (req, res) => {
   try {
-    const date  = req.query.date  || new Date().toISOString().slice(0, 10);
+    const date  = req.query.date  || etDateString();
     const limit = Math.min(50, parseInt(req.query.limit || '25', 10));
 
     // Find all games on this date
@@ -889,6 +893,7 @@ app.get('/api/wnba/top-picks', async (req, res) => {
         players(id, full_name, first_name, last_name, position, team_id)
       `)
       .in('game_id', gameIds)
+      .not('season_avg', 'is', null)
       .in('recommendation', ['OVER', 'UNDER'])
       .order('confidence_score', { ascending: false })
       .limit(limit);
@@ -937,7 +942,7 @@ app.get('/api/wnba/top-picks', async (req, res) => {
  * Reports pipeline freshness (today's game / prop / odds counts) plus env flags.
  */
 app.get('/health', async (_req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = etDateString();
 
   const base = {
     status: 'ok',
@@ -1011,7 +1016,7 @@ async function bootstrapToday() {
     }
     if (hourEt < 11 || hourEt > 20) return;
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = etDateString();
 
     const todayGameCounts = async () => {
       const gc = await supabase
