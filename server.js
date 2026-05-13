@@ -791,26 +791,21 @@ app.get('/api/wnba/stats', async (req, res) => {
     const seasons = [].concat(req.query.seasons    || req.query['seasons[]']    || [new Date().getFullYear()]).map(Number).filter(Number.isFinite);
     if (!ids.length) return res.status(400).json({ error: 'player_ids[] required' });
 
-    // If the requested seasons return no logs (e.g. early in a new season),
-    // automatically fall back to the prior season so the Last 5 tray populates.
-    const trySeasons = [...new Set([...seasons, ...seasons.map(s => s - 1)])].filter(s => s >= 2024);
-    let data, error;
-    for (let i = 0; i < trySeasons.length; i += 2) {
-      const batch = trySeasons.slice(i, i + 2);
-      ({ data, error } = await supabase
-        .from('player_game_logs')
-        .select(`
-          *,
-          players(id, bdl_id, first_name, last_name, full_name),
-          teams(id, bdl_id, name, abbreviation),
-          games!inner(id, bdl_id, game_date, season)
-        `)
-        .in('player_id', ids)
-        .in('games.season', batch)
-        .limit(300));
-      if (error) throw error;
-      if ((data || []).length > 0) break;
-    }
+    // Fetch the most recent game logs for these players across any season.
+    // We sort by game_date descending and let the frontend take last 5 per player.
+    // Skipping the games.season filter avoids PostgREST embedded-filter edge cases
+    // and naturally handles early-season gaps (falls back to prior season logs).
+    const { data, error } = await supabase
+      .from('player_game_logs')
+      .select(`
+        *,
+        players(id, bdl_id, first_name, last_name, full_name),
+        teams(id, bdl_id, name, abbreviation),
+        games!inner(id, bdl_id, game_date, season)
+      `)
+      .in('player_id', ids)
+      .order('id', { ascending: false })
+      .limit(500);
 
     if (error) throw error;
     const sorted = (data || []).sort((a, b) => String(b.games.game_date).localeCompare(String(a.games.game_date)));

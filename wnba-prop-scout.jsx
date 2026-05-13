@@ -1662,10 +1662,10 @@ function PlayerDrawer({ player, logs }) {
         <span style={{ color: T.text3, textAlign: 'right' }}>AST</span>
         {logs.map((g, i) => (
           <>
-            <span key={`d${i}`} style={{ color: T.text2 }}>{g.date}</span>
-            <span key={`p${i}`} style={{ color: T.text,  textAlign: 'right', fontWeight: 700 }}>{g.pts}</span>
-            <span key={`r${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.reb}</span>
-            <span key={`a${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.ast}</span>
+            <span key={`d${i}`} style={{ color: T.text2 }}>{g.game?.game_date ?? g.date ?? '—'}</span>
+            <span key={`p${i}`} style={{ color: T.text,  textAlign: 'right', fontWeight: 700 }}>{g.pts ?? '—'}</span>
+            <span key={`r${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.reb ?? '—'}</span>
+            <span key={`a${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.ast ?? '—'}</span>
           </>
         ))}
       </div>
