@@ -198,7 +198,10 @@ const SANDBOX = {
       id: 'g1',
       home_team:    { id:'t1', name:'New York Liberty',  abbreviation:'NY'  },
       visitor_team: { id:'t2', name:'Las Vegas Aces',    abbreviation:'LV'  },
-      status: '7:30 PM ET', date: '2025-05-20',
+      status: 'final',
+      date: '2025-05-20',
+      home_team_score: 88,
+      visitor_team_score: 82,
       home_record: '12-3', visitor_record: '11-4',
       home_form: ['W','W','L','W','W'], visitor_form: ['W','L','W','W','L'],
       head_to_head: [
@@ -279,7 +282,7 @@ const SANDBOX = {
 
   topPicks: [
     // — PTS —
-    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  players:{ full_name:"A'ja Wilson",         position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'] },
+    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  home_away_avg: 27.1, market_notes: { opening_line: 26.5, current_line: 25.5, movement: -1, book_gap: 0 }, players:{ full_name:"A'ja Wilson", position:'F', team_id: 't2' }, home_team:{ id: 't1', abbreviation:'NY'  }, visitor_team:{ id: 't2', abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'] },
     { id:'tp3',  player_id:'p24', prop_type:'pts', line:20.5, recommendation:'UNDER', confidence_score:72, projection:18.9, l5_avg:18.2, season_avg:21.1, value_gap:-1.6, players:{ full_name:'Jewell Loyd',          position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Tough defensive matchup','Slow pace game'] },
     { id:'tp5',  player_id:'p1',  prop_type:'pts', line:20.5, recommendation:'OVER',  confidence_score:67, projection:22.1, l5_avg:21.8, season_avg:21.2, value_gap:1.6,  players:{ full_name:'Breanna Stewart',      position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Home advantage','High usage + favorable opp'] },
     { id:'tp6',  player_id:'p16', prop_type:'pts', line:17.5, recommendation:'OVER',  confidence_score:63, projection:19.0, l5_avg:18.6, season_avg:18.2, value_gap:1.5,  players:{ full_name:'Marina Mabrey',        position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['L5 avg 18.6 pts','Elevated role with lineup changes'] },
@@ -298,6 +301,21 @@ const SANDBOX = {
     { id:'tp14', player_id:'p16', prop_type:'fg3m', line:2.5, recommendation:'OVER',  confidence_score:66, projection:3.0,  l5_avg:2.9,  season_avg:2.6,  value_gap:0.5,  players:{ full_name:'Marina Mabrey',        position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['High 3PA volume (7.1/g)','Favorable opp 3PT defense'] },
     { id:'tp15', player_id:'p9',  prop_type:'fg3m', line:2.5, recommendation:'UNDER', confidence_score:59, projection:2.1,  l5_avg:2.0,  season_avg:2.4,  value_gap:-0.4, players:{ full_name:'Kelsey Plum',          position:'G' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['NY allows fewest 3PM per game','Plum shooting 32% last 5'] },
   ],
+
+  modelTrackRecord: {
+    days: 30,
+    breakdown: true,
+    window: { start: '2026-04-10', end: '2026-05-09' },
+    games_count: 42,
+    high_tier: { picks: 186, hits: 102, misses: 76, pushes: 5, unresolved: 3, hit_rate: 0.573 },
+    medium_tier: { picks: 312, hits: 161, misses: 141, pushes: 7, unresolved: 3, hit_rate: 0.533 },
+    published_all: { picks: 524, hits: 275, misses: 233, pushes: 13, unresolved: 3, hit_rate: 0.541 },
+    calibration_high_by_prop: [
+      { prop_type: 'pts', settled: 48, hits: 28, misses: 20, hit_rate: 0.583 },
+      { prop_type: 'reb', settled: 36, hits: 19, misses: 17, hit_rate: 0.528 },
+      { prop_type: 'ast', settled: 31, hits: 18, misses: 13, hit_rate: 0.581 },
+    ],
+  },
 };
 
 // ============================================================
@@ -346,18 +364,40 @@ function calcMatchupScore(player, matchup, intel, logs) {
 // ============================================================
 // UTILS
 // ============================================================
+/** Layer A composite is capped at 80 (72 for some markets); not a win-probability. */
+const MODEL_SCORE_DISPLAY_MAX = 80;
+
 function scoreColor(s) {
   const score = Number.isFinite(Number(s)) ? Number(s) : 0;
   if (score >= 70) return T.green;
-  if (score >= 40) return T.yellow;
+  if (score >= 55) return T.yellow;
   return T.red;
 }
 
 function scoreLabel(s) {
   const score = Number.isFinite(Number(s)) ? Number(s) : 0;
   if (score >= 70) return 'FAVORABLE';
-  if (score >= 40) return 'NEUTRAL';
+  if (score >= 55) return 'NEUTRAL';
   return 'UNFAVORABLE';
+}
+
+/** Bar fill vs max score so 64 reads as strong signal, not “64% to win.” */
+function modelScoreBarWidthPct(confidence) {
+  const c = Number(confidence);
+  if (!Number.isFinite(c) || c <= 0) return 0;
+  return Math.min(100, (Math.min(Math.max(c, 0), MODEL_SCORE_DISPLAY_MAX) / MODEL_SCORE_DISPLAY_MAX) * 100);
+}
+
+const RISK_FLAG_LABELS = {
+  volatile_minutes: 'Volatile minutes',
+  volatile_stats: 'Volatile stat line',
+  back_to_back: 'Back-to-back',
+  blowout_risk: 'Blowout risk',
+  small_sample: 'Small sample',
+};
+
+function formatRiskFlag(f) {
+  return RISK_FLAG_LABELS[f] || String(f || '').replace(/_/g, ' ');
 }
 
 function fmtOdds(n)   { return n > 0 ? `+${n}` : `${n}`; }
@@ -391,16 +431,97 @@ function pickResult(pick) {
   return null;
 }
 
-function hitSummary(picks) {
-  const settled = (picks || []).filter(p => {
-    const r = pickResult(p);
-    return r === 'hit' || r === 'miss';
-  });
-  if (!settled.length) return null;
+/** Game finished — graded props may show hit/miss (server only grades when final). */
+function isGameFinalStatus(status) {
+  const s = String(status || '').toLowerCase();
+  return s === 'final' || s.includes('final') || s === 'complete' || s === 'closed';
+}
+
+function slateBoxScores(game) {
+  const hs = Number(game?.home_team_score ?? game?.home_score);
+  const vs = Number(game?.visitor_team_score ?? game?.away_score);
+  if (!Number.isFinite(hs) || !Number.isFinite(vs)) return null;
+  return { hs, vs };
+}
+
+function slateIsLiveStatus(game) {
+  const s = String(game?.status || '').toLowerCase();
+  return (
+    s === 'in_progress'
+    || s === 'halftime'
+    || s.startsWith('q')
+    || s.includes('live')
+    || s.includes('ht')
+  );
+}
+
+/** Show settled ML / total / spread vs closing line (not during live play). */
+function slateShowBettingResults(game) {
+  if (slateIsLiveStatus(game)) return false;
+  const bx = slateBoxScores(game);
+  if (!bx || bx.hs + bx.vs <= 0) return false;
+  if (isGameFinalStatus(game?.status)) return true;
+  return String(game?.status || '').toLowerCase() === 'scheduled';
+}
+
+function slateGameBettingSummary(game) {
+  if (!slateShowBettingResults(game)) return null;
+  const aw = game.visitor_team?.abbreviation || 'AWAY';
+  const hw = game.home_team?.abbreviation || 'HOME';
+  const bx = slateBoxScores(game);
+  if (!bx) return null;
+  const { hs, vs } = bx;
+  const margin = hs - vs;
+  const combined = hs + vs;
+
+  const mlText = hs > vs ? `${hw} wins` : vs > hs ? `${aw} wins` : 'Tie';
+
+  let totalText = null;
+  const tot = game.total != null ? Number(game.total) : null;
+  if (Number.isFinite(tot)) {
+    if (combined > tot) totalText = `Over ${fmtOne(tot)} (${fmtOne(combined)})`;
+    else if (combined < tot) totalText = `Under ${fmtOne(tot)} (${fmtOne(combined)})`;
+    else totalText = `Push ${fmtOne(tot)} (${fmtOne(combined)})`;
+  }
+
+  let spreadText = null;
+  const sp = game.spread != null ? Number(game.spread) : null;
+  if (Number.isFinite(sp)) {
+    const diff = margin + sp;
+    if (Math.abs(diff) < 1e-9) spreadText = `Push ${fmtGameSpread(hw, sp)}`;
+    else if (diff > 0) spreadText = `${hw} ${fmtGameSpread(hw, sp)}`;
+    else spreadText = `${aw} ${fmtGameSpread(aw, -sp)}`;
+  }
+
   return {
-    hits: settled.filter(p => pickResult(p) === 'hit').length,
-    total: settled.length,
+    scoreLine: `${aw} ${fmtOne(vs)} · ${hw} ${fmtOne(hs)}`,
+    mlText,
+    totalText,
+    spreadText,
   };
+}
+
+/** Slate header badge: SCHEDULED → LIVE → FINAL (FINAL also when box scores exist but status lagged). */
+function slateLifecycleLabel(game) {
+  if (slateIsLiveStatus(game)) return 'LIVE';
+  const bx = slateBoxScores(game);
+  if (isGameFinalStatus(game?.status)) return 'FINAL';
+  if (bx && bx.hs + bx.vs > 0 && String(game?.status || '').toLowerCase() === 'scheduled') return 'FINAL';
+  return 'SCHEDULED';
+}
+
+/**
+ * Tab hit badge: hits / picks on this slate for the stat (MLB-style #/# hit).
+ * Denominator = all board picks for that market today; numerator = settled hits only.
+ */
+function hitSummary(tabPicks) {
+  const picks = tabPicks || [];
+  const total = picks.length;
+  if (!total) return null;
+  const hits = picks.filter(
+    p => isGameFinalStatus(p.game_status) && pickResult(p) === 'hit',
+  ).length;
+  return { hits, total };
 }
 
 function fmtGameSpread(abbr, spread) {
@@ -483,6 +604,13 @@ async function apiGetTopPicks(date, limit = 50) {
   const r = await fetch(`${API_BASE}/api/wnba/top-picks?date=${date}&limit=${limit}`);
   if (!r.ok) return [];
   return (await r.json()).data || [];
+}
+
+async function apiGetModelTrackRecord(days = 30) {
+  if (IS_SANDBOX) return SANDBOX.modelTrackRecord;
+  const r = await fetch(`${API_BASE}/api/wnba/model-track-record?days=${days}&breakdown=1`);
+  if (!r.ok) throw new Error(`model-track-record failed: ${r.status}`);
+  return r.json();
 }
 
 async function apiGetPlayers(teamId) {
@@ -581,20 +709,24 @@ function Badge({ children, color }) {
 
 // ---- Status badge ----
 function isOddsLocked(game) {
-  const s = String(game?.status || '').toLowerCase();
-  return s === 'in_progress' || s === 'final' || s.startsWith('q') || s.includes('live') || s.includes('ht');
+  if (slateIsLiveStatus(game)) return true;
+  if (isGameFinalStatus(game?.status)) return true;
+  const bx = slateBoxScores(game);
+  const st = String(game?.status || '').toLowerCase();
+  if (bx && bx.hs + bx.vs > 0 && st === 'scheduled') return true;
+  return false;
 }
 
-function StatusBadge({ status }) {
-  if (!status) return null;
-  const s       = String(status).toUpperCase();
-  const isLive  = s.includes('LIVE') || s.startsWith('Q') || s.includes('HT');
-  const isFinal = s === 'FINAL' || s.includes('FINAL');
+function StatusBadge({ game }) {
+  if (!game) return null;
+  const label = slateLifecycleLabel(game);
+  const isLive  = label === 'LIVE';
+  const isFinal = label === 'FINAL';
   const bg    = isLive ? T.green  : isFinal ? T.card3  : T.card2;
   const color = isLive ? '#071a0e': isFinal ? T.text3  : T.text2;
   return (
     <span style={{ background: bg, color, fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 20, letterSpacing: isLive ? 0.3 : 0.4, border: isFinal ? `1px solid ${T.border}` : 'none', whiteSpace: 'nowrap' }}>
-      {isLive ? '● LIVE' : status}
+      {isLive ? '● LIVE' : label}
     </span>
   );
 }
@@ -644,6 +776,7 @@ function SlateCard({ game, onClick, topPick }) {
   const homeMlLabel  = game.home_ml  != null ? fmtML(game.home_ml)            : '—';
   const awayMlLabel  = game.away_ml  != null ? fmtML(game.away_ml)            : '—';
   const hasOdds      = game.spread != null || game.total != null || game.home_ml != null;
+  const betSummary   = slateGameBettingSummary(game);
 
   const recColor = topPick?.recommendation === 'OVER'  ? T.green
                  : topPick?.recommendation === 'UNDER' ? T.red
@@ -674,7 +807,7 @@ function SlateCard({ game, onClick, topPick }) {
               : (subline || ' ')}
           </div>
         </div>
-        <StatusBadge status={game.status} />
+        <StatusBadge game={game} />
       </div>
 
       {/* Odds row — 4 columns: SPR · O/U · Away ML · Home ML */}
@@ -692,9 +825,30 @@ function SlateCard({ game, onClick, topPick }) {
         ))}
       </div>
 
+      {betSummary && (
+        <div style={{
+          marginTop: 10,
+          padding: '8px 10px',
+          borderRadius: 8,
+          background: T.card2,
+          border: `1px solid ${T.border}`,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: T.text, letterSpacing: 0.2 }}>{betSummary.scoreLine}</div>
+          <div style={{ fontSize: 10, color: T.text2, marginTop: 6, lineHeight: 1.45 }}>
+            <div><span style={{ color: T.text3 }}>Moneyline · </span>{betSummary.mlText}</div>
+            {betSummary.totalText && (
+              <div><span style={{ color: T.text3 }}>Total · </span>{betSummary.totalText}</div>
+            )}
+            {betSummary.spreadText && (
+              <div><span style={{ color: T.text3 }}>Spread · </span>{betSummary.spreadText}</div>
+            )}
+          </div>
+        </div>
+      )}
+
       {isOddsLocked(game) && (
         <div style={{ fontSize: 9, color: T.text3, marginTop: 4, letterSpacing: 0.5 }}>
-          🔒 PRE-GAME ODDS
+          {slateShowBettingResults(game) ? 'Closing line (frozen)' : '🔒 Lines frozen'}
         </div>
       )}
 
@@ -753,11 +907,17 @@ function SlateCard({ game, onClick, topPick }) {
             {' '}
             <span style={{ fontWeight: 700, color: recColor }}>
               {topPick.recommendation} {fmtOne(topPick.line)}
+              {topPick.line_sportsbook_short && (
+                <span style={{ fontWeight: 800, color: topPick.line_sportsbook_short === 'CZR' ? T.green : T.text3, marginLeft: 4 }}>
+                  ({topPick.line_sportsbook_short})
+                </span>
+              )}
             </span>
           </div>
-          <div style={{ fontSize: 12, fontWeight: 800, color: scoreColor(topPick.confidence_score), marginLeft: 10, flexShrink: 0 }}>
-            {Math.round(Number(topPick.confidence_score) || 0)}
-          </div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: scoreColor(topPick.confidence_score), marginLeft: 10, flexShrink: 0, textAlign: 'right' }}>
+                <div>{Math.round(Number(topPick.confidence_score) || 0)}</div>
+                <div style={{ fontSize: 7, color: T.text3, fontWeight: 700, letterSpacing: 0.5 }}>SCORE</div>
+              </div>
         </div>
       )}
 
@@ -801,7 +961,7 @@ function OverviewTab({ game, odds }) {
           </div>
           <div style={{ width: 58, display: 'grid', placeItems: 'center', gap: 5 }}>
             <div style={{ color: T.accent, fontSize: 12, fontWeight: 900, letterSpacing: 1 }}>@</div>
-            <StatusBadge status={game.status} />
+            <StatusBadge game={game} />
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 30, fontWeight: 950, color: T.text, lineHeight: 1 }}>{hw?.abbreviation || '—'}</div>
@@ -1182,7 +1342,7 @@ function GameCard({ game, onClose }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <div style={{ fontSize: 18, fontWeight: 900, color: T.text }}>{aw.abbreviation} @ {hw.abbreviation}</div>
-              <StatusBadge status={game.status} />
+              <StatusBadge game={game} />
             </div>
             <div style={{ fontSize: 10, color: T.text3, marginTop: 3, letterSpacing: 0.4 }}>{IS_SANDBOX ? 'SANDBOX · ' : ''}{fmtDate(game.game_date || game.date)} · {TEAM_VENUES[hw?.abbreviation] || 'Venue TBA'}</div>
           </div>
@@ -1223,28 +1383,177 @@ function GameCard({ game, onClose }) {
   );
 }
 
-// ---- Top Picks tab ----
-function TopPicksTab({ picks, loading, error }) {
-  if (loading) return (
-    <div className="ps-empty-state">Loading picks…</div>
-  );
-  if (error) return (
-    <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>
-  );
-  if (!picks?.length) return (
-    <div className="ps-empty-state">
-      No picks available yet. Check back after the daily model run (runs at 12:30 AM ET).
+// ---- Track record (Model + Picks tabs) ----
+function formatTrackLine(b) {
+  if (!b || b.picks === 0) return 'No graded props in this window yet.';
+  const settled = b.hits + b.misses;
+  if (settled === 0) {
+    return `${b.picks} prop${b.picks === 1 ? '' : 's'} — no settled H/M yet (${b.unresolved} unresolved${b.pushes ? `, ${b.pushes} push` : ''}).`;
+  }
+  const pct = b.hit_rate != null ? `${Math.round(b.hit_rate * 100)}%` : '—';
+  const parts = [`${b.hits}H`, `${b.misses}M`];
+  if (b.pushes > 0) parts.push(`${b.pushes} push${b.pushes === 1 ? '' : 'es'}`);
+  let tail = `${parts.join(' · ')} (${b.picks} props)`;
+  if (b.unresolved > 0) tail += ` · ${b.unresolved} unresolved`;
+  return `${pct} on ${settled} settled — ${tail}`;
+}
+
+function formatTrackPct(b) {
+  const settled = (b?.hits || 0) + (b?.misses || 0);
+  if (!b || settled === 0) return '—';
+  return b.hit_rate != null ? `${Math.round(b.hit_rate * 100)}%` : '—';
+}
+
+/** Mirrors lib/scoring/clv.js for client-only bundle (opening → line at publish). */
+function pickClv(pick) {
+  if (pick?.clv) return pick.clv;
+  const mn = pick?.market_notes;
+  if (!mn || typeof mn !== 'object') return null;
+  const opening = Number(mn.opening_line);
+  const current = Number(mn.current_line);
+  const movement = mn.movement != null && Number.isFinite(Number(mn.movement))
+    ? Number(mn.movement)
+    : (Number.isFinite(opening) && Number.isFinite(current) ? current - opening : null);
+  if (movement == null && !Number.isFinite(opening) && !Number.isFinite(current)) return null;
+  const rec = String(pick.recommendation || '').toUpperCase();
+  if (!['OVER', 'UNDER'].includes(rec)) return null;
+  let favor = 'flat';
+  if (movement != null && Math.abs(movement) > 0.009) {
+    if (rec === 'OVER') favor = movement < 0 ? 'help' : 'hurt';
+    else favor = movement > 0 ? 'help' : 'hurt';
+  }
+  const line = Number.isFinite(opening) && Number.isFinite(current) ? `${opening}→${current}` : null;
+  return { opening, current, movement, favor, line, book_gap: mn.book_gap != null ? Number(mn.book_gap) : null };
+}
+
+function pickHomeRoadLabel(pick) {
+  const tid = pick.players?.team_id;
+  const hid = pick.home_team?.id;
+  if (tid == null || hid == null) return null;
+  return String(tid) === String(hid) ? 'Home' : 'Road';
+}
+
+function TrackRecordPickStrip({ track, trackErr }) {
+  if (trackErr) {
+    return (
+      <div style={{ fontSize: 10, color: T.red, marginBottom: 12, padding: '8px 10px', background: T.redDim, borderRadius: 8, border: `1px solid ${T.red}44` }}>
+        {trackErr}
+      </div>
+    );
+  }
+  if (!track) {
+    return (
+      <div style={{ fontSize: 10, color: T.text3, marginBottom: 12 }}>Loading recent model results…</div>
+    );
+  }
+  const hi  = formatTrackPct(track.high_tier);
+  const med = formatTrackPct(track.medium_tier);
+  const all = formatTrackPct(track.published_all);
+  const games = track.games_count ?? 0;
+  return (
+    <div style={{
+      marginBottom: 14,
+      padding: '10px 12px',
+      background: T.card2,
+      border: `1px solid ${T.border}`,
+      borderRadius: 10,
+    }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color: T.text3, letterSpacing: 0.8, marginBottom: 6 }}>
+        LAST {track.days}D · FINALS · {games} game{games === 1 ? '' : 's'}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', fontSize: 11, color: T.text2, lineHeight: 1.45 }}>
+        <span><span style={{ color: T.green, fontWeight: 700 }}>HIGH ≥70</span> {hi}</span>
+        <span style={{ color: T.border }}>|</span>
+        <span><span style={{ color: T.yellow, fontWeight: 700 }}>MID 55–69</span> {med}</span>
+        <span style={{ color: T.border }}>|</span>
+        <span><span style={{ color: T.text3, fontWeight: 700 }}>ALL ≥54</span> {all}</span>
+      </div>
+      <div style={{ fontSize: 9, color: T.text3, marginTop: 6, lineHeight: 1.35 }}>
+        Hit % = hits ÷ (hits + misses). Full breakdown on the Model tab.
+      </div>
+      {Array.isArray(track.calibration_high_by_prop) && track.calibration_high_by_prop.length > 0 && (
+        <div style={{ fontSize: 10, color: T.text2, marginTop: 10, lineHeight: 1.45 }}>
+          <span style={{ fontWeight: 700, color: T.text3 }}>HIGH by market: </span>
+          {track.calibration_high_by_prop.slice(0, 5).map((row, i) => (
+            <span key={row.prop_type}>
+              {i > 0 ? ' · ' : ''}
+              {String(row.prop_type || '').toUpperCase()}{' '}
+              {row.hit_rate != null ? `${Math.round(row.hit_rate * 100)}%` : '—'}
+              <span style={{ color: T.text3 }}> ({row.settled})</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
+}
+
+// ---- Top Picks tab ----
+function TopPicksTab({ picks, loading, error }) {
+  const [track, setTrack] = useState(null);
+  const [trackErr, setTrackErr] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await apiGetModelTrackRecord(30);
+        if (!cancelled) {
+          setTrack(d);
+          setTrackErr(null);
+        }
+      } catch (e) {
+        if (!cancelled) setTrackErr(e.message || 'Failed to load track record');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const header = (
+    <>
+      <div className="ps-daily-card">
+        <span>↯ TOP PICKS</span>
+        <span style={{ color: T.text3 }}>{loading ? '…' : `${picks?.length || 0} PROPS`}</span>
+      </div>
+      <TrackRecordPickStrip track={track} trackErr={trackErr} />
+    </>
+  );
+
+  if (loading) {
+    return (
+      <div>
+        {header}
+        <div className="ps-empty-state">Loading picks…</div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div>
+        {header}
+        <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>
+      </div>
+    );
+  }
+  if (!picks?.length) {
+    return (
+      <div>
+        {header}
+        <div className="ps-empty-state">
+          No picks available yet. Check back after the daily model run (runs at 12:30 AM ET).
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
-      <div className="ps-daily-card">
-        <span>↯ TOP PICKS</span>
-        <span style={{ color: T.text3 }}>{picks.length} PROPS</span>
-      </div>
+      {header}
       <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 12 }}>
         TODAY'S TOP PICKS · {picks.length} PROPS
+      </div>
+      <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.5, marginTop: -8, marginBottom: 14 }}>
+        Model score ranks setup strength (about 0–80). It is not win probability. Check results after games to judge the model.
       </div>
 
       <div className="ps-card-grid">
@@ -1261,10 +1570,17 @@ function TopPicksTab({ picks, loading, error }) {
         const rank    = i + 1;
         const isTop   = rank <= 3;
         const factors = Array.isArray(pick.key_factors) ? pick.key_factors : [];
+        const risks   = Array.isArray(pick.risk_flags) ? pick.risk_flags : [];
+        const hrS     = pick.hit_rate_over_season;
+        const hitLine = Number.isFinite(Number(hrS))
+          ? `Over this line in ${Math.round(Number(hrS) * 100)}% of games (season).`
+          : null;
 
         const matchupLabel = pick.home_team && pick.visitor_team
           ? `${pick.visitor_team.abbreviation} @ ${pick.home_team.abbreviation}`
           : null;
+        const siteLabel = pickHomeRoadLabel(pick);
+        const clv       = pickClv(pick);
 
         return (
           <div key={pick.id || i} style={{
@@ -1297,7 +1613,7 @@ function TopPicksTab({ picks, loading, error }) {
               {/* Big confidence number */}
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
                 <div style={{ fontSize: 24, fontWeight: 900, color, lineHeight: 1 }}>{Math.round(conf)}</div>
-                <div style={{ fontSize: 8, color, letterSpacing: 1, marginTop: 1 }}>CONF</div>
+                <div style={{ fontSize: 7, color: T.text3, letterSpacing: 0.6, marginTop: 1 }}>MODEL SCORE</div>
               </div>
             </div>
 
@@ -1306,6 +1622,14 @@ function TopPicksTab({ picks, loading, error }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <Badge color={T.card3}>{type}</Badge>
                 <span style={{ fontSize: 17, fontWeight: 900, color: T.text }}>{fmtOne(pick.line)}</span>
+                {pick.line_sportsbook_short && (
+                  <span style={{
+                    fontSize: 9,
+                    fontWeight: 800,
+                    color: pick.line_sportsbook_short === 'CZR' ? T.green : T.text3,
+                    letterSpacing: 0.3,
+                  }}>{pick.line_sportsbook_short}</span>
+                )}
                 <span style={{ background: recBg, color: recFg, fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 5 }}>{rec}</span>
                 {pick.correlated_opportunity && (
                   <span style={{ background: T.greenDim, color: T.green, border: `1px solid ${T.green}`, borderRadius: 4, fontSize: 9, padding: '2px 6px' }}>CORRELATED</span>
@@ -1322,16 +1646,69 @@ function TopPicksTab({ picks, loading, error }) {
                 ))}
               </div>
 
-              {/* Key factors */}
-              {factors.length > 0 && (
-                <div style={{ marginTop: 8, fontSize: 10, color: T.text2 }}>
-                  {factors.slice(0, 2).join(' · ')}
+              {(siteLabel && pick.home_away_avg != null) || clv?.line ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 10, color: T.text3 }}>
+                  {siteLabel && pick.home_away_avg != null && (
+                    <span>
+                      <span style={{ fontWeight: 800, color: T.text2 }}>{siteLabel}</span>
+                      {' avg '}
+                      <span style={{ fontWeight: 700, color: T.text }}>{fmtOne(pick.home_away_avg)}</span>
+                      {' '}
+                      <span style={{ textTransform: 'uppercase' }}>{type}</span>
+                    </span>
+                  )}
+                  {clv?.line && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <span>Open {clv.line}</span>
+                      {clv.favor === 'help' && (
+                        <span style={{ fontSize: 8, fontWeight: 900, color: T.green, background: T.greenDim, border: `1px solid ${T.green}`, padding: '1px 5px', borderRadius: 4 }}>CLV+</span>
+                      )}
+                      {clv.favor === 'hurt' && (
+                        <span style={{ fontSize: 8, fontWeight: 900, color: T.red, background: T.redDim, border: `1px solid ${T.red}`, padding: '1px 5px', borderRadius: 4 }}>CLV−</span>
+                      )}
+                    </span>
+                  )}
+                </div>
+              ) : null}
+
+              {hitLine && (
+                <div style={{ marginTop: 8, fontSize: 10, color: T.text3, lineHeight: 1.45 }}>
+                  {hitLine}
                 </div>
               )}
 
-              {/* Confidence bar */}
+              {/* Key factors */}
+              {factors.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 10, color: T.text2, lineHeight: 1.45 }}>
+                  {factors.slice(0, 3).join(' · ')}
+                </div>
+              )}
+
+              {risks.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+                  {risks.map(r => (
+                    <span
+                      key={r}
+                      style={{
+                        fontSize: 8,
+                        fontWeight: 700,
+                        color: T.yellow,
+                        background: T.yellowDim,
+                        border: `1px solid ${T.yellow}55`,
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        letterSpacing: 0.3,
+                      }}
+                    >
+                      {formatRiskFlag(r)}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Model score bar (strength vs max ~80, not win %) */}
               <div style={{ marginTop: 10, height: 3, borderRadius: 2, background: T.card3, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${conf}%`, background: color, borderRadius: 2 }} />
+                <div style={{ height: '100%', width: `${modelScoreBarWidthPct(conf)}%`, background: color, borderRadius: 2 }} />
               </div>
             </div>
           </div>
@@ -1344,6 +1721,25 @@ function TopPicksTab({ picks, loading, error }) {
 
 // ---- Model tab ----
 function ModelTab() {
+  const [track, setTrack]   = useState(null);
+  const [trackErr, setTrackErr] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await apiGetModelTrackRecord(30);
+        if (!cancelled) {
+          setTrack(d);
+          setTrackErr(null);
+        }
+      } catch (e) {
+        if (!cancelled) setTrackErr(e.message || 'Failed to load track record');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const signals = [
     { name:'L5 Trend',         desc:'Last 5-game rolling average vs the betting line' },
     { name:'Season Average',   desc:'Full-season baseline performance' },
@@ -1361,10 +1757,68 @@ function ModelTab() {
         <span>↯ MODEL</span>
         <span style={{ color: T.text3 }}>SIGNALS</span>
       </div>
+
+      {trackErr && (
+        <div style={{ background: T.redDim, border: `1px solid ${T.red}55`, borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 12, color: T.red }}>
+          {trackErr}
+        </div>
+      )}
+
+      {!track && !trackErr && (
+        <div style={{ fontSize: 12, color: T.text3, marginBottom: 14 }}>Loading track record…</div>
+      )}
+
+      {track && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 4 }}>Recent results (graded finals)</div>
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 12, lineHeight: 1.5 }}>
+            Last {track.days} days ET ({track.window?.start} → {track.window?.end}), {track.games_count ?? 0} final game{track.games_count === 1 ? '' : 's'}.
+            Hit rate uses hits ÷ (hits + misses); pushes excluded. Same prop definitions as the board.
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            <div style={{ background: T.card2, borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.green, letterSpacing: 0.6 }}>HIGH (score ≥ 70)</div>
+              <div style={{ fontSize: 12, color: T.text2, marginTop: 4, lineHeight: 1.45 }}>{formatTrackLine(track.high_tier)}</div>
+            </div>
+            <div style={{ background: T.card2, borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.yellow, letterSpacing: 0.6 }}>MEDIUM (55–69)</div>
+              <div style={{ fontSize: 12, color: T.text2, marginTop: 4, lineHeight: 1.45 }}>{formatTrackLine(track.medium_tier)}</div>
+            </div>
+            <div style={{ background: T.card2, borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, letterSpacing: 0.6 }}>ALL PUBLISHED (score ≥ 54)</div>
+              <div style={{ fontSize: 12, color: T.text2, marginTop: 4, lineHeight: 1.45 }}>{formatTrackLine(track.published_all)}</div>
+            </div>
+          </div>
+
+          {Array.isArray(track.calibration_high_by_prop) && track.calibration_high_by_prop.length > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.text, marginBottom: 6 }}>Calibration — HIGH tier by market</div>
+              <div style={{ fontSize: 10, color: T.text3, marginBottom: 8, lineHeight: 1.4 }}>
+                Hit % on props with model score ≥ 70, grouped by stat type. Markets need at least 3 settled results in the window.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+                {track.calibration_high_by_prop.map(row => (
+                  <div key={row.prop_type} style={{ background: T.card2, borderRadius: 6, padding: '8px 10px' }}>
+                    <div style={{ fontSize: 9, color: T.text3, fontWeight: 800 }}>{String(row.prop_type || '').toUpperCase()}</div>
+                    <div style={{ fontSize: 14, fontWeight: 900, color: T.text, marginTop: 2 }}>
+                      {row.hit_rate != null ? `${Math.round(row.hit_rate * 100)}%` : '—'}
+                    </div>
+                    <div style={{ fontSize: 9, color: T.text3, marginTop: 2 }}>{row.settled} settled</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 8 }}>How the Model Works</div>
         <div style={{ fontSize: 12, color: T.text2, lineHeight: 1.65 }}>
-          Every prop is scored 0–100 using a multi-signal confidence model. Signals are normalized to a common scale, weighted by predictive power, and combined into a single score. A score above 70 is favorable for a bet; below 40 is unfavorable.
+          Each pick gets a <strong>model score</strong> from several signals (projection vs line, recent form, minutes stability, pace, matchup, injuries, line movement, and more). Scores are on about a <strong>0–80</strong> scale for main markets (some props cap lower). This is <strong>not</strong> a win probability or guaranteed edge — it ranks how strong the setup looks relative to other props on the slate.
+        </div>
+        <div style={{ fontSize: 11, color: T.text3, lineHeight: 1.6, marginTop: 10 }}>
+          <strong>Tiers:</strong> HIGH (about 70+), MEDIUM (about 55–69), lower scores are more speculative. Grades after finals (HIT/MISS) are the best way to see how the model is doing over time.
         </div>
       </div>
 
@@ -1412,26 +1866,49 @@ function BoardPlayerCard({ pick, rank }) {
   const recFg   = rec === 'OVER'  ? T.green    : rec === 'UNDER' ? T.red    : T.text3;
   const isTop   = rank <= 3;
   const factors = Array.isArray(pick.key_factors) ? pick.key_factors : [];
+  const siteLabel = pickHomeRoadLabel(pick);
+  const clvBoard  = pickClv(pick);
+  const propU     = String(pick.prop_type || '').toUpperCase();
+  const tier = pick.score_tier || null;
+  const tierBg =
+    tier === 'HIGH' ? T.greenDim : tier === 'MEDIUM' ? T.yellowDim : tier === 'SPEC' ? T.card3 : T.card3;
+  const tierFg =
+    tier === 'HIGH' ? T.green : tier === 'MEDIUM' ? T.yellow : T.text3;
   const matchup = pick.home_team && pick.visitor_team
     ? `${pick.visitor_team.abbreviation} @ ${pick.home_team.abbreviation}`
     : null;
   const hasProj = pick.projection != null;
   const result  = pickResult(pick);
+  const finalGraded = isGameFinalStatus(pick.game_status) && (result === 'hit' || result === 'miss' || result === 'push');
   const resultColor = result === 'hit' ? T.green : result === 'miss' ? T.red : result === 'push' ? T.yellow : null;
   const resultBg = result === 'hit' ? T.greenDim : result === 'miss' ? T.redDim : result === 'push' ? T.yellowDim : null;
   const resultText = result === 'hit' ? 'HIT' : result === 'miss' ? 'MISS' : result === 'push' ? 'PUSH' : null;
   const resultLine = resultText && pick.actual_value != null
     ? `${fmtOne(pick.actual_value)}/${fmtOne(pick.line)} ${resultText}`
     : resultText;
+  const gradeAccent = finalGraded && resultColor ? resultColor : null;
 
   return (
     <div style={{
-      display: 'flex', alignItems: 'stretch',
-      borderBottom: `1px solid ${resultColor ? `${resultColor}55` : T.border}`,
-      background: resultColor ? `${resultBg}` : 'transparent',
+      display: 'flex',
+      alignItems: 'stretch',
+      borderBottom: `1px solid ${T.border}`,
+      background: finalGraded && result === 'hit'
+        ? 'rgba(46, 204, 113, 0.08)'
+        : finalGraded && result === 'miss'
+          ? 'rgba(231, 76, 60, 0.07)'
+          : finalGraded && result === 'push'
+            ? 'rgba(241, 196, 15, 0.08)'
+            : 'transparent',
+      boxShadow: gradeAccent ? `inset 0 0 0 2px ${gradeAccent}` : 'none',
     }}>
-      {/* Left accent stripe for top 3 */}
-      <div style={{ width: 3, flexShrink: 0, background: resultColor || (isTop ? T.accent : 'transparent'), borderRadius: '0 0 0 0' }} />
+      {/* Left accent — graded final takes priority over top-3 */}
+      <div style={{
+        width: 4,
+        flexShrink: 0,
+        background: gradeAccent || (isTop ? T.accent : 'transparent'),
+        borderRadius: '0 0 0 0',
+      }} />
 
       <div style={{ flex: 1, padding: '13px 14px 11px', minWidth: 0 }}>
         {/* Row 1: rank + name + big conf number */}
@@ -1479,7 +1956,22 @@ function BoardPlayerCard({ pick, rank }) {
               </div>
             )}
             <div style={{ fontSize: 30, fontWeight: 900, color, lineHeight: 1 }}>{conf}</div>
-            <div style={{ fontSize: 7, color, letterSpacing: 1.2, marginTop: 1, textAlign: 'right' }}>CONF</div>
+            {tier && (
+              <div style={{
+                display: 'inline-block',
+                marginTop: 4,
+                padding: '2px 6px',
+                borderRadius: 4,
+                fontSize: 7,
+                fontWeight: 900,
+                letterSpacing: 0.8,
+                background: tierBg,
+                color: tierFg,
+              }}>
+                {tier}
+              </div>
+            )}
+            <div style={{ fontSize: 7, color: T.text3, letterSpacing: 0.6, marginTop: 1, textAlign: 'right' }}>MODEL SCORE</div>
           </div>
         </div>
 
@@ -1494,6 +1986,17 @@ function BoardPlayerCard({ pick, rank }) {
           </span>
           <span style={{ fontSize: 15, fontWeight: 800, color: T.text }}>{fmtOne(pick.line)}</span>
           <span style={{ fontSize: 10, color: T.text3 }}>line</span>
+          {pick.line_sportsbook_short && (
+            <>
+              <span style={{ fontSize: 10, color: T.border }}>·</span>
+              <span style={{
+                fontSize: 9,
+                fontWeight: 800,
+                color: pick.line_sportsbook_short === 'CZR' ? T.green : T.text3,
+                letterSpacing: 0.4,
+              }}>{pick.line_sportsbook_short}</span>
+            </>
+          )}
           {hasProj && (
             <>
               <span style={{ fontSize: 10, color: T.border }}>·</span>
@@ -1510,16 +2013,39 @@ function BoardPlayerCard({ pick, rank }) {
           )}
         </div>
 
-        {/* Row 3: key factor */}
+        {(siteLabel && pick.home_away_avg != null) || clvBoard?.line ? (
+          <div style={{ fontSize: 9, color: T.text3, marginTop: 5, marginLeft: 34, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            {siteLabel && pick.home_away_avg != null && (
+              <span>
+                <span style={{ fontWeight: 800, color: T.text2 }}>{siteLabel}</span>
+                {' avg '}{fmtOne(pick.home_away_avg)} {propU}
+              </span>
+            )}
+            {clvBoard?.line && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                Open {clvBoard.line}
+                {clvBoard.favor === 'help' && <span style={{ fontSize: 7, fontWeight: 900, color: T.green }}>CLV+</span>}
+                {clvBoard.favor === 'hurt' && <span style={{ fontSize: 7, fontWeight: 900, color: T.red }}>CLV−</span>}
+              </span>
+            )}
+          </div>
+        ) : null}
+
+        {/* Row 3: key factors */}
         {factors.length > 0 && (
-          <div style={{ fontSize: 10, color: T.text3, marginTop: 5, marginLeft: 34, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {factors[0]}
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 5, marginLeft: 34, lineHeight: 1.35 }}>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{factors[0]}</div>
+            {factors.length > 1 && (
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2, opacity: 0.9 }}>
+                {factors[1]}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Row 4: confidence bar */}
+        {/* Row 4: model score bar */}
         <div style={{ marginTop: 7, marginLeft: 34, height: 2, borderRadius: 1, background: T.card3, overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${conf}%`, background: color }} />
+          <div style={{ height: '100%', width: `${modelScoreBarWidthPct(conf)}%`, background: color }} />
         </div>
       </div>
     </div>
@@ -1603,7 +2129,7 @@ function BoardTab({ picks, loading, error, games }) {
                   </div>
                   <div style={{ textAlign:'right', flexShrink:0, minWidth:44 }}>
                     <div style={{ fontSize:30, fontWeight:900, color, lineHeight:1 }}>{conf}</div>
-                    <div style={{ fontSize:7, color, letterSpacing:1.2, marginTop:1 }}>CONF</div>
+                    <div style={{ fontSize:7, color:T.text3, letterSpacing:0.5, marginTop:1 }}>SCORE</div>
                   </div>
                 </div>
                 <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:9, marginLeft:34 }}>
@@ -1657,18 +2183,20 @@ function BoardTab({ picks, loading, error, games }) {
       </div>
 
       {/* Stat sub-tabs */}
-      <div className="ps-subnav" style={{ marginBottom: 12, border: `1px solid ${T.border}`, borderRadius: 12, overflowX: 'auto' }}>
+      <div className="ps-subnav" style={{ marginBottom: 12, paddingTop: 10, paddingBottom: 2, border: `1px solid ${T.border}`, borderRadius: 12, overflowX: 'auto' }}>
         {BOARD_STAT_TABS.map(t => {
           const isSpecial = t === 'combo' || t === 'fb';
           const tabPicks  = isSpecial ? [] : (picks || []).filter(p => String(p.prop_type || '').toLowerCase() === t);
           const count     = tabPicks.length;
           const summary   = isSpecial ? null : hitSummary(tabPicks);
+          const badgeGreen = summary && summary.hits > 0;
+          const activeBtn = activeStat === t;
           return (
             <button key={t} onClick={() => setActiveStat(t)} style={{
               position: 'relative',
               background: activeStat === t ? T.accent : T.card,
               border: `1px solid ${activeStat === t ? T.accent : T.border}`,
-              padding: '8px 14px',
+              padding: '10px 16px 9px',
               fontSize: 11, fontWeight: 800,
               color: activeStat === t ? '#fff' : T.text3,
               cursor: 'pointer', letterSpacing: 0.4, transition: 'color 0.1s',
@@ -1676,12 +2204,32 @@ function BoardTab({ picks, loading, error, games }) {
             }}>
               {BOARD_STAT_LABELS[t]}
               {!isSpecial && count > 0 && (
-                <span style={{ marginLeft: 4, fontSize: 9, fontWeight: 700, color: activeStat === t ? '#fff' : T.text3 }}>
+                <span style={{ marginLeft: 4, fontSize: 9, fontWeight: 700, color: activeStat === t ? 'rgba(255,255,255,0.85)' : T.text3 }}>
                   {count}
                 </span>
               )}
               {summary && (
-                <span style={{ marginLeft:7, display:'inline-flex', alignItems:'center', background: summary.hits > 0 ? T.green : T.card3, color: summary.hits > 0 ? '#062515' : T.text2, border:`1px solid ${summary.hits > 0 ? 'rgba(255,255,255,0.22)' : T.border}`, borderRadius:999, padding:'1px 6px', fontSize:8, fontWeight:900, lineHeight:1.2, whiteSpace:'nowrap' }}>
+                <span
+                  title="Hits / picks on this slate (graded after final)"
+                  style={{
+                    position: 'absolute',
+                    top: -6,
+                    right: 4,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    background: badgeGreen ? T.green : activeBtn ? 'rgba(0,0,0,0.2)' : T.card3,
+                    color: badgeGreen ? '#062515' : activeBtn ? '#fff' : T.text2,
+                    border: `1px solid ${badgeGreen ? 'rgba(255,255,255,0.25)' : activeBtn ? 'rgba(255,255,255,0.35)' : T.border}`,
+                    borderRadius: 999,
+                    padding: '2px 6px',
+                    fontSize: 7,
+                    fontWeight: 900,
+                    lineHeight: 1.15,
+                    letterSpacing: 0.2,
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none',
+                  }}
+                >
                   {summary.hits}/{summary.total} hit
                 </span>
               )}
@@ -1935,12 +2483,12 @@ export default function App() {
             </div>
           )}
 
-          {/* Confidence legend */}
+          {/* Model score legend (not win probability) */}
           {!loadingSlate && games.length > 0 && (
             <div className="ps-legend" style={{ marginTop:16, padding:'10px 14px', background:T.card, borderRadius:10, border:`1px solid ${T.border}` }}>
-              <div style={{ fontSize:9, color:T.text3, letterSpacing:1, marginBottom:8 }}>CONFIDENCE SCALE</div>
-              <div style={{ display:'flex', gap:16 }}>
-                {[{color:T.green,label:'70–100',desc:'FAVORABLE'},{color:T.yellow,label:'40–69',desc:'NEUTRAL'},{color:T.red,label:'0–39',desc:'UNFAV.'}].map(({ color, label, desc }) => (
+              <div style={{ fontSize:9, color:T.text3, letterSpacing:1, marginBottom:8 }}>MODEL SCORE (0–80, NOT WIN %)</div>
+              <div style={{ display:'flex', gap:16, flexWrap:'wrap' }}>
+                {[{ color:T.green, label:'70+', desc:'Strong setup' }, { color:T.yellow, label:'55–69', desc:'Moderate' }, { color:T.red, label:'Under 55', desc:'Speculative' }].map(({ color, label, desc }) => (
                   <div key={desc} style={{ display:'flex', alignItems:'center', gap:6 }}>
                     <div style={{ width:8, height:8, borderRadius:2, background:color, flexShrink:0 }} />
                     <div>

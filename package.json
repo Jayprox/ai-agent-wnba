@@ -7,7 +7,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "server": "node server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:ingest-games": "node --test tests/ingest-games-status.test.js",
+    "test:scoring": "node --test tests/scoring.test.js",
+    "test:track": "node --test tests/track-record.test.js",
+    "test:clv": "node --test tests/clv.test.js",
+    "test:books": "node --test tests/sportsbook-priority.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.1",

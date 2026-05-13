@@ -3,11 +3,13 @@ require('dotenv').config();
 /**
  * Calculates prop confidence scores and recommendations for games.
  *
- * For each game, for each player with >= MIN_GAMES played, generates
+ * For each game, for each player with enough games played (see lib/scoring/constants.js)
+ * or log-backed synthetic metrics, generates
  * OVER/UNDER/PASS recommendations with 0-80 confidence scores for
  * pts, reb, ast, pra (pts+reb+ast), stl, blk, and fg3m props.
  *
- * When real sportsbook lines exist in odds_snapshots they are used.
+ * When real sportsbook lines exist in odds_snapshots they are used
+ * (Caesars first when available — see lib/sportsbook-priority.js).
  * Otherwise, a synthetic line is derived from the player's season avg.
  *
  * Usage:
@@ -17,11 +19,22 @@ require('dotenv').config();
  */
 
 const { supabase } = require('../lib/supabase');
+const {
+  MIN_GAMES_METRICS,
+  MIN_LOGS_SYNTHETIC,
+  PICK_PUBLISH_MIN_CONFIDENCE,
+  PICK_PUBLISH_MIN_ABS_GAP,
+  CORRELATED_MIN_CONFIDENCE,
+} = require('../lib/scoring/constants');
+const { buildSyntheticMetricsFromLogs } = require('../lib/scoring/synthetic-metrics');
+const {
+  normalizeSportsbook,
+  pickPreferredSportsbookLine,
+} = require('../lib/sportsbook-priority');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const PROP_TYPES  = ['pts', 'reb', 'ast', 'pra', 'stl', 'blk', 'fg3m'];
-const MIN_GAMES   = 5;   // minimum games played to generate props
 const LOG_LOOKBACK_MIN = 10;
 
 // Per-prop component weights — each weights block must sum to 1.0
@@ -407,13 +420,16 @@ async function getOddsData(gameId) {
     if (row.line == null) continue;
 
     const key = `${row.player_id}:${row.prop_type}`;
-    if (!raw[key]) raw[key] = { opening: null, current: [] };
+    if (!raw[key]) raw[key] = { openingByBook: new Map(), current: [] };
 
     const line = Number(row.line);
     if (!Number.isFinite(line)) continue;
 
-    if (row.is_opening && raw[key].opening === null) {
-      raw[key].opening = { line, sportsbook: row.sportsbook };
+    if (row.is_opening) {
+      const bk = normalizeSportsbook(row.sportsbook);
+      if (!raw[key].openingByBook.has(bk)) {
+        raw[key].openingByBook.set(bk, line);
+      }
     }
 
     const already = raw[key].current.find(current => current.sportsbook === row.sportsbook);
@@ -426,17 +442,22 @@ async function getOddsData(gameId) {
   for (const [key, d] of Object.entries(raw)) {
     if (!d.current.length) continue;
 
-    const sorted = [...d.current].sort((a, b) => a.line - b.line);
-    bestLines.set(key, { line: sorted[0].line, sportsbook: sorted[0].sportsbook });
+    const chosen = pickPreferredSportsbookLine(d.current);
+    if (!chosen) continue;
 
-    const movement = d.opening ? round(sorted[0].line - d.opening.line) : null;
+    bestLines.set(key, { line: chosen.line, sportsbook: chosen.sportsbook });
+
+    const bk = normalizeSportsbook(chosen.sportsbook);
+    const openLine = d.openingByBook.get(bk);
+    const movement =
+      openLine != null && Number.isFinite(openLine) ? round(chosen.line - openLine) : null;
     const lines = d.current.map(row => row.line);
     const gap = lines.length > 1 ? round(Math.max(...lines) - Math.min(...lines)) : 0;
 
     oddsContext.set(key, {
       movement,
       gap,
-      opening: d.opening?.line ?? null,
+      opening: openLine,
     });
   }
 
@@ -456,11 +477,33 @@ async function getGameOddsContext(gameId) {
     return { total: null, spread: null };
   }
 
-  const total = data?.find(row => row.prop_type === 'total')?.line ?? null;
-  const spread = data?.find(row => row.prop_type === 'spread')?.line ?? null;
+  const seenTotal = new Set();
+  const seenSpread = new Set();
+  const totalCandidates = [];
+  const spreadCandidates = [];
+
+  for (const row of data || []) {
+    if (row.line == null) continue;
+    const ln = Number(row.line);
+    if (!Number.isFinite(ln)) continue;
+    const bk = normalizeSportsbook(row.sportsbook);
+    if (row.prop_type === 'total') {
+      if (seenTotal.has(bk)) continue;
+      seenTotal.add(bk);
+      totalCandidates.push({ line: ln, sportsbook: row.sportsbook });
+    }
+    if (row.prop_type === 'spread') {
+      if (seenSpread.has(bk)) continue;
+      seenSpread.add(bk);
+      spreadCandidates.push({ line: ln, sportsbook: row.sportsbook });
+    }
+  }
+
+  const totalPick = pickPreferredSportsbookLine(totalCandidates);
+  const spreadPick = pickPreferredSportsbookLine(spreadCandidates);
   return {
-    total: Number.isFinite(Number(total)) ? Number(total) : null,
-    spread: Number.isFinite(Number(spread)) ? Number(spread) : null,
+    total: totalPick?.line ?? null,
+    spread: spreadPick?.line ?? null,
   };
 }
 
@@ -1087,8 +1130,13 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     sTeamContext     * (weights.teamContext ?? 0),
   ));
 
-  // Only commit a direction if confidence is high enough and the gap is meaningful
-  const recommendation = (confidence >= 68 && Math.abs(valueGap ?? 0) >= 0.5) ? dir : 'PASS';
+  // Layer A publish gate — thresholds in lib/scoring/constants.js
+  const recommendation =
+    confidence >= PICK_PUBLISH_MIN_CONFIDENCE &&
+    Math.abs(valueGap ?? 0) >= PICK_PUBLISH_MIN_ABS_GAP &&
+    dir !== 'PASS'
+      ? dir
+      : 'PASS';
 
   // Key factors for UI display
   const keyFactors = [];
@@ -1275,7 +1323,7 @@ async function flagCorrelatedProps(gameId, rows) {
   for (const [playerId, playerRows] of byPlayer) {
     if (playerRows.length < 2) continue;
 
-    const qualified = playerRows.filter(row => row.confidence_score >= 65);
+    const qualified = playerRows.filter(row => row.confidence_score >= CORRELATED_MIN_CONFIDENCE);
     if (qualified.length < 2) continue;
 
     const propTypes = qualified.map(row => row.prop_type).sort().join('+');
@@ -1287,7 +1335,7 @@ async function flagCorrelatedProps(gameId, rows) {
       })
       .eq('player_id', playerId)
       .eq('game_id', gameId)
-      .gte('confidence_score', 65)
+      .gte('confidence_score', CORRELATED_MIN_CONFIDENCE)
       .neq('recommendation', 'PASS')
       .select('id');
 
@@ -1326,8 +1374,28 @@ async function calcConfidence(opts = {}) {
     try {
       const teamIds  = [game.home_team_id, game.visitor_team_id];
       const gameSzn  = game.season ?? season;
-      const players  = await getPlayersWithMetrics(teamIds, gameSzn);
-      const eligible = players.filter(p => p.metrics.games_played >= MIN_GAMES);
+      let players = await getPlayersWithMetrics(teamIds, gameSzn);
+      const rosterIds = new Set(players.map(p => p.id));
+      const { data: rosterRows, error: rosterErr } = await supabase
+        .from('players')
+        .select('id, full_name, position, team_id')
+        .in('team_id', teamIds)
+        .eq('is_active', true);
+      if (rosterErr) throw rosterErr;
+      for (const rp of rosterRows || []) {
+        if (rosterIds.has(rp.id)) continue;
+        const logsSynth = await getPlayerLogsCrossSeason(rp.id, game.game_date, gameSzn);
+        const syn = buildSyntheticMetricsFromLogs(logsSynth, gameSzn);
+        if (!syn) continue;
+        players.push({ ...rp, metrics: syn, _syntheticMetrics: true });
+        rosterIds.add(rp.id);
+      }
+
+      const eligible = players.filter(p => {
+        const gp = Number(p.metrics?.games_played) || 0;
+        if (p._syntheticMetrics) return gp >= MIN_LOGS_SYNTHETIC;
+        return gp >= MIN_GAMES_METRICS;
+      });
 
       if (!eligible.length) {
         console.log(`[calc-confidence] ${game.game_date} game ${game.id}: no eligible players`);

@@ -3,7 +3,7 @@ require('dotenv').config();
 const cron = require('node-cron');
 const { ingestTeams } = require('./ingest-teams');
 const { ingestPlayers } = require('./ingest-players');
-const { ingestGames } = require('./ingest-games');
+const { ingestGames, ingestScoreboardDatesForScheduler } = require('./ingest-games');
 const { ingestEspnIds } = require('./ingest-espn-ids');
 const { ingestPlayerLogs } = require('./ingest-player-logs');
 const { ingestTeamLogs } = require('./ingest-team-logs');
@@ -63,7 +63,12 @@ function startScheduler() {
     await ingestPlayers();
   });
 
-  schedule('daily games', '0 11 * * *', () => ingestGames());
+  schedule('evening roster refresh', '0 18 * * *', () => ingestPlayers());
+
+  schedule('daily games', '0 11 * * *', () => ingestScoreboardDatesForScheduler());
+
+  // ESPN scoreboard during game windows (was only 11am/1pm ET — slate stayed pre-game all evening).
+  schedule('live scoreboard refresh', '*/15 0-2,11-23 * * *', () => ingestScoreboardDatesForScheduler());
 
   schedule('midday odds + injuries', '0 12 * * *', async () => {
     await ingestOdds();
@@ -76,7 +81,7 @@ function startScheduler() {
   // Pre-game props: runs after games + odds + injuries are all ingested for the day.
   // Generates confidence scores for tonight's slate so picks are visible before tip-off.
   schedule('pre-game confidence', '0 13 * * *', async () => {
-    await ingestGames();   // catch any games BDL added since the 11am run (ESPN fallback fires automatically)
+    await ingestScoreboardDatesForScheduler();
     await ingestOdds();    // freshen lines before scoring
     await calcConfidence();
   });

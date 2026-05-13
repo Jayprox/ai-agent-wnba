@@ -13,8 +13,33 @@ function getArgValue(name) {
   return inline ? inline.slice(flag.length + 1) : null;
 }
 
-function todayEastern() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+/** YYYY-MM-DD in America/New_York for "now". */
+function easternTodayString(date = new Date()) {
+  return date.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+/** Previous calendar day in ET (handles DST by stepping hour-by-hour). */
+function easternYesterdayString(date = new Date()) {
+  const tz = 'America/New_York';
+  const fmt = d => d.toLocaleDateString('en-CA', { timeZone: tz });
+  const today = fmt(date);
+  let probe = new Date(date.getTime());
+  while (fmt(probe) === today) {
+    probe = new Date(probe.getTime() - 60 * 60 * 1000);
+  }
+  return fmt(probe);
+}
+
+/** 0–23 hour in Eastern Time. */
+function easternHourEt(date = new Date()) {
+  return Number.parseInt(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: 'numeric',
+      hour12: false,
+    }).format(date),
+    10,
+  );
 }
 
 function mapStatus(status) {
@@ -25,10 +50,34 @@ function mapStatus(status) {
 }
 
 function mapEspnStatus(espnEvent) {
-  const state = espnEvent.competitions?.[0]?.status?.type?.state || '';
+  const typ = espnEvent.competitions?.[0]?.status?.type || {};
+  const state = String(typ.state || '').toLowerCase();
   if (state === 'post') return 'final';
   if (state === 'in') return 'in_progress';
+  if (typ.completed === true) return 'final';
+  const name = String(typ.name || typ.shortDetail || '').toLowerCase();
+  if (name.includes('final') || name.includes('complete')) return 'final';
+  if (name.includes('progress') || name.includes('half') || name.includes('quarter') || name.includes('ot')) {
+    return 'in_progress';
+  }
   return 'scheduled';
+}
+
+/**
+ * Persist scores from ESPN competitors. Pre-game 0–0 is stored as null so the slate
+ * does not look "final". Live/final keeps 0 when ESPN sends a valid number.
+ */
+function espnCompetitorScores(status, homeComp, visitorComp) {
+  const homeParsed = Number(homeComp?.score);
+  const visitorParsed = Number(visitorComp?.score);
+  const homeNum = Number.isFinite(homeParsed) ? homeParsed : null;
+  const visitorNum = Number.isFinite(visitorParsed) ? visitorParsed : null;
+
+  if (status === 'scheduled') {
+    if (homeNum === 0 && visitorNum === 0) return { home_team_score: null, visitor_team_score: null };
+    return { home_team_score: homeNum, visitor_team_score: visitorNum };
+  }
+  return { home_team_score: homeNum, visitor_team_score: visitorNum };
 }
 
 function formatEspnEventTime(espnEvent) {
@@ -139,8 +188,10 @@ async function ingestEspnGames(date, teamsByEspnId, season) {
       continue;
     }
 
-    const homeScore = Number(homeComp.score) || null;
-    const visitorScore = Number(visitorComp.score) || null;
+    const status = mapEspnStatus(event);
+    const scores = espnCompetitorScores(status, homeComp, visitorComp);
+    const periodRaw = comp.status?.period;
+    const period = periodRaw != null && String(periodRaw).trim() !== '' ? Number(periodRaw) : null;
 
     espnRows.push({
       bdl_id: null,
@@ -148,13 +199,13 @@ async function ingestEspnGames(date, teamsByEspnId, season) {
       home_team_id: homeTeam.id,
       visitor_team_id: visitorTeam.id,
       game_date: espnEventDateEastern(event) || date,
-      status: mapEspnStatus(event),
-      home_team_score: homeScore > 0 ? homeScore : null,
-      visitor_team_score: visitorScore > 0 ? visitorScore : null,
+      status,
+      home_team_score: scores.home_team_score,
+      visitor_team_score: scores.visitor_team_score,
       season,
       season_type: 'regular',
       postseason: false,
-      period: null,
+      period: Number.isFinite(period) ? period : null,
       time: formatEspnEventTime(event),
       league: 'WNBA',
       updated_at: new Date().toISOString(),
@@ -237,7 +288,7 @@ async function ingestEspnGames(date, teamsByEspnId, season) {
   return results;
 }
 
-async function ingestGames(date = getArgValue('date') || todayEastern()) {
+async function ingestGames(date = getArgValue('date') || easternTodayString()) {
   const [teamsByBdlId, teamsByEspnId] = await Promise.all([getTeamsByBdlId(), getTeamsByEspnId()]);
 
   const season = Number(date.slice(0, 4)) || new Date().getFullYear();
@@ -274,6 +325,21 @@ async function ingestGames(date = getArgValue('date') || todayEastern()) {
   return espnGames;
 }
 
+/** Used by scheduler: refresh today + late-night yesterday so west games close out. */
+async function ingestScoreboardDatesForScheduler() {
+  const today = easternTodayString();
+  const first = await ingestGames(today);
+  const hour = easternHourEt();
+  if (hour >= 0 && hour <= 3) {
+    const y = easternYesterdayString();
+    if (y !== today) {
+      const second = await ingestGames(y);
+      return [...(first || []), ...(second || [])];
+    }
+  }
+  return first;
+}
+
 if (require.main === module) {
   ingestGames().catch(error => {
     console.error('[ingest-games] Failed:', error.message);
@@ -281,4 +347,17 @@ if (require.main === module) {
   });
 }
 
-module.exports = { ingestGames, mapGame, mapStatus, formatEspnEventTime, normalizeGameTime, ingestEspnGames };
+module.exports = {
+  ingestGames,
+  ingestScoreboardDatesForScheduler,
+  mapGame,
+  mapStatus,
+  mapEspnStatus,
+  espnCompetitorScores,
+  formatEspnEventTime,
+  normalizeGameTime,
+  ingestEspnGames,
+  easternTodayString,
+  easternYesterdayString,
+  easternHourEt,
+};

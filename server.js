@@ -8,9 +8,21 @@ const path = require('path');
 const express = require('express');
 const cors    = require('cors');
 const { supabase } = require('./lib/supabase');
+const { buildCardPayload } = require('./lib/scoring');
+const { gradePropPick } = require('./lib/scoring/grade-prop-pick');
+const { summarizeModelTrackRecord, summarizeHighTierByPropType } = require('./lib/scoring/track-record');
+const { PICK_PUBLISH_MIN_CONFIDENCE } = require('./lib/scoring/constants');
 
 function etDateString() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+/** Calendar date in America/New_York, `daysAgo` before today (ET). */
+function etDateMinusCalendarDays(daysAgo) {
+  const [y, mo, d] = etDateString().split('-').map(Number);
+  const utcMid = Date.UTC(y, mo - 1, d, 17, 0, 0);
+  const shifted = utcMid - daysAgo * 86400000;
+  return new Date(shifted).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
 const app  = express();
@@ -59,50 +71,6 @@ function toNullableNumber(value) {
   return value == null ? null : Number(value);
 }
 
-function propActualValue(log, propType) {
-  if (!log) return null;
-  const type = String(propType || '').toLowerCase();
-  if (type === 'pra') {
-    const pts = Number(log.pts);
-    const reb = Number(log.reb);
-    const ast = Number(log.ast);
-    if (![pts, reb, ast].every(Number.isFinite)) return null;
-    return pts + reb + ast;
-  }
-  const value = Number(log[type]);
-  return Number.isFinite(value) ? value : null;
-}
-
-function gradePropPick(pick, log, game) {
-  const status = String(game?.status || '').toLowerCase();
-  const actualValue = propActualValue(log, pick.prop_type);
-  const line = Number(pick.line);
-  const recommendation = String(pick.recommendation || '').toUpperCase();
-
-  if (actualValue == null || !Number.isFinite(line) || !['OVER', 'UNDER'].includes(recommendation)) {
-    return { actual_value: actualValue, result: null, result_label: null, hit: null };
-  }
-
-  const isFinal = status === 'final' || status === 'closed' || status === 'complete';
-  if (!isFinal) {
-    return { actual_value: actualValue, result: null, result_label: null, hit: null };
-  }
-
-  if (actualValue === line) {
-    return { actual_value: actualValue, result: 'push', result_label: 'PUSH', hit: null };
-  }
-
-  const hit = recommendation === 'OVER'
-    ? actualValue > line
-    : actualValue < line;
-  return {
-    actual_value: actualValue,
-    result: hit ? 'hit' : 'miss',
-    result_label: hit ? 'HIT' : 'MISS',
-    hit,
-  };
-}
-
 function formatPlayer(player) {
   return {
     id: player.id,
@@ -117,13 +85,10 @@ function formatPlayer(player) {
   };
 }
 
-const SPORTSBOOK_PRIORITY = [
-  'draftkings',
-  'fanduel',
-  'betmgm',
-  'caesars',
-  'bovada',
-];
+const {
+  SPORTSBOOK_PRIORITY,
+  normalizeSportsbook,
+} = require('./lib/sportsbook-priority');
 
 const SPORTSBOOK_LABELS = {
   draftkings: 'DraftKings',
@@ -132,12 +97,6 @@ const SPORTSBOOK_LABELS = {
   caesars: 'Caesars',
   bovada: 'Bovada',
 };
-
-function normalizeSportsbook(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-}
 
 function sportsbookRank(value) {
   const key = normalizeSportsbook(value);
@@ -152,6 +111,7 @@ function sportsbookLabel(value) {
 
 function sportsbookShortLabel(value) {
   const key = normalizeSportsbook(value);
+  if (key === 'derived') return 'SZN';
   if (key === 'draftkings') return 'DK';
   if (key === 'fanduel') return 'FD';
   if (key === 'betmgm') return 'MGM';
@@ -268,6 +228,17 @@ async function pipelineCountsForDate(dateIso) {
   };
 }
 
+function normalizeAbbrevForRecords(abbrev) {
+  const a = String(abbrev || '').trim().toUpperCase();
+  if (!a) return '';
+  const aliases = {
+    CONNECTICU: 'CON',
+    DALLAS: 'DAL',
+    WSH: 'WAS',
+  };
+  return aliases[a] || a;
+}
+
 async function loadTeamRecordsLive(gameRows) {
   const lookup = new Map(); // "season:team_id" → "W-L"
   if (!supabase || !gameRows?.length) return lookup;
@@ -281,37 +252,86 @@ async function loadTeamRecordsLive(gameRows) {
   const teamIds = [...new Set(gameRows.flatMap(g => [g.home_team_id, g.visitor_team_id].filter(Boolean)))];
   if (!teamIds.length) return lookup;
 
-  const orClause = teamIds.map(id => `home_team_id.eq.${id},visitor_team_id.eq.${id}`).join(',');
+  const { data: teamRows, error: teamsErr } = await supabase
+    .from('teams')
+    .select('id, abbreviation')
+    .eq('league', 'WNBA');
+
+  if (teamsErr) {
+    console.warn('[server] loadTeamRecordsLive teams error:', teamsErr.message);
+    return lookup;
+  }
+
+  const idToAbbrev = new Map();
+  for (const t of teamRows || []) {
+    const ab = normalizeAbbrevForRecords(String(t.abbreviation || '').trim().toUpperCase());
+    if (ab) idToAbbrev.set(t.id, ab);
+  }
+
+  const finalStatuses = ['final', 'closed', 'complete'];
   const { data: results, error } = await supabase
     .from('games')
     .select('home_team_id, visitor_team_id, home_team_score, visitor_team_score')
     .eq('season', season)
-    .eq('status', 'final')
-    .or(orClause);
+    .eq('league', 'WNBA')
+    .in('status', finalStatuses);
 
   if (error) {
-    console.warn('[server] loadTeamRecordsLive error:', error.message);
+    console.warn('[server] loadTeamRecordsLive games error:', error.message);
     return lookup;
   }
 
-  const records = new Map(); // team_id → { wins, losses }
+  const byAbbrev = new Map();
+  function bumpAbbrev(abbrev, won) {
+    if (!abbrev) return;
+    if (!byAbbrev.has(abbrev)) byAbbrev.set(abbrev, { wins: 0, losses: 0 });
+    const rec = byAbbrev.get(abbrev);
+    if (won) rec.wins += 1;
+    else rec.losses += 1;
+  }
+
   for (const r of results || []) {
-    const hs = Number(r.home_team_score);
-    const vs = Number(r.visitor_team_score);
+    const hsRaw = r.home_team_score;
+    const vsRaw = r.visitor_team_score;
+    if (hsRaw == null || vsRaw == null) continue;
+    const hs = Number(hsRaw);
+    const vs = Number(vsRaw);
     if (!Number.isFinite(hs) || !Number.isFinite(vs) || hs === vs) continue;
+
+    const homeAb = idToAbbrev.get(r.home_team_id) || '';
+    const visitorAb = idToAbbrev.get(r.visitor_team_id) || '';
+    if (!homeAb || !visitorAb) continue;
+
     const homeWon = hs > vs;
-    for (const [tid, won] of [[r.home_team_id, homeWon], [r.visitor_team_id, !homeWon]]) {
-      if (tid == null) continue;
-      if (!records.has(tid)) records.set(tid, { wins: 0, losses: 0 });
-      const rec = records.get(tid);
-      if (won) rec.wins += 1;
-      else rec.losses += 1;
+    bumpAbbrev(homeAb, homeWon);
+    bumpAbbrev(visitorAb, !homeWon);
+  }
+
+  for (const tid of teamIds) {
+    const abbrev = idToAbbrev.get(tid);
+    const rec = abbrev ? byAbbrev.get(abbrev) : null;
+    if (rec) lookup.set(`${season}:${tid}`, `${rec.wins}-${rec.losses}`);
+  }
+
+  const { data: tsrRows, error: tsrErr } = await supabase
+    .from('team_season_records')
+    .select('team_id, wins, losses')
+    .eq('season', season)
+    .in('team_id', teamIds);
+
+  if (tsrErr) {
+    console.warn('[server] loadTeamRecordsLive team_season_records error:', tsrErr.message);
+  } else {
+    for (const row of tsrRows || []) {
+      const key = `${season}:${row.team_id}`;
+      if (lookup.has(key)) continue;
+      const w = Number(row.wins);
+      const l = Number(row.losses);
+      if (!Number.isFinite(w) || !Number.isFinite(l)) continue;
+      lookup.set(key, `${w}-${l}`);
     }
   }
 
-  for (const [tid, rec] of records) {
-    lookup.set(`${season}:${tid}`, `${rec.wins}-${rec.losses}`);
-  }
   return lookup;
 }
 
@@ -497,7 +517,7 @@ app.get('/api/wnba/slate', async (req, res) => {
         const byBook = oddsByGame.get(game.id) || {};
         const books = Object.values(byBook)
           .sort((a, b) => sportsbookRank(a.sportsbook) - sportsbookRank(b.sportsbook) || String(a.sportsbook).localeCompare(String(b.sportsbook)));
-        const defaultBook = books.find(book => normalizeSportsbook(book.sportsbook) === 'draftkings') || books[0] || null;
+        const defaultBook = books.find(book => normalizeSportsbook(book.sportsbook) === 'caesars') || books[0] || null;
         const odds = defaultBook?.markets || {};
 
         return {
@@ -543,6 +563,34 @@ app.get('/api/wnba/slate', async (req, res) => {
   }
 });
 
+/** WNBA active roster is 12–15; larger `players.team_id` sets usually mean bad assignments. */
+const MAX_REASONABLE_TEAM_ROSTER = 22;
+
+/**
+ * Distinct players who have a non-DNP box score row for this team in the given season(s).
+ * Used when `players.team_id` is bloated so the lineup tab still matches real games.
+ */
+async function playerIdsFromGameLogsForTeam(teamId, seasonNum) {
+  const seasons = [seasonNum, seasonNum - 1].filter(s => s >= 2024);
+  const { data, error } = await supabase
+    .from('player_game_logs')
+    .select('player_id, games!inner(season)')
+    .eq('team_id', teamId)
+    .eq('dnp', false)
+    .in('games.season', seasons)
+    .limit(8000);
+
+  if (error) {
+    console.warn(`[players] game-log roster slice failed team_id=${teamId}: ${error.message}`);
+    return null;
+  }
+  const ids = new Set();
+  for (const row of data || []) {
+    if (row.player_id != null) ids.add(row.player_id);
+  }
+  return ids;
+}
+
 /**
  * GET /api/wnba/players?team_id=X&season=2025
  * Returns players for a given team who actually played in the season,
@@ -552,18 +600,39 @@ app.get('/api/wnba/players', async (req, res) => {
   try {
     const { team_id, season } = req.query;
     if (!team_id) return res.status(400).json({ error: 'team_id required' });
+    const teamIdNum = Number(team_id);
+    if (!Number.isFinite(teamIdNum)) {
+      return res.status(400).json({ error: 'team_id must be a number' });
+    }
     const seasonNum = Number(season || new Date().getFullYear());
 
     // Fetch all players for this team
-    const { data: players, error: playersError } = await supabase
+    let { data: players, error: playersError } = await supabase
       .from('players')
       .select('*')
-      .eq('team_id', team_id)
+      .eq('team_id', teamIdNum)
       .eq('is_active', true)
       .order('last_name', { ascending: true });
 
     if (playersError) throw playersError;
     if (!players?.length) return res.json({ data: [] });
+
+    if (players.length > MAX_REASONABLE_TEAM_ROSTER) {
+      const fromLogs = await playerIdsFromGameLogsForTeam(teamIdNum, seasonNum);
+      if (fromLogs && fromLogs.size >= 4) {
+        const before = players.length;
+        players = players.filter(p => fromLogs.has(p.id));
+        console.warn(
+          `[players] team_id=${teamIdNum} had ${before} active rows (expected ≤${MAX_REASONABLE_TEAM_ROSTER}); ` +
+            `narrowed to ${players.length} using game logs (${fromLogs.size} distinct ids in sample).`,
+        );
+      } else {
+        console.warn(
+          `[players] team_id=${teamIdNum} has ${players.length} active players (expected ≤${MAX_REASONABLE_TEAM_ROSTER}); ` +
+            'game-log slice unavailable or too small — run `node scripts/ingest-players.js` to refresh ESPN rosters.',
+        );
+      }
+    }
 
     // Fetch season metrics for these players — only players with metrics actually played
     const playerIds = players.map(p => p.id);
@@ -614,7 +683,7 @@ app.get('/api/wnba/players', async (req, res) => {
         };
       });
 
-    console.log(`[players] team_id=${team_id} season=${seasonNum}: ${players.length} total, ${metricsMap.size} with metrics, returning ${result.length}`);
+    console.log(`[players] team_id=${teamIdNum} season=${seasonNum}: ${players.length} total, ${metricsMap.size} with metrics, returning ${result.length}`);
     res.json({ data: result });
   } catch (e) {
     handleError(res, e);
@@ -887,15 +956,19 @@ app.get('/api/wnba/top-picks', async (req, res) => {
     const { data: picks, error: picksError } = await supabase
       .from('prop_analysis_results')
       .select(`
-        id, game_id, player_id, prop_type, line, recommendation,
-        confidence_score, projection, l5_avg, season_avg, value_gap,
+        id, game_id, player_id, prop_type, line, sportsbook, recommendation,
+        confidence_score, projection, l5_avg, l10_avg, season_avg, value_gap,
+        home_away_avg,
+        hit_rate_over_season, hit_rate_over_l5,
         key_factors, risk_flags, correlated_opportunity, correlated_props,
-        score_referee,
+        score_referee, score_projection_edge, score_hit_rate, score_matchup,
+        market_notes,
         players(id, full_name, first_name, last_name, position, team_id)
       `)
       .in('game_id', gameIds)
       .not('season_avg', 'is', null)
       .in('recommendation', ['OVER', 'UNDER'])
+      .eq('players.is_active', true)
       .order('confidence_score', { ascending: false })
       .limit(limit);
 
@@ -922,17 +995,105 @@ app.get('/api/wnba/top-picks', async (req, res) => {
       const visitorTeam = game ? teamsById.get(game.visitor_team_id) : null;
       const log        = logsByPlayerGame.get(`${pick.player_id}:${pick.game_id}`);
       const grade      = gradePropPick(pick, log, game);
-      return {
+      return buildCardPayload({
         ...pick,
         ...grade,
+        line_sportsbook_short: sportsbookShortLabel(pick.sportsbook),
         game_date:    game?.game_date  ?? date,
         game_status:  game?.status     ?? null,
         home_team:    homeTeam    ? formatTeam(homeTeam)    : null,
         visitor_team: visitorTeam ? formatTeam(visitorTeam) : null,
-      };
+      });
     });
 
     res.json({ data });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * GET /api/wnba/model-track-record?days=30
+ * Hit rate on finalized games for published props, split by model score tier.
+ */
+app.get('/api/wnba/model-track-record', async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(7, parseInt(req.query.days || '30', 10) || 30));
+    const breakdown = req.query.breakdown === '1' || req.query.breakdown === 'true';
+    const endEt = etDateString();
+    const startEt = etDateMinusCalendarDays(days);
+    const finalStatuses = ['final', 'closed', 'complete'];
+
+    const empty = () => summarizeModelTrackRecord([], new Map(), new Map());
+
+    const { data: games, error: gErr } = await supabase
+      .from('games')
+      .select('id, game_date, status, home_team_id, visitor_team_id')
+      .gte('game_date', startEt)
+      .lte('game_date', endEt)
+      .in('status', finalStatuses);
+
+    if (gErr) throw gErr;
+
+    if (!games?.length) {
+      return res.json({
+        days,
+        breakdown,
+        window: { start: startEt, end: endEt },
+        games_count: 0,
+        ...empty(),
+        ...(breakdown ? { calibration_high_by_prop: [] } : {}),
+      });
+    }
+
+    const gameIds = games.map(g => g.id);
+    const gamesById = new Map(games.map(g => [g.id, g]));
+
+    const { data: picks, error: pErr } = await supabase
+      .from('prop_analysis_results')
+      .select('player_id, game_id, prop_type, line, recommendation, confidence_score')
+      .in('game_id', gameIds)
+      .in('recommendation', ['OVER', 'UNDER'])
+      .gte('confidence_score', PICK_PUBLISH_MIN_CONFIDENCE)
+      .limit(12000);
+
+    if (pErr) throw pErr;
+
+    const playerIds = [...new Set((picks || []).map(p => p.player_id).filter(Boolean))];
+    let logsByKey = new Map();
+
+    if (playerIds.length) {
+      const { data: logs, error: lErr } = await supabase
+        .from('player_game_logs')
+        .select('player_id, game_id, pts, reb, ast, stl, blk, fg3m')
+        .in('game_id', gameIds)
+        .in('player_id', playerIds)
+        .limit(15000);
+
+      if (lErr) throw lErr;
+      logsByKey = new Map((logs || []).map(l => [`${l.player_id}:${l.game_id}`, l]));
+    }
+
+    const stats = summarizeModelTrackRecord(picks || [], logsByKey, gamesById);
+
+    const payload = {
+      days,
+      breakdown,
+      window: { start: startEt, end: endEt },
+      games_count: games.length,
+      ...stats,
+    };
+
+    if (breakdown) {
+      payload.calibration_high_by_prop = summarizeHighTierByPropType(
+        picks || [],
+        logsByKey,
+        gamesById,
+        3,
+      );
+    }
+
+    res.json(payload);
   } catch (e) {
     handleError(res, e);
   }
