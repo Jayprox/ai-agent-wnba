@@ -63,6 +63,66 @@ function rosterAthletes(json) {
   return [];
 }
 
+/**
+ * Pre-merge pass: for ESPN athletes whose espn_id doesn't yet exist in the DB,
+ * check if a row with the same normalized full_name + team_id exists without an
+ * espn_id (legacy BDL row).  If so, UPDATE that row's espn_id in-place instead
+ * of letting the main upsert INSERT a duplicate.
+ */
+async function mergeEspnIdsIntoExistingPlayers(rows) {
+  // Only rows whose espn_id is genuinely new to our DB
+  const espnIds = rows.map(r => r.espn_id).filter(Boolean);
+  if (!espnIds.length) return;
+
+  const { data: existing } = await supabase
+    .from('players')
+    .select('id, espn_id, full_name, team_id')
+    .in('espn_id', espnIds);
+
+  const alreadyKnown = new Set((existing || []).map(p => String(p.espn_id)));
+
+  // Rows that the DB has never seen before by espn_id
+  const newRows = rows.filter(r => r.espn_id && !alreadyKnown.has(String(r.espn_id)));
+  if (!newRows.length) return;
+
+  // Load existing players without espn_id for these teams, keyed by team_id + normalized name
+  const teamIds = [...new Set(newRows.map(r => r.team_id))];
+  const { data: legacy } = await supabase
+    .from('players')
+    .select('id, full_name, team_id')
+    .in('team_id', teamIds)
+    .is('espn_id', null)
+    .eq('league', 'WNBA');
+
+  if (!(legacy || []).length) return;
+
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const legacyMap = new Map(
+    (legacy || []).map(p => [`${p.team_id}::${norm(p.full_name)}`, p]),
+  );
+
+  const updates = [];
+  for (const row of newRows) {
+    const key = `${row.team_id}::${norm(`${row.first_name} ${row.last_name}`)}`;
+    const legacyRow = legacyMap.get(key);
+    if (legacyRow) {
+      updates.push({ id: legacyRow.id, espn_id: row.espn_id });
+    }
+  }
+
+  for (const upd of updates) {
+    const { error } = await supabase
+      .from('players')
+      .update({ espn_id: upd.espn_id, updated_at: new Date().toISOString() })
+      .eq('id', upd.id);
+    if (error) {
+      console.warn(`[ingest-players] merge espn_id failed for player ${upd.id}: ${error.message}`);
+    } else {
+      console.log(`[ingest-players] Merged espn_id ${upd.espn_id} into existing player id=${upd.id}`);
+    }
+  }
+}
+
 async function ingestPlayers() {
   const teams = await getTeamsByEspnId();
   const rows = [];
@@ -89,6 +149,9 @@ async function ingestPlayers() {
     console.log('[ingest-players] No players fetched');
     return [];
   }
+
+  // Merge espn_ids into legacy BDL rows before upserting to prevent duplicate inserts
+  await mergeEspnIdsIntoExistingPlayers(rows);
 
   const { data, error } = await supabase
     .from('players')

@@ -464,12 +464,39 @@ async function getOddsData(gameId) {
       }))
       .sort((a, b) => String(a.book).localeCompare(String(b.book)));
 
+    const entries = d.current.map(row => ({
+      book: sportsbookShortLabel(row.sportsbook),
+      line: round(row.line, 1),
+    })).filter(e => Number.isFinite(e.line));
+    const posted = round(chosen.line, 1);
+    const eps = 0.05;
+    let soft_over_alt = null;
+    let soft_under_alt = null;
+    if (entries.length && Number.isFinite(posted)) {
+      const minLine = Math.min(...entries.map(e => e.line));
+      const maxLine = Math.max(...entries.map(e => e.line));
+      const minBooks = entries
+        .filter(e => Math.abs(e.line - minLine) <= eps)
+        .sort((a, b) => String(a.book).localeCompare(String(b.book)));
+      const maxBooks = entries
+        .filter(e => Math.abs(e.line - maxLine) <= eps)
+        .sort((a, b) => String(a.book).localeCompare(String(b.book)));
+      if (minLine < posted - eps && minBooks[0]) {
+        soft_over_alt = { book: minBooks[0].book, line: minLine };
+      }
+      if (maxLine > posted + eps && maxBooks[0]) {
+        soft_under_alt = { book: maxBooks[0].book, line: maxLine };
+      }
+    }
+
     oddsContext.set(key, {
       movement,
       gap,
       opening: openLine,
       line_sportsbook: chosen.sportsbook,
       other_books: otherBooks.slice(0, 8),
+      soft_over_alt,
+      soft_under_alt,
     });
   }
 
@@ -1273,6 +1300,16 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     const alt = ctx.other_books.slice(0, 4).map(o => `${o.book} ${o.line}`).join(', ');
     keyFactors.push(`Other books: ${alt}${ctx.other_books.length > 4 ? '…' : ''}`);
   }
+  if (dir === 'OVER' && ctx?.soft_over_alt?.book != null && ctx.soft_over_alt.line != null) {
+    keyFactors.push(
+      `Softer Over elsewhere — ${ctx.soft_over_alt.book} ${ctx.soft_over_alt.line} vs posted ${round(line, 1)}`,
+    );
+  }
+  if (dir === 'UNDER' && ctx?.soft_under_alt?.book != null && ctx.soft_under_alt.line != null) {
+    keyFactors.push(
+      `Softer Under elsewhere — ${ctx.soft_under_alt.book} ${ctx.soft_under_alt.line} vs posted ${round(line, 1)}`,
+    );
+  }
   if (injuryStatus === 'doubtful') {
     keyFactors.push('Listed as DOUBTFUL — significant DNP risk');
   }
@@ -1306,6 +1343,8 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     book_gap: ctx.gap,
     line_sportsbook: ctx.line_sportsbook ?? sportsbook ?? null,
     other_books: ctx.other_books?.length ? ctx.other_books : null,
+    soft_over_alt: ctx.soft_over_alt?.book != null && ctx.soft_over_alt.line != null ? ctx.soft_over_alt : null,
+    soft_under_alt: ctx.soft_under_alt?.book != null && ctx.soft_under_alt.line != null ? ctx.soft_under_alt : null,
   } : null;
 
   const riskFlags = [];

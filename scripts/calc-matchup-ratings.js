@@ -33,15 +33,88 @@ function avg(values) {
   return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null;
 }
 
+/** Aligns with server `finalStatuses` / `grade-prop-pick` (ESPN often uses `closed`). */
+const FINALISH_STATUSES = ['final', 'closed', 'complete'];
+
+/**
+ * Games to aggregate for defensive slot stats.
+ * Prefers final-ish statuses; if none (pipeline lag / odd status strings), uses any
+ * same-season game that already has non-DNP `player_game_logs`.
+ */
 async function getSeasonGames(season) {
-  const { data, error } = await supabase
+  const { data: byStatus, error } = await supabase
     .from('games')
     .select('id, game_date, home_team_id, visitor_team_id')
     .eq('season', season)
-    .eq('status', 'final');
+    .in('status', FINALISH_STATUSES);
 
   if (error) throw error;
-  return data || [];
+  if (byStatus?.length) return byStatus;
+
+  console.warn(
+    `[calc-matchup-ratings] No games with status in [${FINALISH_STATUSES.join(', ')}] for season ${season} — ` +
+      'falling back to games that already have player_game_logs (status pipeline lag)',
+  );
+
+  const { data: candidates, error: cErr } = await supabase
+    .from('games')
+    .select('id')
+    .eq('season', season);
+
+  if (cErr) throw cErr;
+  const ids = (candidates || []).map(g => g.id).filter(id => id != null);
+  if (!ids.length) return [];
+
+  const withLogs = new Set();
+  const chunkSize = 80;
+
+  async function gameIdsWithLogsInSlice(slice) {
+    const found = new Set();
+    let from = 0;
+    const pageSize = 1000;
+    for (;;) {
+      const { data: logRows, error: lErr } = await supabase
+        .from('player_game_logs')
+        .select('game_id')
+        .in('game_id', slice)
+        .eq('dnp', false)
+        .range(from, from + pageSize - 1);
+      if (lErr) throw lErr;
+      if (!logRows?.length) break;
+      for (const r of logRows) {
+        if (r.game_id != null) found.add(r.game_id);
+      }
+      if (logRows.length < pageSize) break;
+      from += pageSize;
+    }
+    return found;
+  }
+
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const slice = ids.slice(i, i + chunkSize);
+    const found = await gameIdsWithLogsInSlice(slice);
+    for (const id of found) withLogs.add(id);
+  }
+
+  const withLogIds = [...new Set(ids.filter(id => withLogs.has(id)))];
+  if (!withLogIds.length) return [];
+
+  const out = [];
+  const idChunk = 200;
+  for (let i = 0; i < withLogIds.length; i += idChunk) {
+    const slice = withLogIds.slice(i, i + idChunk);
+    const { data: fullGames, error: fErr } = await supabase
+      .from('games')
+      .select('id, game_date, home_team_id, visitor_team_id')
+      .in('id', slice);
+    if (fErr) throw fErr;
+    if (fullGames?.length) out.push(...fullGames);
+  }
+
+  if (out.length) {
+    console.warn(`[calc-matchup-ratings] Log fallback: aggregating ${out.length} game(s) with box scores`);
+  }
+  return out;
 }
 
 async function getPlayersById() {
@@ -160,7 +233,10 @@ async function calcMatchupRatings(opts = {}) {
   const rows = buildRows({ games, logs, playersById, season, asOfDate });
 
   if (!rows.length) {
-    console.log(`[calc-matchup-ratings] No rows computed for ${season}`);
+    console.log(
+      `[calc-matchup-ratings] No rows computed for ${season} — ` +
+        'no qualifying games or no player_game_logs for those games (run ingest-games / ingest-player-logs first)',
+    );
     return { upserted: 0 };
   }
 
@@ -182,4 +258,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { calcMatchupRatings, buildRows, normalizePosition };
+module.exports = { calcMatchupRatings, buildRows, normalizePosition, getSeasonGames };

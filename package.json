@@ -14,6 +14,7 @@
     "test:scoring": "node --test tests/scoring.test.js",
     "test:track": "node --test tests/track-record.test.js",
     "test:clv": "node --test tests/clv.test.js",
+    "test:matchups": "node --test tests/game-positional-matchups.test.js",
     "test:books": "node --test tests/sportsbook-priority.test.js"
   },
   "dependencies": {

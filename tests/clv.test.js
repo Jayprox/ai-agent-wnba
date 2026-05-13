@@ -40,3 +40,13 @@ test('clvFromMarketNotes passes through cross-book lines', () => {
     { book: 'FD', line: 21.5 },
   ]);
 });
+
+test('clvFromMarketNotes passes through soft_over_alt without opening line', () => {
+  const pick = {
+    recommendation: 'OVER',
+    market_notes: { soft_over_alt: { book: 'FD', line: 21.5 } },
+  };
+  const c = clvFromMarketNotes(pick);
+  assert.deepStrictEqual(c.soft_over_alt, { book: 'FD', line: 21.5 });
+  assert.strictEqual(c.line, null);
+});

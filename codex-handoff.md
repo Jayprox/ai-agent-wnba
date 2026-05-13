@@ -1,12 +1,46 @@
 # WNBA Prop Scout — Codex Handoff Document
 
-**Last updated:** 2026-05-04  
+**Last updated:** 2026-05-09  
 **Prepared by:** Claude (Cowork)  
-**For:** OpenAI Codex
+**For:** Claude Cowork / OpenAI Codex (continuity)
+
+---
+
+## Cowork session — 2026-05-09 (read this first)
+
+This section catches up anyone picking up the repo after the recent backlog pass. Older sections below remain historical context unless they conflict with this.
+
+### Backlog cleared (this thread)
+
+1. **CLV + cross-book lines** — `getOddsData` in `scripts/calc-confidence.js` stores `line_sportsbook`, `other_books` (short book + line), and passes them through `market_notes`. `lib/scoring/clv.js` (`clvFromMarketNotes`) and `lib/scoring/build-card-payload.js` expose `clv` on card payloads. `lib/sportsbook-priority.js` exports **`sportsbookShortLabel`** (used by `server.js` and calc-confidence). UI in `wnba-prop-scout.jsx`: Top Picks / Board show **Open … CLV±**, **Alt · …** cross-book snippet, **Copy summary** includes alt books. Tests: `tests/clv.test.js`.
+
+2. **Game drilldown matchups** — **`GET /api/wnba/matchups?gameId=`** in `server.js` returns per-player objects keyed by player id: `defender`, `role`, `defenderRating`, `position_bucket`, etc. Built from **`team_defensive_ratings`** (positional / slot defense vs G/F/C — not on-ball defenders) via `lib/game-positional-matchups.js`. `wnba-prop-scout.jsx` **`apiGetMatchups`** calls this route; sandbox uses **`sandboxMatchupsForGame`**. Tests: `tests/game-positional-matchups.test.js` (`npm run test:matchups`).
+
+3. **`calc-matchup-ratings.js` “No rows” fix** — Game selection was **`status = 'final'` only**. Now uses **`final`, `closed`, `complete`** (aligned with `server.js` / `grade-prop-pick.js`). If still no rows, **fallback**: same-season games that have **`player_game_logs`** (non-DNP), with **paginated** log reads so PostgREST’s default row cap does not miss games. Re-run: `node scripts/calc-matchup-ratings.js --season=2026` after logs exist.
+
+4. **Softer Over / Under (alt-line hint, not SGP)** — From all current books’ lines for a prop, vs the **posted** (preferred-book) line: **`soft_over_alt`** / **`soft_under_alt`** on `market_notes` (threshold ~0.05). Key factors + **`pickClv`** / **`clvFromMarketNotes`** + Top Picks/Board chips + copy summary. Re-run **`calc-confidence`** to backfill DB rows.
+
+### Ops reminder
+
+- **`calc-confidence`** drives `prop_analysis_results` + `market_notes`.  
+- **`calc-matchup-ratings`** fills **`team_defensive_ratings`** for matchup API + model `score_matchup`.  
+- If matchups API returns “run calc-matchup-ratings”, the table is empty or stale for that season.
+
+### Quick file map (new / touched in this workstream)
+
+| Area | Files |
+|------|--------|
+| Cross-book + soft alts | `scripts/calc-confidence.js`, `lib/scoring/clv.js`, `lib/scoring/build-card-payload.js` |
+| Book short labels | `lib/sportsbook-priority.js`, `server.js` |
+| Matchups API | `server.js`, `lib/game-positional-matchups.js`, `wnba-prop-scout.jsx` (`apiGetMatchups`, `sandboxMatchupsForGame`) |
+| Matchup ratings ETL | `scripts/calc-matchup-ratings.js` |
+| Tests | `tests/clv.test.js`, `tests/game-positional-matchups.test.js` |
 
 ---
 
 ## ⚡ Current State — 2026-04-29
+
+> **Note:** For the latest shipped backlog (CLV/cross-book, matchups API, matchup ETL fix, softer Over/Under hints), read **§ Cowork session — 2026-05-09** at the top of this file.
 
 This document supersedes the 2026-04-28 version. All tasks from the prior handoff are complete. The system is now fully functional end-to-end for the 2025 season. The remaining tasks below are enhancements, not blockers.
 
@@ -135,7 +169,7 @@ const WEIGHTS = {
   recentForm:       0.20,  // l5 trend vs season avg
   minuteStability:  0.12,  // consistency of playing time
   restContext:      0.06,  // days of rest
-  matchup:          0.05,  // PLACEHOLDER — hardcoded 50 until defender data exists
+  matchup:          0.05,  // reads team_defensive_ratings by (opp_team, position bucket); see calc-confidence.js
 };
 ```
 

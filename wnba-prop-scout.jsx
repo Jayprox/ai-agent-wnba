@@ -286,7 +286,7 @@ const SANDBOX = {
 
   topPicks: [
     // — PTS —
-    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  home_away_avg: 27.1, sportsbook:'draftkings', score_tier:'HIGH', score_projection_edge:72, score_hit_rate:68, score_recent_form:70, score_matchup:65, score_minutes_stability:74, score_pace:62, score_rest_context:58, score_injury_impact:55, score_odds_movement:60, score_streak:50, score_team_context:52, score_referee:null, market_notes: { opening_line: 26.5, current_line: 25.5, movement: -1, book_gap: 1, line_sportsbook: 'draftkings', other_books: [{ book: 'FD', line: 26 }, { book: 'CZR', line: 25 }] }, players:{ full_name:"A'ja Wilson", position:'F', team_id: 't2' }, home_team:{ id: 't1', abbreviation:'NY'  }, visitor_team:{ id: 't2', abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'], risk_flags:['blowout_risk','back_to_back','dense_schedule'] },
+    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  home_away_avg: 27.1, sportsbook:'draftkings', score_tier:'HIGH', score_projection_edge:72, score_hit_rate:68, score_recent_form:70, score_matchup:65, score_minutes_stability:74, score_pace:62, score_rest_context:58, score_injury_impact:55, score_odds_movement:60, score_streak:50, score_team_context:52, score_referee:null, market_notes: { opening_line: 26.5, current_line: 25.5, movement: -1, book_gap: 1, line_sportsbook: 'draftkings', other_books: [{ book: 'FD', line: 26 }, { book: 'CZR', line: 25 }], soft_over_alt: { book: 'CZR', line: 25 } }, players:{ full_name:"A'ja Wilson", position:'F', team_id: 't2' }, home_team:{ id: 't1', abbreviation:'NY'  }, visitor_team:{ id: 't2', abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'], risk_flags:['blowout_risk','back_to_back','dense_schedule'] },
     { id:'tp3',  player_id:'p24', prop_type:'pts', line:20.5, recommendation:'UNDER', confidence_score:72, projection:18.9, l5_avg:18.2, season_avg:21.1, value_gap:-1.6, players:{ full_name:'Jewell Loyd',          position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Tough defensive matchup','Slow pace game'] },
     { id:'tp5',  player_id:'p1',  prop_type:'pts', line:20.5, recommendation:'OVER',  confidence_score:67, projection:22.1, l5_avg:21.8, season_avg:21.2, value_gap:1.6,  players:{ full_name:'Breanna Stewart',      position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Home advantage','High usage + favorable opp'] },
     { id:'tp6',  player_id:'p16', prop_type:'pts', line:17.5, recommendation:'OVER',  confidence_score:63, projection:19.0, l5_avg:18.6, season_avg:18.2, value_gap:1.5,  players:{ full_name:'Marina Mabrey',        position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['L5 avg 18.6 pts','Elevated role with lineup changes'] },
@@ -907,6 +907,16 @@ function buildPickRationaleText(pick) {
   if (sch.length) lines.push(`Schedule: ${sch.join(' · ')}`);
   const clvSnap = pickClv(pick);
   if (clvSnap?.other_books?.length) lines.push(`Alt books: ${formatCrossBookClvSnippet(clvSnap)}`);
+  if (String(rec).toUpperCase() === 'OVER' && clvSnap?.soft_over_alt) {
+    lines.push(
+      `Softer Over: ${clvSnap.soft_over_alt.book} ${fmtOne(clvSnap.soft_over_alt.line)} (posted ${fmtOne(pick.line)})`,
+    );
+  }
+  if (String(rec).toUpperCase() === 'UNDER' && clvSnap?.soft_under_alt) {
+    lines.push(
+      `Softer Under: ${clvSnap.soft_under_alt.book} ${fmtOne(clvSnap.soft_under_alt.line)} (posted ${fmtOne(pick.line)})`,
+    );
+  }
   lines.push(
     `${type} ${rec} ${line} (${book})`,
     `Model score: ${conf}${tier ? ` (${tier})` : ''}`,
@@ -1062,25 +1072,103 @@ async function apiGetPlayers(teamId) {
   if (IS_SANDBOX) return SANDBOX.players[teamId] || [];
   const r = await fetch(`${API_BASE}/api/wnba/players?team_id=${teamId}&season=${SEASON}`);
   const d = await r.json();
-  return (d.data || []).map(p => ({ ...p, name: p.full_name, pos: p.position, starter: !!p.starter }));
+  // Do not override `starter` here — server sets it from starter_pct or MPG fallback; !! would mis-coerce.
+  return (d.data || []).map(p => ({ ...p, name: p.full_name, pos: p.position }));
 }
 
+/** Chunk season_averages requests — long player_ids[] URLs fail in some browsers / proxies. */
 async function apiGetSeasonAverages(playerIds) {
   if (IS_SANDBOX) return [];
-  const ids = playerIds.map(Number).filter(Number.isFinite);
+  const ids = [...new Set(playerIds.map(id => Number(id)).filter(Number.isFinite))];
   if (!ids.length) return [];
-  const params = ids.map(id => `player_ids[]=${id}`).join('&');
-  const r = await fetch(`${API_BASE}/api/wnba/season_averages?${params}&season=${SEASON}`);
-  return (await r.json()).data || [];
+  const chunkSize = 24;
+  const out = [];
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const slice = ids.slice(i, i + chunkSize);
+    const params = slice.map(id => `player_ids[]=${id}`).join('&');
+    const r = await fetch(`${API_BASE}/api/wnba/season_averages?${params}&season=${SEASON}`);
+    if (!r.ok) continue;
+    let body = {};
+    try {
+      body = await r.json();
+    } catch { /* ignore */ }
+    out.push(...(body.data || []));
+  }
+  return out;
+}
+
+/** Stable key for `allPlayers` map (slate may use number or string team ids). */
+function rosterTeamKey(teamId) {
+  if (teamId == null || teamId === '') return '';
+  return String(teamId);
 }
 
 function mergeSeasonAverages(players, averages) {
-  const byPlayer = new Map((averages || []).map(avg => [avg.player_id, avg]));
+  const byPlayer = new Map();
+  for (const avg of averages || []) {
+    if (!avg) continue;
+    const raw = avg.player_id;
+    const n = Number(raw);
+    if (Number.isFinite(n)) byPlayer.set(n, avg);
+    byPlayer.set(String(raw), avg);
+  }
   return players.map(player => {
-    const avg = byPlayer.get(player.id);
+    const pid = player.id;
+    const avg =
+      (pid != null && Number.isFinite(Number(pid)) ? byPlayer.get(Number(pid)) : null)
+      ?? byPlayer.get(String(pid));
     if (!avg) return player;
     return { ...player, ppg: avg.pts, rpg: avg.reb, apg: avg.ast, mpg: avg.min, fga: avg.fga ?? player.fga, fta: avg.fta ?? player.fta, tov: avg.turnover ?? player.tov };
   });
+}
+
+/** Prefer the row with more numeric season fields (handles duplicate ids from upstream). */
+function rosterRowRichness(p) {
+  let n = 0;
+  if (Number.isFinite(Number(p.mpg)) && Number(p.mpg) > 0) n += 3;
+  if (Number.isFinite(Number(p.ppg))) n += 1;
+  if (Number.isFinite(Number(p.rpg))) n += 1;
+  if (Number.isFinite(Number(p.apg))) n += 1;
+  return n;
+}
+
+function dedupePlayersById(players) {
+  const map = new Map();
+  for (const p of players || []) {
+    if (p?.id == null) continue;
+    const key = String(p.id);
+    const prev = map.get(key);
+    if (!prev || rosterRowRichness(p) > rosterRowRichness(prev)) map.set(key, p);
+  }
+  return [...map.values()];
+}
+
+/** Collapse duplicate active rows for the same display name (bad DB duplicates). */
+function dedupeByDisplayName(players) {
+  const m = new Map();
+  for (const p of players || []) {
+    const nm = String(p.full_name || p.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const key = nm || `id:${p.id}`;
+    const prev = m.get(key);
+    if (!prev || rosterRowRichness(p) > rosterRowRichness(prev)) m.set(key, p);
+  }
+  return [...m.values()];
+}
+
+function normalizeTeamRosterList(players) {
+  return dedupeByDisplayName(dedupePlayersById(players));
+}
+
+/** When no explicit starters from API, treat top-5 by MPG on the roster as starters (lineup UX). */
+function inferStartersIfNone(players) {
+  const list = [...(players || [])];
+  if (list.some(p => p.starter === true)) return list;
+  const withMpg = list.filter(p => Number(p.mpg) > 0);
+  if (withMpg.length < 5) return list;
+  const topIds = new Set(
+    [...withMpg].sort((a, b) => Number(b.mpg) - Number(a.mpg)).slice(0, 5).map(p => String(p.id)),
+  );
+  return list.map(p => (topIds.has(String(p.id)) ? { ...p, starter: true } : { ...p, starter: false }));
 }
 
 async function apiGetOdds(gameId) {
@@ -1098,7 +1186,46 @@ async function apiGetOdds(gameId) {
   };
 }
 
-async function apiGetMatchups(gameId) { if (IS_SANDBOX) return {}; return {}; }
+function sandboxMatchupsForGame(gameId) {
+  const game = SANDBOX.games.find(g => g.id === gameId);
+  if (!game?.home_team?.id || !game?.visitor_team?.id) return {};
+  const homeId = game.home_team.id;
+  const awayId = game.visitor_team.id;
+  const homeAbbr = game.home_team.abbreviation;
+  const awayAbbr = game.visitor_team.abbreviation;
+  const out = {};
+  function add(teamId, oppAbbr, oppTeamId) {
+    for (const p of SANDBOX.players[teamId] || []) {
+      const pos = String(p.pos || 'G').toUpperCase();
+      const bucket = pos.includes('C') ? 'C' : pos.includes('F') ? 'F' : 'G';
+      const sid = String(p.id);
+      const seed = sid.split('').reduce((s, c) => s + c.charCodeAt(0), 0);
+      const defenderRating = 42 + (seed % 35);
+      out[sid] = {
+        defender: `${oppAbbr} ${bucket}-slot`,
+        role: `Sandbox slot defense (${bucket}s) — mock rating ${defenderRating}/100`,
+        defenderRating,
+        opponent_team_id: oppTeamId,
+        position_bucket: bucket,
+        source: 'sandbox',
+      };
+    }
+  }
+  add(homeId, awayAbbr, awayId);
+  add(awayId, homeAbbr, homeId);
+  return out;
+}
+
+async function apiGetMatchups(gameId) {
+  if (IS_SANDBOX) return sandboxMatchupsForGame(gameId);
+  const r = await fetch(`${API_BASE}/api/wnba/matchups?gameId=${encodeURIComponent(gameId)}`);
+  if (!r.ok) return {};
+  let body = {};
+  try {
+    body = await r.json();
+  } catch { /* ignore */ }
+  return body.data || {};
+}
 
 /** Fetch game logs for ALL players in one request; returns { [playerId]: log[] } */
 async function apiGetAllGameLogs(playerIds) {
@@ -1111,9 +1238,10 @@ async function apiGetAllGameLogs(playerIds) {
   const map = {};
   for (const row of rows) {
     const pid = row.player_id;
-    if (!pid) continue;
-    if (!map[pid]) map[pid] = [];
-    if (map[pid].length < 5) map[pid].push(row);
+    if (pid == null) continue;
+    const key = String(pid);
+    if (!map[key]) map[key] = [];
+    if (map[key].length < 5) map[key].push(row);
   }
   return map;
 }
@@ -1125,9 +1253,10 @@ async function apiGetProps(gameId) {
   const grouped = {};
   for (const row of ((await r.json()).data || [])) {
     const pid = row.player_id;
-    if (!pid) continue;
-    if (!grouped[pid]) grouped[pid] = [];
-    grouped[pid].push({ ...row, type: String(row.prop_type || '').toUpperCase(), player: row.players });
+    if (pid == null) continue;
+    const key = String(pid);
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push({ ...row, type: String(row.prop_type || '').toUpperCase(), player: row.players });
   }
   return grouped;
 }
@@ -1576,7 +1705,9 @@ function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
   const [side, setSide] = useState('away');
   const awayId   = game.visitor_team.id;
   const homeId   = game.home_team.id;
-  const players  = side === 'away' ? (allPlayers[awayId] || []) : (allPlayers[homeId] || []);
+  const awayKey  = rosterTeamKey(awayId);
+  const homeKey  = rosterTeamKey(homeId);
+  const players  = side === 'away' ? (allPlayers[awayKey] || []) : (allPlayers[homeKey] || []);
   const starters = players.filter(p => p.starter);
   const bench    = players.filter(p => !p.starter);
 
@@ -1585,14 +1716,17 @@ function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
       <>
         <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, padding: '8px 16px 4px' }}>{label}</div>
         {group.map(p => (
-          <div key={p.id}>
+          <div key={String(p.id)}>
             <div
-              onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
+              onClick={() => {
+                const pid = String(p.id);
+                setExpandedId(expandedId === pid ? null : pid);
+              }}
               style={{
                 display: 'grid', gridTemplateColumns: '18px 1fr 40px 40px 40px 40px',
                 gap: 4, alignItems: 'center', padding: '10px 16px',
                 borderBottom: `1px solid ${T.border}`, cursor: 'pointer',
-                background: expandedId === p.id ? T.card2 : 'transparent',
+                background: expandedId === String(p.id) ? T.card2 : 'transparent',
               }}
             >
               <span style={{ fontSize: 10, color: T.text3 }}>{playerPos(p)}</span>
@@ -1604,9 +1738,9 @@ function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
                 </div>
               ))}
             </div>
-            {expandedId === p.id && (
+            {expandedId === String(p.id) && (
               <div style={{ padding: '0 16px' }}>
-                <PlayerDrawer player={p} logs={gameLogs[p.id] || []} />
+                <PlayerDrawer player={p} logs={gameLogs[String(p.id)] || []} />
               </div>
             )}
           </div>
@@ -1634,19 +1768,21 @@ function MatchupTab({ game, allPlayers, matchups, gameLogs, intel }) {
   const [side, setSide] = useState('away');
   const awayId  = game.visitor_team.id;
   const homeId  = game.home_team.id;
-  const players = side === 'away' ? (allPlayers[awayId] || []) : (allPlayers[homeId] || []);
+  const awayKey = rosterTeamKey(awayId);
+  const homeKey = rosterTeamKey(homeId);
+  const players = side === 'away' ? (allPlayers[awayKey] || []) : (allPlayers[homeKey] || []);
 
   return (
     <div>
       <TeamToggle game={game} side={side} setSide={setSide} />
       <div style={{ padding: '0 0 16px' }}>
         {players.map(p => {
-          const mu    = matchups[p.id];
-          const logs  = gameLogs[p.id] || [];
+          const mu    = matchups[String(p.id)];
+          const logs  = gameLogs[String(p.id)] || [];
           const score = calcMatchupScore(p, mu, intel, logs);
           const color = scoreColor(score);
           return (
-            <div key={p.id} style={{ padding: '12px 16px', borderBottom: `1px solid ${T.border}` }}>
+            <div key={String(p.id)} style={{ padding: '12px 16px', borderBottom: `1px solid ${T.border}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1677,7 +1813,9 @@ function MatchupTab({ game, allPlayers, matchups, gameLogs, intel }) {
 function PropsTab({ game, allPlayers, matchups, gameLogs, props }) {
   const awayId = game.visitor_team.id;
   const homeId = game.home_team.id;
-  const allP   = [...(allPlayers[awayId] || []), ...(allPlayers[homeId] || [])];
+  const awayKey = rosterTeamKey(awayId);
+  const homeKey = rosterTeamKey(homeId);
+  const allP   = [...(allPlayers[awayKey] || []), ...(allPlayers[homeKey] || [])];
   const playersById = new Map(allP.map(p => [String(p.id), p]));
   const propPlayerIds = Object.keys(props || {});
   const playersWithProps = propPlayerIds.map(id => {
@@ -1692,18 +1830,18 @@ function PropsTab({ game, allPlayers, matchups, gameLogs, props }) {
   return (
     <div style={{ padding: '8px 0 16px' }}>
       {playersWithProps.map(p => {
-        const mu      = matchups[p.id];
-        const logs    = gameLogs[p.id] || [];
-        const pLines  = props[p.id] || [];
+        const mu      = matchups[String(p.id)];
+        const logs    = gameLogs[String(p.id)] || [];
+        const pLines  = props[String(p.id)] || [];
         const topConf = pLines.reduce((best, prop) => Math.max(best, Number(prop.confidence_score ?? 0)), 0);
         const score   = IS_SANDBOX ? calcMatchupScore(p, mu, null, logs) : topConf;
         const color   = scoreColor(score);
-        const teamAbbr = p.team_id === awayId ? game.visitor_team.abbreviation
-                       : p.team_id === homeId  ? game.home_team.abbreviation
+        const teamAbbr = String(p.team_id) === String(awayId) ? game.visitor_team.abbreviation
+                       : String(p.team_id) === String(homeId)  ? game.home_team.abbreviation
                        : 'WNBA';
 
         return (
-          <div key={p.id} style={{ margin: '0 16px 12px', background: T.card2, border: `1px solid ${color}33`, borderRadius: 10, overflow: 'hidden' }}>
+          <div key={String(p.id)} style={{ margin: '0 16px 12px', background: T.card2, border: `1px solid ${color}33`, borderRadius: 10, overflow: 'hidden' }}>
             {/* Player header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: T.card3, borderBottom: `1px solid ${T.border}` }}>
               <div>
@@ -1802,9 +1940,12 @@ function GameCard({ game, onClose }) {
       const [awayPl, homePl] = await Promise.all([apiGetPlayers(game.visitor_team.id), apiGetPlayers(game.home_team.id)]);
       const allFetched = [...awayPl, ...homePl];
       const averages   = await apiGetSeasonAverages(allFetched.map(p => p.id));
-      const awayMerged = mergeSeasonAverages(awayPl, averages);
-      const homeMerged = mergeSeasonAverages(homePl, averages);
-      setAllPlayers({ [game.visitor_team.id]: awayMerged, [game.home_team.id]: homeMerged });
+      const awayMerged = inferStartersIfNone(normalizeTeamRosterList(mergeSeasonAverages(awayPl, averages)));
+      const homeMerged = inferStartersIfNone(normalizeTeamRosterList(mergeSeasonAverages(homePl, averages)));
+      setAllPlayers({
+        [rosterTeamKey(game.visitor_team.id)]: awayMerged,
+        [rosterTeamKey(game.home_team.id)]: homeMerged,
+      });
 
       const allP = [...awayMerged, ...homeMerged];
       const logMap = await apiGetAllGameLogs(allP.map(p => p.id));
@@ -2059,19 +2200,35 @@ function otherBooksFromMarketNotes(mn) {
   return out.length ? out : null;
 }
 
+function softAltFromMn(val) {
+  if (!val || typeof val !== 'object') return null;
+  const book = val.book != null ? String(val.book) : '';
+  const line = Number(val.line);
+  if (!book || !Number.isFinite(line)) return null;
+  return { book, line };
+}
+
 /** Mirrors lib/scoring/clv.js for client-only bundle (opening → line at publish). */
 function pickClv(pick) {
   if (pick?.clv) return pick.clv;
   const mn = pick?.market_notes;
   if (!mn || typeof mn !== 'object') return null;
+  const rec = String(pick.recommendation || '').toUpperCase();
+  if (!['OVER', 'UNDER'].includes(rec)) return null;
+
+  const soft_over_alt = softAltFromMn(mn.soft_over_alt);
+  const soft_under_alt = softAltFromMn(mn.soft_under_alt);
+
   const opening = Number(mn.opening_line);
   const current = Number(mn.current_line);
   const movement = mn.movement != null && Number.isFinite(Number(mn.movement))
     ? Number(mn.movement)
     : (Number.isFinite(opening) && Number.isFinite(current) ? current - opening : null);
-  if (movement == null && !Number.isFinite(opening) && !Number.isFinite(current)) return null;
-  const rec = String(pick.recommendation || '').toUpperCase();
-  if (!['OVER', 'UNDER'].includes(rec)) return null;
+
+  if (movement == null && !Number.isFinite(opening) && !Number.isFinite(current) && !soft_over_alt && !soft_under_alt) {
+    return null;
+  }
+
   let favor = 'flat';
   if (movement != null && Math.abs(movement) > 0.009) {
     if (rec === 'OVER') favor = movement < 0 ? 'help' : 'hurt';
@@ -2079,14 +2236,16 @@ function pickClv(pick) {
   }
   const line = Number.isFinite(opening) && Number.isFinite(current) ? `${opening}→${current}` : null;
   return {
-    opening,
-    current,
+    opening: Number.isFinite(opening) ? opening : null,
+    current: Number.isFinite(current) ? current : null,
     movement,
     favor,
     line,
     book_gap: mn.book_gap != null ? Number(mn.book_gap) : null,
     line_sportsbook: mn.line_sportsbook != null ? String(mn.line_sportsbook) : null,
     other_books: otherBooksFromMarketNotes(mn),
+    soft_over_alt,
+    soft_under_alt,
   };
 }
 
@@ -2359,7 +2518,7 @@ function TopPicksTab({ picks, loading, error }) {
 
               <ScheduleContextChips pick={pick} marginLeft={0} />
 
-              {(siteLabel && pick.home_away_avg != null) || clv?.line ? (
+              {(siteLabel && pick.home_away_avg != null) || clv?.line || (rec === 'OVER' && clv?.soft_over_alt) || (rec === 'UNDER' && clv?.soft_under_alt) ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 10, color: T.text3 }}>
                   {siteLabel && pick.home_away_avg != null && (
                     <span>
@@ -2382,6 +2541,34 @@ function TopPicksTab({ picks, loading, error }) {
                       {clv?.other_books?.length > 0 && (
                         <span style={{ fontSize: 9, color: T.text3 }}>Alt · {formatCrossBookClvSnippet(clv)}</span>
                       )}
+                    </span>
+                  )}
+                  {rec === 'OVER' && clv?.soft_over_alt && (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 800,
+                      color: T.green,
+                      background: T.greenDim,
+                      border: `1px solid ${T.green}55`,
+                      padding: '2px 7px',
+                      borderRadius: 4,
+                      letterSpacing: 0.2,
+                    }}>
+                      Softer Over · {clv.soft_over_alt.book} {fmtOne(clv.soft_over_alt.line)}
+                    </span>
+                  )}
+                  {rec === 'UNDER' && clv?.soft_under_alt && (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 800,
+                      color: T.red,
+                      background: T.redDim,
+                      border: `1px solid ${T.red}55`,
+                      padding: '2px 7px',
+                      borderRadius: 4,
+                      letterSpacing: 0.2,
+                    }}>
+                      Softer Under · {clv.soft_under_alt.book} {fmtOne(clv.soft_under_alt.line)}
                     </span>
                   )}
                 </div>
@@ -2765,7 +2952,7 @@ function BoardPlayerCard({ pick, rank }) {
 
         <ScheduleContextChips pick={pick} marginLeft={34} />
 
-        {(siteLabel && pick.home_away_avg != null) || clvBoard?.line ? (
+        {(siteLabel && pick.home_away_avg != null) || clvBoard?.line || (rec === 'OVER' && clvBoard?.soft_over_alt) || (rec === 'UNDER' && clvBoard?.soft_under_alt) ? (
           <div style={{ fontSize: 9, color: T.text3, marginTop: 5, marginLeft: 34, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             {siteLabel && pick.home_away_avg != null && (
               <span>
@@ -2781,6 +2968,16 @@ function BoardPlayerCard({ pick, rank }) {
                 {clvBoard?.other_books?.length > 0 && (
                   <span style={{ fontSize: 8, color: T.text3 }}>Alt · {formatCrossBookClvSnippet(clvBoard)}</span>
                 )}
+              </span>
+            )}
+            {rec === 'OVER' && clvBoard?.soft_over_alt && (
+              <span style={{ fontSize: 8, fontWeight: 800, color: T.green, background: T.greenDim, border: `1px solid ${T.green}44`, padding: '1px 6px', borderRadius: 3 }}>
+                Softer Over · {clvBoard.soft_over_alt.book} {fmtOne(clvBoard.soft_over_alt.line)}
+              </span>
+            )}
+            {rec === 'UNDER' && clvBoard?.soft_under_alt && (
+              <span style={{ fontSize: 8, fontWeight: 800, color: T.red, background: T.redDim, border: `1px solid ${T.red}44`, padding: '1px 6px', borderRadius: 3 }}>
+                Softer Under · {clvBoard.soft_under_alt.book} {fmtOne(clvBoard.soft_under_alt.line)}
               </span>
             )}
           </div>

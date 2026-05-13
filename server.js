@@ -21,6 +21,7 @@ const { schedulerSummaryForHealth } = require('./lib/scheduler-summary');
 const { loadLeagueRanksByTeamForSeasons } = require('./lib/team-league-ranks');
 const { buildHealthFreshness } = require('./lib/data-freshness');
 const { getEspnRosterEspnIdSet } = require('./lib/espn-wnba-roster');
+const { buildPositionalMatchupMapForGame } = require('./lib/game-positional-matchups');
 
 function etDateString() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -693,31 +694,40 @@ app.get('/api/wnba/players', async (req, res) => {
       }
     }
 
-    // Fetch season metrics for these players — only players with metrics actually played
+    // Fetch season metrics — fall back to prior season if current season not yet computed
     const playerIds = players.map(p => p.id);
-    const { data: metrics, error: metricsError } = await supabase
-      .from('player_research_metrics')
-      .select('*')
-      .in('player_id', playerIds)
-      .eq('season', seasonNum)
-      .order('as_of_date', { ascending: false });
+    let metrics, metricsError;
+    for (const s of [seasonNum, seasonNum - 1]) {
+      ({ data: metrics, error: metricsError } = await supabase
+        .from('player_research_metrics')
+        .select('*')
+        .in('player_id', playerIds)
+        .eq('season', s)
+        .order('as_of_date', { ascending: false }));
+      if (metricsError) throw metricsError;
+      if ((metrics || []).length > 0) break;
+    }
 
-    if (metricsError) throw metricsError;
-
-    // Keep only the latest metrics row per player
+    // Keep only the latest metrics row per player (normalize id for bigint / string JSON)
     const metricsMap = new Map();
     for (const m of metrics || []) {
-      if (!metricsMap.has(m.player_id)) metricsMap.set(m.player_id, m);
+      const pid = Number(m.player_id);
+      if (!Number.isFinite(pid)) continue;
+      if (!metricsMap.has(pid)) metricsMap.set(pid, m);
     }
 
     // Merge metrics into players; if no metrics exist at all, return all players unfiltered
     const hasAnyMetrics = metricsMap.size > 0;
-    const result = players
-      .filter(p => !hasAnyMetrics || metricsMap.has(p.id) || p.espn_id)
+    let result = players
+      .filter(p => !hasAnyMetrics || metricsMap.has(Number(p.id)) || p.espn_id)
       .map(p => {
-        const m = metricsMap.get(p.id);
+        const m = metricsMap.get(Number(p.id));
         const base = formatPlayer(p);
         if (!m) return base;
+        const starterFromPct =
+          m.starter_pct != null && Number.isFinite(Number(m.starter_pct))
+            ? Number(m.starter_pct) >= 0.5
+            : false;
         return {
           ...base,
           ppg:          m.avg_pts,
@@ -730,7 +740,7 @@ app.get('/api/wnba/players', async (req, res) => {
           usage_rate:   m.avg_usage_rate,
           games_played: m.games_played,
           starter_pct:  m.starter_pct,
-          starter:      (m.starter_pct || 0) >= 0.5,
+          starter:      starterFromPct,
           pts_trend:    m.pts_trend,
           reb_trend:    m.reb_trend,
           ast_trend:    m.ast_trend,
@@ -741,6 +751,28 @@ app.get('/api/wnba/players', async (req, res) => {
           l5_min:       m.l5_min,
         };
       });
+
+    const byId = new Map();
+    for (const row of result) {
+      if (row.id == null) continue;
+      const key = String(row.id);
+      const prev = byId.get(key);
+      if (!prev || (Number(row.games_played) || 0) > (Number(prev.games_played) || 0)) byId.set(key, row);
+    }
+    result = Array.from(byId.values());
+
+    if (!result.some(r => r.starter === true)) {
+      const withMpg = result.filter(r => Number(r.mpg) > 0);
+      if (withMpg.length >= 5) {
+        const top = new Set(
+          [...withMpg].sort((a, b) => Number(b.mpg) - Number(a.mpg)).slice(0, 5).map(r => String(r.id)),
+        );
+        result = result.map(r => ({
+          ...r,
+          starter: top.has(String(r.id)),
+        }));
+      }
+    }
 
     console.log(`[players] team_id=${teamIdNum} season=${seasonNum}: ${players.length} total, ${metricsMap.size} with metrics, returning ${result.length}`);
     res.json({ data: result });
@@ -759,17 +791,26 @@ app.get('/api/wnba/stats', async (req, res) => {
     const seasons = [].concat(req.query.seasons    || req.query['seasons[]']    || [new Date().getFullYear()]).map(Number).filter(Number.isFinite);
     if (!ids.length) return res.status(400).json({ error: 'player_ids[] required' });
 
-    const { data, error } = await supabase
-      .from('player_game_logs')
-      .select(`
-        *,
-        players(id, bdl_id, first_name, last_name, full_name),
-        teams(id, bdl_id, name, abbreviation),
-        games!inner(id, bdl_id, game_date, season)
-      `)
-      .in('player_id', ids)
-      .in('games.season', seasons)
-      .limit(300);
+    // If the requested seasons return no logs (e.g. early in a new season),
+    // automatically fall back to the prior season so the Last 5 tray populates.
+    const trySeasons = [...new Set([...seasons, ...seasons.map(s => s - 1)])].filter(s => s >= 2024);
+    let data, error;
+    for (let i = 0; i < trySeasons.length; i += 2) {
+      const batch = trySeasons.slice(i, i + 2);
+      ({ data, error } = await supabase
+        .from('player_game_logs')
+        .select(`
+          *,
+          players(id, bdl_id, first_name, last_name, full_name),
+          teams(id, bdl_id, name, abbreviation),
+          games!inner(id, bdl_id, game_date, season)
+        `)
+        .in('player_id', ids)
+        .in('games.season', batch)
+        .limit(300));
+      if (error) throw error;
+      if ((data || []).length > 0) break;
+    }
 
     if (error) throw error;
     const sorted = (data || []).sort((a, b) => String(b.games.game_date).localeCompare(String(a.games.game_date)));
@@ -796,14 +837,20 @@ app.get('/api/wnba/season_averages', async (req, res) => {
     const season = Number(req.query.season || new Date().getFullYear());
     if (!ids.length) return res.status(400).json({ error: 'player_ids[] required' });
 
-    const { data, error } = await supabase
-      .from('player_research_metrics')
-      .select('*')
-      .in('player_id', ids)
-      .eq('season', season)
-      .order('as_of_date', { ascending: false });
-
-    if (error) throw error;
+    // Try requested season; fall back to prior season if no rows returned yet
+    // (e.g. early in a new season before calc-metrics has run for that year).
+    let resolvedSeason = season;
+    let data, error;
+    for (const s of [season, season - 1]) {
+      ({ data, error } = await supabase
+        .from('player_research_metrics')
+        .select('*')
+        .in('player_id', ids)
+        .eq('season', s)
+        .order('as_of_date', { ascending: false }));
+      if (error) throw error;
+      if ((data || []).length > 0) { resolvedSeason = s; break; }
+    }
 
     const latestByPlayer = new Map();
     for (const row of data || []) {
@@ -899,6 +946,34 @@ app.get('/api/wnba/props', async (req, res) => {
 
     if (error) throw error;
     res.json({ data: data || [] });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * GET /api/wnba/matchups?gameId=X
+ * Positional team defense vs each player’s slot (from team_defensive_ratings; not on-ball defenders).
+ */
+app.get('/api/wnba/matchups', async (req, res) => {
+  try {
+    const { gameId } = req.query;
+    if (gameId == null || String(gameId).length === 0) {
+      return res.status(400).json({ error: 'gameId required' });
+    }
+
+    const { data: game, error: gErr } = await supabase
+      .from('games')
+      .select('id, home_team_id, visitor_team_id, season')
+      .eq('id', gameId)
+      .maybeSingle();
+
+    if (gErr) throw gErr;
+    if (!game) return res.status(404).json({ error: 'game not found' });
+
+    const teamsById = await getTeamsById();
+    const data = await buildPositionalMatchupMapForGame(supabase, game, teamsById);
+    res.json({ data });
   } catch (e) {
     handleError(res, e);
   }
