@@ -20,6 +20,7 @@ const { buildSlateFreshness, pipelineCountsForDate } = require('./lib/pipeline-h
 const { schedulerSummaryForHealth } = require('./lib/scheduler-summary');
 const { loadLeagueRanksByTeamForSeasons } = require('./lib/team-league-ranks');
 const { buildHealthFreshness } = require('./lib/data-freshness');
+const { getEspnRosterEspnIdSet } = require('./lib/espn-wnba-roster');
 
 function etDateString() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -96,6 +97,7 @@ function formatPlayer(player) {
 const {
   SPORTSBOOK_PRIORITY,
   normalizeSportsbook,
+  sportsbookShortLabel,
 } = require('./lib/sportsbook-priority');
 
 const SPORTSBOOK_LABELS = {
@@ -115,17 +117,6 @@ function sportsbookRank(value) {
 function sportsbookLabel(value) {
   const key = normalizeSportsbook(value);
   return SPORTSBOOK_LABELS[key] || value || 'Unknown';
-}
-
-function sportsbookShortLabel(value) {
-  const key = normalizeSportsbook(value);
-  if (key === 'derived') return 'SZN';
-  if (key === 'draftkings') return 'DK';
-  if (key === 'fanduel') return 'FD';
-  if (key === 'betmgm') return 'MGM';
-  if (key === 'caesars') return 'CZR';
-  if (key === 'bovada') return 'BOV';
-  return String(value || '').slice(0, 5).toUpperCase();
 }
 
 function groupOddsSnapshots(rows) {
@@ -163,6 +154,120 @@ function groupOddsSnapshots(rows) {
 
   return Array.from(grouped.values())
     .sort((a, b) => sportsbookRank(a.sportsbook) - sportsbookRank(b.sportsbook) || String(a.sportsbook).localeCompare(String(b.sportsbook)));
+}
+
+/**
+ * Game-level odds: latest snapshot per (game, book, market) plus earliest opening line when present.
+ * @returns {Map<number, Map<string, object>>} game_id → bookKey → { sportsbook, sportsbook_label, sportsbook_short, markets }
+ */
+function mergeSlateOddsByGame(oddsRows) {
+  const byGame = new Map();
+  for (const row of oddsRows || []) {
+    if (row.game_id == null) continue;
+    if (!byGame.has(row.game_id)) byGame.set(row.game_id, new Map());
+    const bookMap = byGame.get(row.game_id);
+    const bookKey = normalizeSportsbook(row.sportsbook);
+    if (!bookMap.has(bookKey)) {
+      bookMap.set(bookKey, {
+        sportsbook: row.sportsbook,
+        sportsbook_label: sportsbookLabel(row.sportsbook),
+        sportsbook_short: sportsbookShortLabel(row.sportsbook),
+        markets: {},
+      });
+    }
+    const book = bookMap.get(bookKey);
+    const pt = row.prop_type;
+    if (!book.markets[pt]) {
+      book.markets[pt] = { latest: null, opening: null };
+    }
+    const slot = book.markets[pt];
+    const t = row.snapshot_at ? Date.parse(row.snapshot_at) : NaN;
+    if (!Number.isFinite(t)) continue;
+    if (!slot.latest || t > Date.parse(slot.latest.snapshot_at)) {
+      slot.latest = row;
+    }
+    if (row.is_opening) {
+      if (!slot.opening || t < Date.parse(slot.opening.snapshot_at)) {
+        slot.opening = row;
+      }
+    }
+  }
+  return byGame;
+}
+
+function marketLinePair(marketSlot) {
+  if (!marketSlot) return { line: null, opening_line: null };
+  return {
+    line: marketSlot.latest != null ? toNullableNumber(marketSlot.latest.line) : null,
+    opening_line: marketSlot.opening != null ? toNullableNumber(marketSlot.opening.line) : null,
+  };
+}
+
+/** Default-book main markets + `odds_books` (same shape as GET /api/wnba/slate). */
+function buildOddsPayloadForGameBookMap(bookMap) {
+  const books = [...(bookMap || new Map()).values()]
+    .sort((a, b) => sportsbookRank(a.sportsbook) - sportsbookRank(b.sportsbook) || String(a.sportsbook).localeCompare(String(b.sportsbook)));
+  const defaultBook = books.find(book => normalizeSportsbook(book.sportsbook) === 'caesars') || books[0] || null;
+  const mk = defaultBook?.markets || {};
+  const sp = marketLinePair(mk.spread);
+  const tot = marketLinePair(mk.total);
+  const ml = mk.moneyline;
+
+  return {
+    spread: sp.line,
+    spread_opening: sp.opening_line,
+    total: tot.line,
+    total_opening: tot.opening_line,
+    home_ml: ml?.latest ? toNullableNumber(ml.latest.over_odds) : null,
+    away_ml: ml?.latest ? toNullableNumber(ml.latest.under_odds) : null,
+    odds_sportsbook: defaultBook?.sportsbook_label || null,
+    odds_sportsbook_short: defaultBook?.sportsbook_short || null,
+    odds_books: books.map(book => {
+      const bSp = marketLinePair(book.markets.spread);
+      const bTot = marketLinePair(book.markets.total);
+      const bMl = book.markets.moneyline;
+      return {
+        sportsbook: sportsbookLabel(book.sportsbook),
+        sportsbook_short: sportsbookShortLabel(book.sportsbook),
+        is_default: book === defaultBook,
+        spread: bSp.line,
+        spread_opening: bSp.opening_line,
+        total: bTot.line,
+        total_opening: bTot.opening_line,
+        home_ml: bMl?.latest ? toNullableNumber(bMl.latest.over_odds) : null,
+        away_ml: bMl?.latest ? toNullableNumber(bMl.latest.under_odds) : null,
+      };
+    }),
+  };
+}
+
+/**
+ * One game row for client APIs: teams, records, injuries, merged game-level odds.
+ * @param {Map<number, Map<string, object>>|null} [oddsByGame] from mergeSlateOddsByGame; omit or empty for no odds.
+ */
+function formatWnbaGameForClient(game, teamsById, ranksBySeason, recordsLookup, injuryByGameId, oddsByGame) {
+  const oddsPayload = buildOddsPayloadForGameBookMap(oddsByGame?.get(game.id) || new Map());
+  return {
+    id: game.id,
+    bdl_id: game.bdl_id,
+    date: game.game_date,
+    game_date: game.game_date,
+    status: game.status,
+    home_team_score: game.home_team_score,
+    visitor_team_score: game.visitor_team_score,
+    home_score: game.home_team_score,
+    away_score: game.visitor_team_score,
+    season: game.season,
+    postseason: game.postseason,
+    period: game.period,
+    time: game.time,
+    home_team: formatTeamWithLeagueRanks(teamsById.get(game.home_team_id), game.season, ranksBySeason),
+    visitor_team: formatTeamWithLeagueRanks(teamsById.get(game.visitor_team_id), game.season, ranksBySeason),
+    home_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.home_team_id),
+    visitor_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.visitor_team_id),
+    injury_notes: injuryByGameId.get(game.id) || [],
+    ...oddsPayload,
+  };
 }
 
 // Pipeline / slate helpers — Task Y
@@ -387,7 +492,7 @@ function recordLookupGet(lookup, season, teamId) {
 
 /**
  * GET /api/wnba/games?date=YYYY-MM-DD
- * Returns games for the given date.
+ * Games for the date — same core row as slate (teams, records, injuries, merged game odds).
  */
 app.get('/api/wnba/games', async (req, res) => {
   try {
@@ -414,27 +519,24 @@ app.get('/api/wnba/games', async (req, res) => {
       }),
     ]);
 
+    let oddsByGame = new Map();
+    if (list.length) {
+      const gameIds = list.map(g => g.id);
+      const { data: oddsRows, error: oddsErr } = await supabase
+        .from('odds_snapshots')
+        .select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at')
+        .in('game_id', gameIds)
+        .is('player_id', null)
+        .in('prop_type', ['spread', 'total', 'moneyline'])
+        .order('snapshot_at', { ascending: false });
+      if (oddsErr) throw oddsErr;
+      oddsByGame = mergeSlateOddsByGame(oddsRows || []);
+    }
+
     res.json({
-      data: list.map(game => ({
-        id: game.id,
-        bdl_id: game.bdl_id,
-        date: game.game_date,
-        game_date: game.game_date,
-        status: game.status,
-        home_team_score: game.home_team_score,
-        visitor_team_score: game.visitor_team_score,
-        home_score: game.home_team_score,
-        away_score: game.visitor_team_score,
-        season: game.season,
-        postseason: game.postseason,
-        period: game.period,
-        time: game.time,
-        home_team: formatTeamWithLeagueRanks(teamsById.get(game.home_team_id), game.season, ranksBySeason),
-        visitor_team: formatTeamWithLeagueRanks(teamsById.get(game.visitor_team_id), game.season, ranksBySeason),
-        home_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.home_team_id),
-        visitor_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.visitor_team_id),
-        injury_notes: injuryByGameId.get(game.id) || [],
-      })),
+      data: list.map(game =>
+        formatWnbaGameForClient(game, teamsById, ranksBySeason, recordsLookup, injuryByGameId, oddsByGame),
+      ),
     });
   } catch (e) {
     handleError(res, e);
@@ -443,7 +545,7 @@ app.get('/api/wnba/games', async (req, res) => {
 
 /**
  * GET /api/wnba/slate?date=YYYY-MM-DD
- * Returns games for a date with latest game-level odds merged inline.
+ * Games for the date with merged game-level odds (same payload shape as GET /api/wnba/games).
  */
 app.get('/api/wnba/slate', async (req, res) => {
   try {
@@ -481,67 +583,12 @@ app.get('/api/wnba/slate', async (req, res) => {
 
     if (oddsError) throw oddsError;
 
-    const oddsByGame = new Map();
-    for (const row of oddsRows || []) {
-      if (!oddsByGame.has(row.game_id)) oddsByGame.set(row.game_id, {});
-      const byGame = oddsByGame.get(row.game_id);
-      const bookKey = normalizeSportsbook(row.sportsbook);
-      if (!byGame[bookKey]) {
-        byGame[bookKey] = {
-          sportsbook: row.sportsbook,
-          sportsbook_label: sportsbookLabel(row.sportsbook),
-          sportsbook_short: sportsbookShortLabel(row.sportsbook),
-          markets: {},
-        };
-      }
-      if (!byGame[bookKey].markets[row.prop_type]) byGame[bookKey].markets[row.prop_type] = row;
-    }
+    const oddsByGame = mergeSlateOddsByGame(oddsRows || []);
 
     res.json({
-      data: games.map(game => {
-        const byBook = oddsByGame.get(game.id) || {};
-        const books = Object.values(byBook)
-          .sort((a, b) => sportsbookRank(a.sportsbook) - sportsbookRank(b.sportsbook) || String(a.sportsbook).localeCompare(String(b.sportsbook)));
-        const defaultBook = books.find(book => normalizeSportsbook(book.sportsbook) === 'caesars') || books[0] || null;
-        const odds = defaultBook?.markets || {};
-
-        return {
-          id: game.id,
-          bdl_id: game.bdl_id,
-          date: game.game_date,
-          game_date: game.game_date,
-          status: game.status,
-          home_team_score: game.home_team_score,
-          visitor_team_score: game.visitor_team_score,
-          home_score: game.home_team_score,
-          away_score: game.visitor_team_score,
-          season: game.season,
-          postseason: game.postseason,
-          period: game.period,
-          time: game.time,
-          home_team: formatTeamWithLeagueRanks(teamsById.get(game.home_team_id), game.season, ranksBySeason),
-          visitor_team: formatTeamWithLeagueRanks(teamsById.get(game.visitor_team_id), game.season, ranksBySeason),
-          spread: odds.spread ? toNullableNumber(odds.spread.line) : null,
-          total: odds.total ? toNullableNumber(odds.total.line) : null,
-          // ingest-odds stores h2h over_odds as home and under_odds as away.
-          home_ml: odds.moneyline ? toNullableNumber(odds.moneyline.over_odds) : null,
-          away_ml: odds.moneyline ? toNullableNumber(odds.moneyline.under_odds) : null,
-          home_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.home_team_id),
-          visitor_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.visitor_team_id),
-          injury_notes: injuryByGameId.get(game.id) || [],
-          odds_sportsbook: defaultBook?.sportsbook_label || null,
-          odds_sportsbook_short: defaultBook?.sportsbook_short || null,
-          odds_books: books.map(book => ({
-            sportsbook: sportsbookLabel(book.sportsbook),
-            sportsbook_short: sportsbookShortLabel(book.sportsbook),
-            is_default: book === defaultBook,
-            spread: book.markets.spread ? toNullableNumber(book.markets.spread.line) : null,
-            total: book.markets.total ? toNullableNumber(book.markets.total.line) : null,
-            home_ml: book.markets.moneyline ? toNullableNumber(book.markets.moneyline.over_odds) : null,
-            away_ml: book.markets.moneyline ? toNullableNumber(book.markets.moneyline.under_odds) : null,
-          })),
-        };
-      }),
+      data: games.map(game =>
+        formatWnbaGameForClient(game, teamsById, ranksBySeason, recordsLookup, injuryByGameId, oddsByGame),
+      ),
     });
   } catch (e) {
     handleError(res, e);
@@ -578,8 +625,10 @@ async function playerIdsFromGameLogsForTeam(teamId, seasonNum) {
 
 /**
  * GET /api/wnba/players?team_id=X&season=2025
- * Returns players for a given team who actually played in the season,
- * with season metrics merged inline (filters out historical/retired players).
+ * Active players for a team with season metrics merged when present.
+ * Bloated `team_id` sets (>22) are narrowed using game logs plus a live ESPN roster
+ * fetch (cached ~45m) so zero-minute rookies stay listed. Rows with `espn_id` but no
+ * `player_research_metrics` yet are still returned (base fields only).
  */
 app.get('/api/wnba/players', async (req, res) => {
   try {
@@ -606,10 +655,35 @@ app.get('/api/wnba/players', async (req, res) => {
       const fromLogs = await playerIdsFromGameLogsForTeam(teamIdNum, seasonNum);
       if (fromLogs && fromLogs.size >= 4) {
         const before = players.length;
-        players = players.filter(p => fromLogs.has(p.id));
+        const { data: teamRow, error: teamEspnErr } = await supabase
+          .from('teams')
+          .select('espn_id')
+          .eq('id', teamIdNum)
+          .maybeSingle();
+        if (teamEspnErr) {
+          console.warn(`[players] team espn lookup failed team_id=${teamIdNum}: ${teamEspnErr.message}`);
+        }
+
+        let espnRosterIds = null;
+        if (teamRow?.espn_id) {
+          try {
+            espnRosterIds = await getEspnRosterEspnIdSet(teamRow.espn_id);
+          } catch (err) {
+            console.warn(`[players] ESPN roster fetch failed team_id=${teamIdNum}: ${err.message}`);
+          }
+        }
+
+        if (espnRosterIds && espnRosterIds.size > 0) {
+          players = players.filter(
+            p => fromLogs.has(p.id) || (p.espn_id && espnRosterIds.has(String(p.espn_id))),
+          );
+        } else {
+          players = players.filter(p => fromLogs.has(p.id));
+        }
         console.warn(
           `[players] team_id=${teamIdNum} had ${before} active rows (expected ≤${MAX_REASONABLE_TEAM_ROSTER}); ` +
-            `narrowed to ${players.length} using game logs (${fromLogs.size} distinct ids in sample).`,
+            `narrowed to ${players.length} using game logs (${fromLogs.size} distinct ids)` +
+            `${espnRosterIds?.size ? ` + ESPN roster (${espnRosterIds.size} ids)` : ''}).`,
         );
       } else {
         console.warn(
@@ -639,7 +713,7 @@ app.get('/api/wnba/players', async (req, res) => {
     // Merge metrics into players; if no metrics exist at all, return all players unfiltered
     const hasAnyMetrics = metricsMap.size > 0;
     const result = players
-      .filter(p => !hasAnyMetrics || metricsMap.has(p.id))
+      .filter(p => !hasAnyMetrics || metricsMap.has(p.id) || p.espn_id)
       .map(p => {
         const m = metricsMap.get(p.id);
         const base = formatPlayer(p);

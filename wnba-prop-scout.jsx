@@ -209,7 +209,11 @@ const SANDBOX = {
         { date:'2024-08-02', home:'LV',  away:'NY',  score:'88-84' },
         { date:'2024-07-14', home:'NY',  away:'LV',  score:'82-79' },
       ],
-      spread: -2.5, total: 162.5, home_ml: -140, away_ml: 118,
+      spread: -2.5,
+      spread_opening: -1.5,
+      total: 162.5,
+      total_opening: 160.5,
+      home_ml: -140, away_ml: 118,
       injury_notes: ['LV: Wilson GTD', 'NY: Jones QUESTIONABLE'],
     },
     {
@@ -282,7 +286,7 @@ const SANDBOX = {
 
   topPicks: [
     // — PTS —
-    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  home_away_avg: 27.1, sportsbook:'draftkings', score_tier:'HIGH', score_projection_edge:72, score_hit_rate:68, score_recent_form:70, score_matchup:65, score_minutes_stability:74, score_pace:62, score_rest_context:58, score_injury_impact:55, score_odds_movement:60, score_streak:50, score_team_context:52, score_referee:null, market_notes: { opening_line: 26.5, current_line: 25.5, movement: -1, book_gap: 0 }, players:{ full_name:"A'ja Wilson", position:'F', team_id: 't2' }, home_team:{ id: 't1', abbreviation:'NY'  }, visitor_team:{ id: 't2', abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'], risk_flags:['blowout_risk'] },
+    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  home_away_avg: 27.1, sportsbook:'draftkings', score_tier:'HIGH', score_projection_edge:72, score_hit_rate:68, score_recent_form:70, score_matchup:65, score_minutes_stability:74, score_pace:62, score_rest_context:58, score_injury_impact:55, score_odds_movement:60, score_streak:50, score_team_context:52, score_referee:null, market_notes: { opening_line: 26.5, current_line: 25.5, movement: -1, book_gap: 1, line_sportsbook: 'draftkings', other_books: [{ book: 'FD', line: 26 }, { book: 'CZR', line: 25 }] }, players:{ full_name:"A'ja Wilson", position:'F', team_id: 't2' }, home_team:{ id: 't1', abbreviation:'NY'  }, visitor_team:{ id: 't2', abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'], risk_flags:['blowout_risk','back_to_back','dense_schedule'] },
     { id:'tp3',  player_id:'p24', prop_type:'pts', line:20.5, recommendation:'UNDER', confidence_score:72, projection:18.9, l5_avg:18.2, season_avg:21.1, value_gap:-1.6, players:{ full_name:'Jewell Loyd',          position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Tough defensive matchup','Slow pace game'] },
     { id:'tp5',  player_id:'p1',  prop_type:'pts', line:20.5, recommendation:'OVER',  confidence_score:67, projection:22.1, l5_avg:21.8, season_avg:21.2, value_gap:1.6,  players:{ full_name:'Breanna Stewart',      position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Home advantage','High usage + favorable opp'] },
     { id:'tp6',  player_id:'p16', prop_type:'pts', line:17.5, recommendation:'OVER',  confidence_score:63, projection:19.0, l5_avg:18.6, season_avg:18.2, value_gap:1.5,  players:{ full_name:'Marina Mabrey',        position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['L5 avg 18.6 pts','Elevated role with lineup changes'] },
@@ -413,6 +417,8 @@ const RISK_FLAG_LABELS = {
   volatile_minutes: 'Volatile minutes',
   volatile_stats: 'Volatile stat line',
   back_to_back: 'Back-to-back',
+  dense_schedule: '4 in 7',
+  three_in_four: '3 in 4',
   blowout_risk: 'Blowout risk',
   small_sample: 'Small sample',
 };
@@ -425,6 +431,12 @@ function fmtOdds(n)   { return n > 0 ? `+${n}` : `${n}`; }
 function fmtSpread(n) { return n > 0 ? `+${n}` : `${n}`; }
 function isNumber(v)  { return Number.isFinite(Number(v)); }
 function fmtOne(v)    { return isNumber(v) ? Number(v).toFixed(1) : '—'; }
+
+function formatCrossBookClvSnippet(clv) {
+  const rows = clv?.other_books;
+  if (!rows?.length) return '';
+  return rows.map(o => `${o.book} ${fmtOne(o.line)}`).join(' · ');
+}
 
 function fmtML(value) {
   if (value == null || !Number.isFinite(Number(value))) return '—';
@@ -500,9 +512,13 @@ function slateGameBettingSummary(game) {
   let totalText = null;
   const tot = game.total != null ? Number(game.total) : null;
   if (Number.isFinite(tot)) {
-    if (combined > tot) totalText = `Over ${fmtOne(tot)} (${fmtOne(combined)})`;
-    else if (combined < tot) totalText = `Under ${fmtOne(tot)} (${fmtOne(combined)})`;
-    else totalText = `Push ${fmtOne(tot)} (${fmtOne(combined)})`;
+    if (combined > tot) totalText = `Over ${fmtOne(tot)} (${fmtOne(combined)} pts)`;
+    else if (combined < tot) totalText = `Under ${fmtOne(tot)} (${fmtOne(combined)} pts)`;
+    else totalText = `Push ${fmtOne(tot)} (${fmtOne(combined)} pts)`;
+    const op = game.total_opening != null ? Number(game.total_opening) : null;
+    if (Number.isFinite(op) && Math.abs(op - tot) > 0.04) {
+      totalText += ` · open ${fmtOne(op)}`;
+    }
   }
 
   let spreadText = null;
@@ -512,6 +528,10 @@ function slateGameBettingSummary(game) {
     if (Math.abs(diff) < 1e-9) spreadText = `Push ${fmtGameSpread(hw, sp)}`;
     else if (diff > 0) spreadText = `${hw} ${fmtGameSpread(hw, sp)}`;
     else spreadText = `${aw} ${fmtGameSpread(aw, -sp)}`;
+    const spo = game.spread_opening != null ? Number(game.spread_opening) : null;
+    if (Number.isFinite(spo) && Math.abs(spo - sp) > 0.04) {
+      spreadText += ` · open ${fmtGameSpread(hw, spo)}`;
+    }
   }
 
   return {
@@ -529,6 +549,200 @@ function slateLifecycleLabel(game) {
   if (isGameFinalStatus(game?.status)) return 'FINAL';
   if (bx && bx.hs + bx.vs > 0 && String(game?.status || '').toLowerCase() === 'scheduled') return 'FINAL';
   return 'SCHEDULED';
+}
+
+/** For lifecycle UI: which phase the game is in. */
+function slateLifecyclePhase(game) {
+  const L = slateLifecycleLabel(game);
+  if (L === 'LIVE') return 'live';
+  if (L === 'FINAL') return 'final';
+  return 'scheduled';
+}
+
+function SlateLifecycleTrail({ game }) {
+  const phase = slateLifecyclePhase(game);
+  const order = { scheduled: 0, live: 1, final: 2 };
+  const cur = order[phase];
+  const steps = [
+    { id: 'scheduled', label: 'SCHEDULED' },
+    { id: 'live', label: 'LIVE' },
+    { id: 'final', label: 'FINAL' },
+  ];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
+      {steps.map((s, idx) => {
+        const i = order[s.id];
+        const done = i < cur;
+        const current = i === cur;
+        const bg = current
+          ? (s.id === 'live' ? T.green : s.id === 'final' ? T.card3 : T.card2)
+          : done
+            ? T.card3
+            : T.card2;
+        const fg = current
+          ? (s.id === 'live' ? '#071a0e' : T.text)
+          : done
+            ? T.text3
+            : T.text3;
+        const border = current && s.id === 'final' ? `1px solid ${T.border}` : current && s.id === 'live' ? 'none' : `1px solid ${T.border}`;
+        return (
+          <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {idx > 0 && (
+              <span style={{ fontSize: 9, color: T.border, fontWeight: 700, userSelect: 'none' }}>→</span>
+            )}
+            <span
+              style={{
+                background: bg,
+                color: fg,
+                fontSize: 8,
+                fontWeight: 800,
+                padding: '3px 8px',
+                borderRadius: 4,
+                letterSpacing: 0.45,
+                border,
+                opacity: i > cur ? 0.65 : 1,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {current && s.id === 'live' ? '● LIVE' : s.label}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Prominent visitor @ home score when live or final (incl. lagged status + box score). */
+function slateShowHeaderScores(game) {
+  const bx = slateBoxScores(game);
+  if (!bx) return false;
+  return (
+    slateIsLiveStatus(game)
+    || isGameFinalStatus(game?.status)
+    || (bx.hs + bx.vs > 0 && String(game?.status || '').toLowerCase() === 'scheduled')
+  );
+}
+
+function SlateHeaderScores({ game }) {
+  if (!slateShowHeaderScores(game)) return null;
+  const bx = slateBoxScores(game);
+  const aw = game.visitor_team?.abbreviation || 'AWAY';
+  const hw = game.home_team?.abbreviation || 'HOME';
+  const { hs, vs } = bx;
+  const live = slateIsLiveStatus(game);
+  const homeWon = hs > vs;
+  const awayWon = vs > hs;
+  const scoreStyle = won => ({
+    fontSize: 18,
+    fontWeight: 950,
+    letterSpacing: -0.5,
+    color: won ? T.text : T.text2,
+  });
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+      <span style={scoreStyle(awayWon)}>{aw} {Math.round(vs)}</span>
+      <span style={{ fontSize: 11, color: T.text3, fontWeight: 700 }}>—</span>
+      <span style={scoreStyle(homeWon)}>{hw} {Math.round(hs)}</span>
+      {live && (
+        <span style={{ fontSize: 9, fontWeight: 800, color: T.green, marginLeft: 4 }}>in progress</span>
+      )}
+    </div>
+  );
+}
+
+/** Opening → closing for main markets (default book). */
+function slateLineMovementCaption(game) {
+  const hw = game.home_team?.abbreviation || 'HOME';
+  const parts = [];
+  const t0 = game.total_opening != null ? Number(game.total_opening) : null;
+  const t1 = game.total != null ? Number(game.total) : null;
+  if (Number.isFinite(t0) && Number.isFinite(t1) && Math.abs(t0 - t1) > 0.04) {
+    parts.push(`O/U ${fmtOne(t0)} → ${fmtOne(t1)}`);
+  }
+  const s0 = game.spread_opening != null ? Number(game.spread_opening) : null;
+  const s1 = game.spread != null ? Number(game.spread) : null;
+  if (Number.isFinite(s0) && Number.isFinite(s1) && Math.abs(s0 - s1) > 0.04) {
+    parts.push(`Spread ${fmtGameSpread(hw, s0)} → ${fmtGameSpread(hw, s1)}`);
+  }
+  return parts.length ? parts.join(' · ') : null;
+}
+
+/**
+ * Closing main-market shape (default book): quick script read for props.
+ * Thresholds tuned for typical WNBA full-game totals (~150–175).
+ */
+function slateGameScriptTags(game) {
+  const tags = [];
+  const tot = game.total != null ? Number(game.total) : null;
+  const sp = game.spread != null ? Number(game.spread) : null;
+  if (Number.isFinite(tot)) {
+    if (tot < 152) {
+      tags.push({
+        key: 'low_total',
+        label: 'Low O/U',
+        title: 'Closing total is low — often a slower or defensive game script.',
+      });
+    } else if (tot > 178) {
+      tags.push({
+        key: 'high_total',
+        label: 'High O/U',
+        title: 'Closing total is high — more scoring / pace expected.',
+      });
+    }
+  }
+  if (Number.isFinite(sp)) {
+    const absSp = Math.abs(sp);
+    if (absSp >= 9) {
+      tags.push({
+        key: 'wide_spread',
+        label: 'Wide spread',
+        title: 'Heavy favorite on the board — blowout / bench minutes risk for props.',
+      });
+    } else if (absSp <= 3.5) {
+      tags.push({
+        key: 'tight_spread',
+        label: 'Tight spread',
+        title: 'Near pick-em — competitive game script.',
+      });
+    }
+  }
+  return tags.slice(0, 3);
+}
+
+function SlateGameScriptTags({ game, centered }) {
+  const tags = slateGameScriptTags(game);
+  if (!tags.length) return null;
+  return (
+    <div style={{
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5,
+      marginTop: 8,
+      alignItems: 'center',
+      justifyContent: centered ? 'center' : 'flex-start',
+    }}>
+      {tags.map(t => (
+        <span
+          key={t.key}
+          title={t.title}
+          style={{
+            fontSize: 8,
+            fontWeight: 800,
+            letterSpacing: 0.35,
+            color: t.key === 'wide_spread' ? T.yellow : t.key === 'high_total' ? T.accent : T.text2,
+            background: t.key === 'wide_spread' ? T.yellowDim : t.key === 'high_total' ? T.accentDim : T.card3,
+            border: `1px solid ${T.border}`,
+            padding: '3px 8px',
+            borderRadius: 4,
+            cursor: 'default',
+          }}
+        >
+          {t.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -688,9 +902,15 @@ function buildPickRationaleText(pick) {
     'WNBA Prop Scout',
     name,
     matchup,
+  ];
+  const sch = scheduleContextChipsFromPick(pick);
+  if (sch.length) lines.push(`Schedule: ${sch.join(' · ')}`);
+  const clvSnap = pickClv(pick);
+  if (clvSnap?.other_books?.length) lines.push(`Alt books: ${formatCrossBookClvSnippet(clvSnap)}`);
+  lines.push(
     `${type} ${rec} ${line} (${book})`,
     `Model score: ${conf}${tier ? ` (${tier})` : ''}`,
-  ];
+  );
   if (pick.projection != null && Number.isFinite(Number(pick.projection))) {
     lines.push(`Projection: ${fmtOne(pick.projection)}`);
   }
@@ -1047,9 +1267,14 @@ function SlateCard({ game, onClick, topPick }) {
               </div>
             )}
           </div>
+          <SlateHeaderScores game={game} />
         </div>
         <StatusBadge game={game} />
       </div>
+
+      <SlateLifecycleTrail game={game} />
+
+      <SlateGameScriptTags game={game} />
 
       {/* Odds row — 4 columns: SPR · O/U · Away ML · Home ML */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 5, marginTop: 10 }}>
@@ -1066,6 +1291,16 @@ function SlateCard({ game, onClick, topPick }) {
         ))}
       </div>
 
+      {(() => {
+        const cap = slateLineMovementCaption(game);
+        return cap ? (
+          <div style={{ fontSize: 9, color: T.text3, marginTop: 6, lineHeight: 1.35 }}>
+            <span style={{ fontWeight: 800, color: T.text2 }}>Line move · </span>
+            {cap}
+          </div>
+        ) : null;
+      })()}
+
       {betSummary && (
         <div style={{
           marginTop: 10,
@@ -1074,8 +1309,13 @@ function SlateCard({ game, onClick, topPick }) {
           background: T.card2,
           border: `1px solid ${T.border}`,
         }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: T.text, letterSpacing: 0.2 }}>{betSummary.scoreLine}</div>
-          <div style={{ fontSize: 10, color: T.text2, marginTop: 6, lineHeight: 1.45 }}>
+          <div style={{ fontSize: 10, color: T.text2, lineHeight: 1.45 }}>
+            {!slateShowHeaderScores(game) && (
+              <div style={{ fontSize: 12, fontWeight: 800, color: T.text, letterSpacing: 0.2, marginBottom: 4 }}>{betSummary.scoreLine}</div>
+            )}
+            {slateShowHeaderScores(game) && (
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, letterSpacing: 0.3, marginBottom: 4 }}>Vs closing line</div>
+            )}
             <div><span style={{ color: T.text3 }}>Moneyline · </span>{betSummary.mlText}</div>
             {betSummary.totalText && (
               <div><span style={{ color: T.text3 }}>Total · </span>{betSummary.totalText}</div>
@@ -1213,6 +1453,23 @@ function OverviewTab({ game, odds }) {
             </div>
           </div>
         </div>
+
+        <div style={{ marginTop: 14 }}>
+          <SlateLifecycleTrail game={game} />
+          <SlateHeaderScores game={game} />
+        </div>
+
+        <SlateGameScriptTags game={game} centered />
+
+        {(() => {
+          const mv = slateLineMovementCaption(game);
+          return mv ? (
+            <div style={{ fontSize: 9, color: T.text3, marginTop: 10, lineHeight: 1.35, textAlign: 'center' }}>
+              <span style={{ fontWeight: 800, color: T.text2 }}>Line move · </span>
+              {mv}
+            </div>
+          ) : null;
+        })()}
 
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
           <span style={{ fontSize: 10, color: T.text2, background: T.card3, border: `1px solid ${T.border}`, borderRadius: 999, padding: '4px 9px' }}>{gameDate}</span>
@@ -1791,6 +2048,17 @@ function ModelCalibrationDrilldowns({ drill }) {
   );
 }
 
+function otherBooksFromMarketNotes(mn) {
+  if (!Array.isArray(mn?.other_books) || !mn.other_books.length) return null;
+  const out = mn.other_books
+    .map(ob => ({
+      book: ob?.book != null ? String(ob.book) : (ob?.s != null ? String(ob.s) : ''),
+      line: ob?.line != null ? Number(ob.line) : (ob?.l != null ? Number(ob.l) : NaN),
+    }))
+    .filter(ob => ob.book && Number.isFinite(ob.line));
+  return out.length ? out : null;
+}
+
 /** Mirrors lib/scoring/clv.js for client-only bundle (opening → line at publish). */
 function pickClv(pick) {
   if (pick?.clv) return pick.clv;
@@ -1810,7 +2078,16 @@ function pickClv(pick) {
     else favor = movement > 0 ? 'help' : 'hurt';
   }
   const line = Number.isFinite(opening) && Number.isFinite(current) ? `${opening}→${current}` : null;
-  return { opening, current, movement, favor, line, book_gap: mn.book_gap != null ? Number(mn.book_gap) : null };
+  return {
+    opening,
+    current,
+    movement,
+    favor,
+    line,
+    book_gap: mn.book_gap != null ? Number(mn.book_gap) : null,
+    line_sportsbook: mn.line_sportsbook != null ? String(mn.line_sportsbook) : null,
+    other_books: otherBooksFromMarketNotes(mn),
+  };
 }
 
 function pickHomeRoadLabel(pick) {
@@ -1818,6 +2095,53 @@ function pickHomeRoadLabel(pick) {
   const hid = pick.home_team?.id;
   if (tid == null || hid == null) return null;
   return String(tid) === String(hid) ? 'Home' : 'Road';
+}
+
+/** e.g. "Home vs LV" or "Road @ NY" for quick schedule context on cards. */
+function pickScheduleVenueLine(pick) {
+  const hr = pickHomeRoadLabel(pick);
+  if (!hr) return null;
+  const homeAbbr = pick.home_team?.abbreviation;
+  const awayAbbr = pick.visitor_team?.abbreviation;
+  if (hr === 'Home') return awayAbbr ? `Home vs ${awayAbbr}` : 'Home';
+  return homeAbbr ? `Road @ ${homeAbbr}` : 'Road';
+}
+
+function scheduleContextChipsFromPick(pick) {
+  const chips = [];
+  const venue = pickScheduleVenueLine(pick);
+  if (venue) chips.push(venue);
+  const rf = Array.isArray(pick.risk_flags) ? pick.risk_flags : [];
+  if (rf.includes('back_to_back')) chips.push('B2B');
+  if (rf.includes('dense_schedule')) chips.push('4 in 7');
+  if (rf.includes('three_in_four')) chips.push('3 in 4');
+  return chips;
+}
+
+function ScheduleContextChips({ pick, marginLeft = 0 }) {
+  const chips = scheduleContextChipsFromPick(pick);
+  if (!chips.length) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6, marginLeft }}>
+      {chips.map(label => (
+        <span
+          key={label}
+          style={{
+            fontSize: 8,
+            fontWeight: 800,
+            color: T.text2,
+            background: T.card3,
+            border: `1px solid ${T.border}`,
+            padding: '2px 6px',
+            borderRadius: 4,
+            letterSpacing: 0.2,
+          }}
+        >
+          {label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function TrackRecordPickStrip({ track, trackErr }) {
@@ -2033,6 +2357,8 @@ function TopPicksTab({ picks, loading, error }) {
                 ))}
               </div>
 
+              <ScheduleContextChips pick={pick} marginLeft={0} />
+
               {(siteLabel && pick.home_away_avg != null) || clv?.line ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 10, color: T.text3 }}>
                   {siteLabel && pick.home_away_avg != null && (
@@ -2045,13 +2371,16 @@ function TopPicksTab({ picks, loading, error }) {
                     </span>
                   )}
                   {clv?.line && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <span>Open {clv.line}</span>
                       {clv.favor === 'help' && (
                         <span style={{ fontSize: 8, fontWeight: 900, color: T.green, background: T.greenDim, border: `1px solid ${T.green}`, padding: '1px 5px', borderRadius: 4 }}>CLV+</span>
                       )}
                       {clv.favor === 'hurt' && (
                         <span style={{ fontSize: 8, fontWeight: 900, color: T.red, background: T.redDim, border: `1px solid ${T.red}`, padding: '1px 5px', borderRadius: 4 }}>CLV−</span>
+                      )}
+                      {clv?.other_books?.length > 0 && (
+                        <span style={{ fontSize: 9, color: T.text3 }}>Alt · {formatCrossBookClvSnippet(clv)}</span>
                       )}
                     </span>
                   )}
@@ -2434,6 +2763,8 @@ function BoardPlayerCard({ pick, rank }) {
           )}
         </div>
 
+        <ScheduleContextChips pick={pick} marginLeft={34} />
+
         {(siteLabel && pick.home_away_avg != null) || clvBoard?.line ? (
           <div style={{ fontSize: 9, color: T.text3, marginTop: 5, marginLeft: 34, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             {siteLabel && pick.home_away_avg != null && (
@@ -2443,10 +2774,13 @@ function BoardPlayerCard({ pick, rank }) {
               </span>
             )}
             {clvBoard?.line && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                 Open {clvBoard.line}
                 {clvBoard.favor === 'help' && <span style={{ fontSize: 7, fontWeight: 900, color: T.green }}>CLV+</span>}
                 {clvBoard.favor === 'hurt' && <span style={{ fontSize: 7, fontWeight: 900, color: T.red }}>CLV−</span>}
+                {clvBoard?.other_books?.length > 0 && (
+                  <span style={{ fontSize: 8, color: T.text3 }}>Alt · {formatCrossBookClvSnippet(clvBoard)}</span>
+                )}
               </span>
             )}
           </div>

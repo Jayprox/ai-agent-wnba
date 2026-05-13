@@ -30,6 +30,7 @@ const { buildSyntheticMetricsFromLogs } = require('../lib/scoring/synthetic-metr
 const {
   normalizeSportsbook,
   pickPreferredSportsbookLine,
+  sportsbookShortLabel,
 } = require('../lib/sportsbook-priority');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -454,10 +455,21 @@ async function getOddsData(gameId) {
     const lines = d.current.map(row => row.line);
     const gap = lines.length > 1 ? round(Math.max(...lines) - Math.min(...lines)) : 0;
 
+    const chosenNorm = normalizeSportsbook(chosen.sportsbook);
+    const otherBooks = d.current
+      .filter(row => normalizeSportsbook(row.sportsbook) !== chosenNorm)
+      .map(row => ({
+        book: sportsbookShortLabel(row.sportsbook),
+        line: round(row.line, 1),
+      }))
+      .sort((a, b) => String(a.book).localeCompare(String(b.book)));
+
     oddsContext.set(key, {
       movement,
       gap,
       opening: openLine,
+      line_sportsbook: chosen.sportsbook,
+      other_books: otherBooks.slice(0, 8),
     });
   }
 
@@ -861,6 +873,28 @@ function scoreRest(logs, gameDate) {
   return 65;
 }
 
+/** Calendar days since last logged game before `gameDate` (logs[0] = most recent prior). */
+function daysSincePrevGame(logs, gameDate) {
+  const prevDate = logs?.[0]?.game_date;
+  if (!prevDate || !gameDate) return null;
+  return (new Date(gameDate + 'T12:00:00Z') - new Date(prevDate + 'T12:00:00Z')) / (1000 * 60 * 60 * 24);
+}
+
+/** Count prior games with game_date in [gameDate − windowDays, gameDate). */
+function countPriorGamesInRollingDays(logs, gameDate, windowDays) {
+  if (!logs?.length || !gameDate) return 0;
+  const endMs = new Date(gameDate + 'T12:00:00Z').getTime();
+  const startMs = endMs - windowDays * 86400000;
+  let n = 0;
+  for (const log of logs) {
+    if (!log.game_date) continue;
+    const t = new Date(log.game_date + 'T12:00:00Z').getTime();
+    if (t < startMs || t >= endMs) continue;
+    n += 1;
+  }
+  return n;
+}
+
 function scoreInjury(status) {
   switch (status) {
     case 'out':          return null;
@@ -1105,6 +1139,9 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   const avgAst = m.avg_ast == null ? null : Number(m.avg_ast);
   const sBallHandler = field === 'ast' ? scoreBallHandlerRole(Number.isFinite(avgAst) ? avgAst : null) : 50;
   const sRest      = scoreRest(logs, game.game_date);
+  const prevGapDays = daysSincePrevGame(logs, game.game_date);
+  const gamesLast7 = countPriorGamesInRollingDays(logs, game.game_date, 7);
+  const gamesLast4 = countPriorGamesInRollingDays(logs, game.game_date, 4);
   const sMatchup   = matchupRating;
   const sOdds      = ctx
     ? scoreOddsMovement(ctx.movement, ctx.gap, dir)
@@ -1144,6 +1181,24 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   if (l5Avg != null && seasonAvg != null) {
     keyFactors.push(`L5 avg ${round(l5Avg, 1)}, season avg ${round(seasonAvg, 1)}`);
   }
+  keyFactors.push(isHome ? 'Home court' : 'Road game');
+  if (prevGapDays != null && Number.isFinite(prevGapDays)) {
+    if (prevGapDays <= 1.01) {
+      keyFactors.push('Back-to-back — played the prior day');
+    } else if (prevGapDays <= 2.01) {
+      keyFactors.push('1 day off — short recovery between games');
+    } else if (prevGapDays >= 3) {
+      keyFactors.push(`${Math.floor(prevGapDays)} days rest since last game`);
+    }
+  }
+  if (gamesLast7 >= 5) {
+    keyFactors.push(`Heavy week — ${gamesLast7} games in the last 7 days`);
+  } else if (gamesLast7 === 4) {
+    keyFactors.push('4 games in the last 7 days — busy travel week');
+  }
+  if (gamesLast4 >= 3 && prevGapDays != null && prevGapDays > 1.01) {
+    keyFactors.push('3 games in 4 nights — compressed schedule');
+  }
   if (impliedTeamTotal && impliedTeamTotal > 86) {
     keyFactors.push(`Team implied at ${round(impliedTeamTotal, 1)} pts (above avg) — favorable scoring environment`);
   }
@@ -1171,7 +1226,6 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   if (trend === 'strong_up')    keyFactors.push(`Strong upward trend — L5 ${round(l5Avg, 1)} vs season ${round(seasonAvg, 1)}`);
   if (trend === 'strong_down')  keyFactors.push(`Strong downward trend — L5 ${round(l5Avg, 1)} vs season ${round(seasonAvg, 1)}`);
   if (trend === 'volatile')     keyFactors.push(`Volatile recent output — L5 ${round(l5Avg, 1)} vs season ${round(seasonAvg, 1)}`);
-  if (sRest < 40)               keyFactors.push('Back-to-back game');
   if (field === 'stl') {
     if (oppStats?.opp_tov_pct != null) {
       keyFactors.push(`Opponent TOV% ${(oppStats.opp_tov_pct * 100).toFixed(1)}% (matchup rating: ${round(sMatchup, 0)}/100)`);
@@ -1215,6 +1269,10 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   if (ctx?.gap >= 0.5) {
     keyFactors.push(`${ctx.gap} spread across books — sharp/square divergence`);
   }
+  if (ctx?.other_books?.length) {
+    const alt = ctx.other_books.slice(0, 4).map(o => `${o.book} ${o.line}`).join(', ');
+    keyFactors.push(`Other books: ${alt}${ctx.other_books.length > 4 ? '…' : ''}`);
+  }
   if (injuryStatus === 'doubtful') {
     keyFactors.push('Listed as DOUBTFUL — significant DNP risk');
   }
@@ -1246,12 +1304,18 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     current_line: round(line),
     movement: ctx.movement,
     book_gap: ctx.gap,
+    line_sportsbook: ctx.line_sportsbook ?? sportsbook ?? null,
+    other_books: ctx.other_books?.length ? ctx.other_books : null,
   } : null;
 
   const riskFlags = [];
   if ((m.min_consistency_score ?? 100) < 40) riskFlags.push('volatile_minutes');
   if (trend === 'volatile')                   riskFlags.push('volatile_stats');
   if (sRest < 40)                             riskFlags.push('back_to_back');
+  if (gamesLast7 >= 4)                       riskFlags.push('dense_schedule');
+  if (gamesLast4 >= 3 && prevGapDays != null && prevGapDays > 1.01) {
+    riskFlags.push('three_in_four');
+  }
   if (sBlowout < 40)                          riskFlags.push('blowout_risk');
   if (m.games_played < 10)                    riskFlags.push('small_sample');
 

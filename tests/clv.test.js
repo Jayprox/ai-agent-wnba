@@ -20,3 +20,23 @@ test('clvFromMarketNotes favors UNDER when line rises', () => {
   const c = clvFromMarketNotes(pick);
   assert.strictEqual(c.favor, 'help');
 });
+
+test('clvFromMarketNotes passes through cross-book lines', () => {
+  const pick = {
+    recommendation: 'OVER',
+    market_notes: {
+      opening_line: 22.5,
+      current_line: 22,
+      movement: -0.5,
+      book_gap: 0.5,
+      line_sportsbook: 'caesars',
+      other_books: [{ book: 'DK', line: 22.5 }, { book: 'FD', line: 21.5 }],
+    },
+  };
+  const c = clvFromMarketNotes(pick);
+  assert.strictEqual(c.line_sportsbook, 'caesars');
+  assert.deepStrictEqual(c.other_books, [
+    { book: 'DK', line: 22.5 },
+    { book: 'FD', line: 21.5 },
+  ]);
+});
