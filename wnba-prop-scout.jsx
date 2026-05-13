@@ -282,7 +282,7 @@ const SANDBOX = {
 
   topPicks: [
     // — PTS —
-    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  home_away_avg: 27.1, market_notes: { opening_line: 26.5, current_line: 25.5, movement: -1, book_gap: 0 }, players:{ full_name:"A'ja Wilson", position:'F', team_id: 't2' }, home_team:{ id: 't1', abbreviation:'NY'  }, visitor_team:{ id: 't2', abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'] },
+    { id:'tp1',  player_id:'p8',  prop_type:'pts', line:25.5, recommendation:'OVER',  confidence_score:81, projection:27.2, l5_avg:26.8, season_avg:26.4, value_gap:1.7,  home_away_avg: 27.1, sportsbook:'draftkings', score_tier:'HIGH', score_projection_edge:72, score_hit_rate:68, score_recent_form:70, score_matchup:65, score_minutes_stability:74, score_pace:62, score_rest_context:58, score_injury_impact:55, score_odds_movement:60, score_streak:50, score_team_context:52, score_referee:null, market_notes: { opening_line: 26.5, current_line: 25.5, movement: -1, book_gap: 0 }, players:{ full_name:"A'ja Wilson", position:'F', team_id: 't2' }, home_team:{ id: 't1', abbreviation:'NY'  }, visitor_team:{ id: 't2', abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Opp ranks 11th in pts allowed','High usage rate (0.82/min)'], risk_flags:['blowout_risk'] },
     { id:'tp3',  player_id:'p24', prop_type:'pts', line:20.5, recommendation:'UNDER', confidence_score:72, projection:18.9, l5_avg:18.2, season_avg:21.1, value_gap:-1.6, players:{ full_name:'Jewell Loyd',          position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['Tough defensive matchup','Slow pace game'] },
     { id:'tp5',  player_id:'p1',  prop_type:'pts', line:20.5, recommendation:'OVER',  confidence_score:67, projection:22.1, l5_avg:21.8, season_avg:21.2, value_gap:1.6,  players:{ full_name:'Breanna Stewart',      position:'F' }, home_team:{ abbreviation:'NY'  }, visitor_team:{ abbreviation:'LV'  }, game_id:'g1', game_status:'7:30 PM ET', key_factors:['Home advantage','High usage + favorable opp'] },
     { id:'tp6',  player_id:'p16', prop_type:'pts', line:17.5, recommendation:'OVER',  confidence_score:63, projection:19.0, l5_avg:18.6, season_avg:18.2, value_gap:1.5,  players:{ full_name:'Marina Mabrey',        position:'G' }, home_team:{ abbreviation:'CHI' }, visitor_team:{ abbreviation:'SEA' }, game_id:'g2', game_status:'9:00 PM ET', key_factors:['L5 avg 18.6 pts','Elevated role with lineup changes'] },
@@ -315,6 +315,27 @@ const SANDBOX = {
       { prop_type: 'reb', settled: 36, hits: 19, misses: 17, hit_rate: 0.528 },
       { prop_type: 'ast', settled: 31, hits: 18, misses: 13, hit_rate: 0.581 },
     ],
+    calibration_drilldown: {
+      min_settled: 3,
+      by_prop_tier: [
+        { prop_type: 'pts', tier: 'HIGH', settled: 52, hits: 30, misses: 22, pushes: 0, unresolved: 0, hit_rate: 0.577 },
+        { prop_type: 'pts', tier: 'MEDIUM', settled: 41, hits: 22, misses: 19, pushes: 0, unresolved: 0, hit_rate: 0.537 },
+        { prop_type: 'reb', tier: 'HIGH', settled: 38, hits: 21, misses: 17, pushes: 0, unresolved: 0, hit_rate: 0.553 },
+      ],
+      by_line_tier: [
+        { line_bucket: 'half', tier: 'HIGH', settled: 44, hits: 25, misses: 19, pushes: 0, unresolved: 0, hit_rate: 0.568 },
+        { line_bucket: 'integer', tier: 'MEDIUM', settled: 35, hits: 18, misses: 17, pushes: 0, unresolved: 0, hit_rate: 0.514 },
+      ],
+      by_side_tier: [
+        { recommendation: 'OVER', tier: 'HIGH', settled: 98, hits: 56, misses: 42, pushes: 0, unresolved: 0, hit_rate: 0.571 },
+        { recommendation: 'UNDER', tier: 'HIGH', settled: 88, hits: 46, misses: 42, pushes: 0, unresolved: 0, hit_rate: 0.523 },
+      ],
+      by_score_band: [
+        { band: '70-74', settled: 62, hits: 33, misses: 29, pushes: 0, unresolved: 0, hit_rate: 0.532 },
+        { band: '75-79', settled: 58, hits: 35, misses: 23, pushes: 0, unresolved: 0, hit_rate: 0.603 },
+        { band: '80+', settled: 66, hits: 40, misses: 26, pushes: 0, unresolved: 0, hit_rate: 0.606 },
+      ],
+    },
   },
 };
 
@@ -568,6 +589,21 @@ function fmtDate(value) {
   return new Date(value + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
 }
 
+function fmtHealthTs(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return String(iso);
+  }
+}
+
 function fmtGameTime(value) {
   if (!value) return null;
   const raw = String(value).trim();
@@ -591,6 +627,150 @@ function playerName(p) {
   return p.name || p.full_name || [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Unknown';
 }
 function playerPos(p) { return p.pos || p.position || '—'; }
+
+/** Sub-scores stored on prop_analysis_results (same scale as calc-confidence output, ~0–100). */
+const PICK_SCORE_BREAKDOWN = [
+  ['score_projection_edge', 'Projection edge'],
+  ['score_hit_rate', 'Hit rate vs line'],
+  ['score_recent_form', 'Recent form'],
+  ['score_matchup', 'Matchup'],
+  ['score_minutes_stability', 'Minutes stability'],
+  ['score_pace', 'Pace'],
+  ['score_rest_context', 'Rest / schedule'],
+  ['score_injury_impact', 'Injury context'],
+  ['score_odds_movement', 'Odds movement'],
+  ['score_streak', 'Streak'],
+  ['score_team_context', 'Team context'],
+  ['score_referee', 'Referee (pts / PRA)'],
+];
+
+function pickScoreBreakdownRows(pick) {
+  const out = [];
+  for (const [key, label] of PICK_SCORE_BREAKDOWN) {
+    const v = pick?.[key];
+    if (v == null || !Number.isFinite(Number(v))) continue;
+    out.push({ key, label, value: Math.round(Number(v)) });
+  }
+  return out;
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch { /* ignore */ }
+  }
+}
+
+function buildPickRationaleText(pick) {
+  const name = playerName(pick.players || {});
+  const matchup = pick.home_team && pick.visitor_team
+    ? `${pick.visitor_team.abbreviation} @ ${pick.home_team.abbreviation}`
+    : '';
+  const type = String(pick.prop_type || '').toUpperCase();
+  const rec = pick.recommendation || '';
+  const line = fmtOne(pick.line);
+  const book = sportsbookShort(pick.sportsbook) || pick.sportsbook || '—';
+  const conf = Math.round(Number(pick.confidence_score) || 0);
+  const tier = pick.score_tier || '';
+  const factors = Array.isArray(pick.key_factors) ? pick.key_factors : [];
+  const risks = Array.isArray(pick.risk_flags) ? pick.risk_flags : [];
+  const lines = [
+    'WNBA Prop Scout',
+    name,
+    matchup,
+    `${type} ${rec} ${line} (${book})`,
+    `Model score: ${conf}${tier ? ` (${tier})` : ''}`,
+  ];
+  if (pick.projection != null && Number.isFinite(Number(pick.projection))) {
+    lines.push(`Projection: ${fmtOne(pick.projection)}`);
+  }
+  if (factors.length) lines.push(`Factors: ${factors.join(' | ')}`);
+  if (risks.length) lines.push(`Risks: ${risks.map(formatRiskFlag).join(' | ')}`);
+  return lines.filter(Boolean).join('\n');
+}
+
+function PickSignalTable({ pick }) {
+  const rows = pickScoreBreakdownRows(pick);
+  if (!rows.length) {
+    return (
+      <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>
+        No component scores on file for this pick (re-run scoring after DB migrations if expected).
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 8, borderRadius: 8, border: `1px solid ${T.border}`, overflow: 'hidden' }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: T.text3, padding: '6px 8px', background: T.card2 }}>
+        Model setup (sub-scores from pipeline)
+      </div>
+      {rows.map(row => (
+        <div
+          key={row.key}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '5px 8px',
+            borderTop: `1px solid ${T.border}`,
+            fontSize: 10,
+          }}
+        >
+          <span style={{ color: T.text2 }}>{row.label}</span>
+          <span style={{ fontWeight: 800, color: T.text }}>{row.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PickTrustActions({ pick, marginLeft = 0 }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const rows = pickScoreBreakdownRows(pick);
+  const btn = {
+    background: T.card2,
+    border: `1px solid ${T.border}`,
+    color: T.text2,
+    fontSize: 9,
+    fontWeight: 700,
+    padding: '4px 10px',
+    borderRadius: 6,
+    cursor: 'pointer',
+  };
+  return (
+    <div style={{ marginTop: 8, marginLeft }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button
+          type="button"
+          style={btn}
+          onClick={async () => {
+            await copyTextToClipboard(buildPickRationaleText(pick));
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          }}
+        >
+          {copied ? 'Copied' : 'Copy summary'}
+        </button>
+        {rows.length > 0 && (
+          <button type="button" style={btn} onClick={() => setOpen(o => !o)}>
+            {open ? 'Hide breakdown' : 'Score breakdown'}
+          </button>
+        )}
+      </div>
+      {open && <PickSignalTable pick={pick} />}
+    </div>
+  );
+}
 
 function dateInputValue(date = new Date(), timeZone) {
   if (timeZone) {
@@ -643,6 +823,18 @@ async function apiGetModelTrackRecord(days = 30) {
   if (IS_SANDBOX) return SANDBOX.modelTrackRecord;
   const r = await fetch(`${API_BASE}/api/wnba/model-track-record?days=${days}&breakdown=1`);
   if (!r.ok) throw new Error(`model-track-record failed: ${r.status}`);
+  return r.json();
+}
+
+async function apiGetHealth() {
+  if (IS_SANDBOX) {
+    return {
+      date: today(),
+      freshness: { games_max_updated_at: null, odds_latest_snapshot_at: null },
+    };
+  }
+  const r = await fetch(`${API_BASE}/health`);
+  if (!r.ok) throw new Error(`health failed: ${r.status}`);
   return r.json();
 }
 
@@ -1453,6 +1645,152 @@ function formatTrackPct(b) {
   return b.hit_rate != null ? `${Math.round(b.hit_rate * 100)}%` : '—';
 }
 
+function calibrationDrillTierLabel(tier) {
+  if (tier === 'HIGH') return 'HIGH (≥70)';
+  if (tier === 'MEDIUM') return 'MID (55–69)';
+  if (tier === 'EDGE') return 'LOW (54–55)';
+  return String(tier || '—');
+}
+
+function calibrationDrillLineLabel(bucket) {
+  if (bucket === 'integer') return 'Whole number';
+  if (bucket === 'half') return 'Half (.5)';
+  if (bucket === 'other') return 'Other decimal';
+  if (bucket === 'unknown') return 'Unknown';
+  return String(bucket || '—');
+}
+
+function formatDrillHitPct(row) {
+  return row?.hit_rate != null ? `${Math.round(row.hit_rate * 100)}%` : '—';
+}
+
+function ModelCalibrationDrilldowns({ drill }) {
+  if (!drill) return null;
+  const min = drill.min_settled ?? 3;
+  const n =
+    (drill.by_prop_tier?.length || 0) +
+    (drill.by_line_tier?.length || 0) +
+    (drill.by_side_tier?.length || 0) +
+    (drill.by_score_band?.length || 0);
+  const tableHead = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0,1.1fr) minmax(0,1fr) 52px 44px',
+    gap: '4px 8px',
+    fontSize: 9,
+    fontWeight: 800,
+    color: T.text3,
+    letterSpacing: 0.4,
+    marginBottom: 4,
+    padding: '0 2px',
+  };
+  const rowStyle = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0,1.1fr) minmax(0,1fr) 52px 44px',
+    gap: '4px 8px',
+    fontSize: 10,
+    color: T.text2,
+    padding: '5px 6px',
+    borderRadius: 6,
+    background: T.card2,
+    alignItems: 'center',
+  };
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.text, marginBottom: 6 }}>Calibration drilldowns</div>
+      <div style={{ fontSize: 10, color: T.text3, marginBottom: 10, lineHeight: 1.45 }}>
+        {n > 0
+          ? `Slices of the same graded finals window. Each row needs at least ${min} settled results (hits + misses). HIGH sub-bands use model score on published picks only.`
+          : `No slice met the minimum sample (${min} settled per cell) in this window yet.`}
+      </div>
+      {n === 0 ? null : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {Array.isArray(drill.by_prop_tier) && drill.by_prop_tier.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, marginBottom: 6 }}>By market × score tier</div>
+              <div style={tableHead}>
+                <span>MARKET</span>
+                <span>TIER</span>
+                <span style={{ textAlign: 'right' }}>HIT%</span>
+                <span style={{ textAlign: 'right' }}>n</span>
+              </div>
+              {drill.by_prop_tier.map((row, i) => (
+                <div key={`${row.prop_type}-${row.tier}-${i}`} style={rowStyle}>
+                  <span style={{ fontWeight: 700, color: T.text }}>{String(row.prop_type || '').toUpperCase()}</span>
+                  <span>{calibrationDrillTierLabel(row.tier)}</span>
+                  <span style={{ textAlign: 'right', fontWeight: 800, color: T.text }}>{formatDrillHitPct(row)}</span>
+                  <span style={{ textAlign: 'right', color: T.text3 }}>{row.settled}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {Array.isArray(drill.by_line_tier) && drill.by_line_tier.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, marginBottom: 6 }}>By line style × score tier</div>
+              <div style={tableHead}>
+                <span>LINE</span>
+                <span>TIER</span>
+                <span style={{ textAlign: 'right' }}>HIT%</span>
+                <span style={{ textAlign: 'right' }}>n</span>
+              </div>
+              {drill.by_line_tier.map((row, i) => (
+                <div key={`${row.line_bucket}-${row.tier}-${i}`} style={rowStyle}>
+                  <span style={{ fontWeight: 700, color: T.text }}>{calibrationDrillLineLabel(row.line_bucket)}</span>
+                  <span>{calibrationDrillTierLabel(row.tier)}</span>
+                  <span style={{ textAlign: 'right', fontWeight: 800, color: T.text }}>{formatDrillHitPct(row)}</span>
+                  <span style={{ textAlign: 'right', color: T.text3 }}>{row.settled}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {Array.isArray(drill.by_side_tier) && drill.by_side_tier.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, marginBottom: 6 }}>By side × score tier</div>
+              <div style={tableHead}>
+                <span>SIDE</span>
+                <span>TIER</span>
+                <span style={{ textAlign: 'right' }}>HIT%</span>
+                <span style={{ textAlign: 'right' }}>n</span>
+              </div>
+              {drill.by_side_tier.map((row, i) => (
+                <div key={`${row.recommendation}-${row.tier}-${i}`} style={rowStyle}>
+                  <span style={{ fontWeight: 700, color: T.text }}>{row.recommendation}</span>
+                  <span>{calibrationDrillTierLabel(row.tier)}</span>
+                  <span style={{ textAlign: 'right', fontWeight: 800, color: T.text }}>{formatDrillHitPct(row)}</span>
+                  <span style={{ textAlign: 'right', color: T.text3 }}>{row.settled}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {Array.isArray(drill.by_score_band) && drill.by_score_band.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, marginBottom: 6 }}>HIGH tier — score sub-bands</div>
+              <div style={{ ...tableHead, gridTemplateColumns: 'minmax(0,1.2fr) 52px 44px' }}>
+                <span>BAND</span>
+                <span style={{ textAlign: 'right' }}>HIT%</span>
+                <span style={{ textAlign: 'right' }}>n</span>
+              </div>
+              {drill.by_score_band.map((row, i) => (
+                <div
+                  key={`${row.band}-${i}`}
+                  style={{
+                    ...rowStyle,
+                    gridTemplateColumns: 'minmax(0,1.2fr) 52px 44px',
+                  }}
+                >
+                  <span style={{ fontWeight: 700, color: T.text }}>{row.band === '80+' ? '80+' : row.band}</span>
+                  <span style={{ textAlign: 'right', fontWeight: 800, color: T.text }}>{formatDrillHitPct(row)}</span>
+                  <span style={{ textAlign: 'right', color: T.text3 }}>{row.settled}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Mirrors lib/scoring/clv.js for client-only bundle (opening → line at publish). */
 function pickClv(pick) {
   if (pick?.clv) return pick.clv;
@@ -1759,6 +2097,7 @@ function TopPicksTab({ picks, loading, error }) {
               <div style={{ marginTop: 10, height: 3, borderRadius: 2, background: T.card3, overflow: 'hidden' }}>
                 <div style={{ height: '100%', width: `${modelScoreBarWidthPct(conf)}%`, background: color, borderRadius: 2 }} />
               </div>
+              <PickTrustActions pick={pick} marginLeft={0} />
             </div>
           </div>
         );
@@ -1772,6 +2111,8 @@ function TopPicksTab({ picks, loading, error }) {
 function ModelTab() {
   const [track, setTrack]   = useState(null);
   const [trackErr, setTrackErr] = useState(null);
+  const [health, setHealth] = useState(null);
+  const [healthErr, setHealthErr] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1784,6 +2125,22 @@ function ModelTab() {
         }
       } catch (e) {
         if (!cancelled) setTrackErr(e.message || 'Failed to load track record');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const h = await apiGetHealth();
+        if (!cancelled) {
+          setHealth(h);
+          setHealthErr(null);
+        }
+      } catch (e) {
+        if (!cancelled) setHealthErr(e.message || 'Health unavailable');
       }
     })();
     return () => { cancelled = true; };
@@ -1806,6 +2163,20 @@ function ModelTab() {
         <span>↯ MODEL</span>
         <span style={{ color: T.text3 }}>SIGNALS</span>
       </div>
+
+      {healthErr && (
+        <div style={{ fontSize: 10, color: T.text3, marginBottom: 10 }}>Data clock: {healthErr}</div>
+      )}
+      {health?.freshness && (
+        <div style={{ background: T.card2, border: `1px solid ${T.border}`, borderRadius: 10, padding: '10px 12px', marginBottom: 14, fontSize: 11, color: T.text2, lineHeight: 1.5 }}>
+          <div style={{ fontWeight: 800, color: T.text, marginBottom: 4 }}>Data freshness (ET slate {health.date || 'today'})</div>
+          <div>Games table last touch: <strong style={{ color: T.text }}>{fmtHealthTs(health.freshness.games_max_updated_at)}</strong></div>
+          <div>Latest odds snapshot for today’s games: <strong style={{ color: T.text }}>{fmtHealthTs(health.freshness.odds_latest_snapshot_at)}</strong></div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 6 }}>
+            From <code style={{ fontSize: 9 }}>/health</code> — see <strong>scheduler</strong> on that response for ingest cadence.
+          </div>
+        </div>
+      )}
 
       {trackErr && (
         <div style={{ background: T.redDim, border: `1px solid ${T.red}55`, borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 12, color: T.red }}>
@@ -1858,6 +2229,7 @@ function ModelTab() {
               </div>
             </div>
           )}
+          <ModelCalibrationDrilldowns drill={track.calibration_drilldown} />
         </div>
       )}
 
@@ -2096,6 +2468,7 @@ function BoardPlayerCard({ pick, rank }) {
         <div style={{ marginTop: 7, marginLeft: 34, height: 2, borderRadius: 1, background: T.card3, overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${modelScoreBarWidthPct(conf)}%`, background: color }} />
         </div>
+        <PickTrustActions pick={pick} marginLeft={34} />
       </div>
     </div>
   );

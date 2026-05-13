@@ -11,6 +11,7 @@ require('dotenv').config();
 const { supabase } = require('../lib/supabase');
 const { buildSlateFreshness, pipelineCountsForDate } = require('../lib/pipeline-health');
 const { schedulerSummaryForHealth } = require('../lib/scheduler-summary');
+const { buildHealthFreshness } = require('../lib/data-freshness');
 
 function etToday() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -32,9 +33,13 @@ async function main() {
   const today = etToday();
   const yesterday = etYesterdayFromToday(today);
 
-  const [counts, slate] = await Promise.all([
+  const [counts, slate, freshness] = await Promise.all([
     pipelineCountsForDate(supabase, today),
     buildSlateFreshness(supabase, today, yesterday),
+    buildHealthFreshness(supabase, today).catch(err => {
+      console.warn('[verify-ops] freshness:', err.message);
+      return { games_max_updated_at: null, odds_latest_snapshot_at: null };
+    }),
   ]);
 
   const payload = {
@@ -42,6 +47,7 @@ async function main() {
     yesterday,
     today_counts: counts,
     slate,
+    freshness,
     scheduler: schedulerSummaryForHealth(),
   };
   console.log(JSON.stringify(payload, null, 2));
@@ -66,7 +72,7 @@ async function main() {
   console.log('1. If you use a separate scheduler process: restart it after deploy so scoreboard + roster crons load.');
   console.log('2. Open the app slate for', today, 'and confirm status/scores match expectations after games.');
   console.log('3. Roster sanity: node scripts/audit-players.js');
-  console.log('4. HTTP health: curl -s "$BASE_URL/health" | jq .slate,.today,.scheduler');
+  console.log('4. HTTP health: curl -s "$BASE_URL/health" | jq .slate,.today,.scheduler,.freshness');
 
   if (warn.length) {
     console.log('\n--- Warnings ---');

@@ -43,8 +43,8 @@ Research and trust features that would make the app a stronger **daily desk** fo
 ### Transparency and calibration
 
 - **Calibration dashboard:** By **prop type**, **tier**, and **line bucket** (e.g. full integers vs halves): actual hit rate vs predicted—find where the model is over/under confident.
-- **“Why this number” drawer:** Expandable **component scores** (already stored on `prop_analysis_results`) so bettors see weights, not only `key_factors`.
-- **Stale data warnings:** Show **last ingest** timestamps for odds, injuries, and metrics (partially on `/health`—surface in-app).
+- **“Why this number” (partially done):** Board + Top Picks cards have **Score breakdown** (sub-scores from `prop_analysis_results`: projection edge, hit rate, form, matchup, minutes, pace, rest, injury, odds move, streak, team context, referee). **`GET /api/wnba/top-picks`** select list extended so those columns load.
+- **Stale data warnings (partially done):** **`GET /health`** includes **`freshness`** (`games_max_updated_at`, `odds_latest_snapshot_at` for today’s slate). **MODEL** tab fetches `/health` and shows an ET **Data freshness** strip. **`npm run verify:ops`** prints the same `freshness` block.
 
 ### Depth charts and roles
 
@@ -58,7 +58,7 @@ Research and trust features that would make the app a stronger **daily desk** fo
 
 ### Ops and trust
 
-- **Pick rationale export:** One-tap **copy summary** (player, book, line, rec, top 3 factors, risks) for notes or Discord—reduces friction for power users.
+- **Pick rationale export (done):** **Copy summary** on Board + Top Picks builds a plain-text blurb (player, matchup, market, book, model score/tier, projection, factors, risks) for notes / Discord.
 - **Alerting (later):** Line crosses projection threshold or injury flips status—needs jobs + notification channel.
 
 ### Out of scope unless product pivots

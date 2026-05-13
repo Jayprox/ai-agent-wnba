@@ -10,11 +10,16 @@ const cors    = require('cors');
 const { supabase } = require('./lib/supabase');
 const { buildCardPayload } = require('./lib/scoring');
 const { gradePropPick } = require('./lib/scoring/grade-prop-pick');
-const { summarizeModelTrackRecord, summarizeHighTierByPropType } = require('./lib/scoring/track-record');
+const {
+  summarizeModelTrackRecord,
+  summarizeHighTierByPropType,
+  summarizeCalibrationDrilldown,
+} = require('./lib/scoring/track-record');
 const { PICK_PUBLISH_MIN_CONFIDENCE } = require('./lib/scoring/constants');
 const { buildSlateFreshness, pipelineCountsForDate } = require('./lib/pipeline-health');
 const { schedulerSummaryForHealth } = require('./lib/scheduler-summary');
 const { loadLeagueRanksByTeamForSeasons } = require('./lib/team-league-ranks');
+const { buildHealthFreshness } = require('./lib/data-freshness');
 
 function etDateString() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -942,6 +947,8 @@ app.get('/api/wnba/top-picks', async (req, res) => {
         hit_rate_over_season, hit_rate_over_l5,
         key_factors, risk_flags, correlated_opportunity, correlated_props,
         score_referee, score_projection_edge, score_hit_rate, score_matchup,
+        score_recent_form, score_minutes_stability, score_pace, score_rest_context,
+        score_injury_impact, score_odds_movement, score_streak, score_team_context,
         market_notes,
         players(id, full_name, first_name, last_name, position, team_id)
       `)
@@ -993,13 +1000,18 @@ app.get('/api/wnba/top-picks', async (req, res) => {
 });
 
 /**
- * GET /api/wnba/model-track-record?days=30
+ * GET /api/wnba/model-track-record?days=30&breakdown=1&min_settled=3
  * Hit rate on finalized games for published props, split by model score tier.
+ * With breakdown=1: calibration_high_by_prop and calibration_drilldown (prop×tier, line×tier, side×tier, HIGH bands).
  */
 app.get('/api/wnba/model-track-record', async (req, res) => {
   try {
     const days = Math.min(90, Math.max(7, parseInt(req.query.days || '30', 10) || 30));
     const breakdown = req.query.breakdown === '1' || req.query.breakdown === 'true';
+    const minSettledRaw = parseInt(req.query.min_settled ?? '3', 10);
+    const minSettled = Number.isFinite(minSettledRaw)
+      ? Math.min(50, Math.max(1, minSettledRaw))
+      : 3;
     const endEt = etDateString();
     const startEt = etDateMinusCalendarDays(days);
     const finalStatuses = ['final', 'closed', 'complete'];
@@ -1019,10 +1031,21 @@ app.get('/api/wnba/model-track-record', async (req, res) => {
       return res.json({
         days,
         breakdown,
+        min_settled: breakdown ? minSettled : undefined,
         window: { start: startEt, end: endEt },
         games_count: 0,
         ...empty(),
-        ...(breakdown ? { calibration_high_by_prop: [] } : {}),
+        ...(breakdown
+          ? {
+              calibration_high_by_prop: [],
+              calibration_drilldown: summarizeCalibrationDrilldown(
+                [],
+                new Map(),
+                new Map(),
+                minSettled,
+              ),
+            }
+          : {}),
       });
     }
 
@@ -1059,6 +1082,7 @@ app.get('/api/wnba/model-track-record', async (req, res) => {
     const payload = {
       days,
       breakdown,
+      min_settled: breakdown ? minSettled : undefined,
       window: { start: startEt, end: endEt },
       games_count: games.length,
       ...stats,
@@ -1069,7 +1093,13 @@ app.get('/api/wnba/model-track-record', async (req, res) => {
         picks || [],
         logsByKey,
         gamesById,
-        3,
+        minSettled,
+      );
+      payload.calibration_drilldown = summarizeCalibrationDrilldown(
+        picks || [],
+        logsByKey,
+        gamesById,
+        minSettled,
       );
     }
 
@@ -1097,8 +1127,8 @@ app.get('/health', async (_req, res) => {
       props: null,
       odds: null,
     },
-    /** Scoreboard row freshness + simple data-quality flags (ops / post-deploy checks). */
-    slate: null,
+    /** Latest odds snapshot + games.updated_at for today's slate (ET). */
+    freshness: null,
     env: {
       supabaseUrlSet: !!process.env.SUPABASE_URL,
       supabaseServiceRoleSet: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -1120,11 +1150,18 @@ app.get('/health', async (_req, res) => {
   try {
     const counts = await pipelineCountsForDate(supabase, today);
     const yesterday = etDateMinusCalendarDays(1);
-    const slate = await buildSlateFreshness(supabase, today, yesterday);
+    const [slate, freshness] = await Promise.all([
+      buildSlateFreshness(supabase, today, yesterday),
+      buildHealthFreshness(supabase, today).catch(err => {
+        console.warn('[health] freshness:', err.message);
+        return { games_max_updated_at: null, odds_latest_snapshot_at: null };
+      }),
+    ]);
     return res.json({
       ...base,
       today: counts,
       slate,
+      freshness,
     });
   } catch (e) {
     console.error('[health]', e.message);
