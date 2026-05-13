@@ -4,7 +4,7 @@ Short-lived notes for follow-up work. Remove or move items to issues when picked
 
 ## 1. Lineups and rosters
 
-- **Data quality:** Keep `players.team_id` and `is_active` aligned with reality by running `node scripts/ingest-players.js` on a schedule (ESPN roster is the source of truth in this repo).
+- **Data quality:** Keep `players.team_id` and `is_active` aligned with reality via ESPN rosters (source of truth). **Scheduler:** `scripts/scheduler.js` runs **`ingestPlayers`** at **10:00** ET (with **`ingestTeams`**) and **18:00** ET. Ops summary: **`GET /health` → `scheduler`** or **`npm run verify:ops`** (see `lib/scheduler-summary.js`; keep it in sync when crons change).
 - **When lineups are “confirmed”:** There is no single league-wide timestamp. Official availability is driven by the **inactive/scratch report** near tip (often ~30 minutes before). **Starters** can change late. **ESPN / WNBA.com** rosters usually update earlier than the official scratch. Decide in-product whether to label “expected rotation” vs “confirmed inactive.”
 - **Roster scope:** Show only that franchise’s roster; product rules may still include **injured / reserved** players as long as they remain on the active list you choose to display.
 - **API safeguard (done):** `GET /api/wnba/players` narrows bloated `team_id` sets using `player_game_logs` + `games.season` when active count exceeds 22. **Gap:** Players with **zero** NBA minutes (e.g. some rookies before first game) may not appear until they log a game or `team_id` is fixed—optional follow-up: union against a live ESPN roster fetch (cached) or a small “promoted from G League” allowlist.
@@ -12,8 +12,9 @@ Short-lived notes for follow-up work. Remove or move items to issues when picked
 ## 2. Team rankings (#3 overall, #2 offense, #10 defense)
 
 - **Today:** Ingest stores **offensive/defensive/net ratings** per team (`team_opponent_stats` via `scripts/ingest-wnba-stats.js`). Confidence scoring uses those as **numeric ratings**, not ordinal **league ranks**.
+- **League ranks (done):** `lib/team-league-ranks.js` ranks teams per season from latest `team_opponent_stats` row per team (`as_of_date`): **net** and **offense** = higher rating is better (rank 1 best); **defense** = lower `def_rating` is better. **`GET /api/wnba/slate`** and **`GET /api/wnba/games`** attach **`league_ranks`** on each **`home_team`** / **`visitor_team`** (ratings + `*_rank` + `rated_team_count_*`). Slate cards show a compact **Ranks NET #/# · …** line; hover shows raw ratings.
 - **UI / cards:** The board “rank” is **sort order among picks**, not team standing in the league.
-- **To add league ranks:** After ingest (or in SQL/view), **sort teams** by `net_rating`, `off_rating`, or `def_rating` and assign **1…N**; expose on slate/card payloads. Alternatively ingest standings + ratings from a single provider if you want one consistent “#3 overall” narrative.
+- **Extensions:** League-wide **ordinal “vs position”** or **standings narrative** from a single provider — still optional (see older backlog bullets).
 
 ## 3. Matchup-aware scoring
 
@@ -69,4 +70,4 @@ Research and trust features that would make the app a stronger **daily desk** fo
 
 - **Observed bug:** Slate cards stayed in a **pre-game** shape (e.g. status still “scheduled”, no box score) after games had already finished. **Root cause (fixed in scheduler):** `ingestGames` only ran at **11:00** and **13:00** ET, so nothing refreshed scores during the **evening** game window. **Now:** `live scoreboard refresh` runs **every 15 minutes** from **11:00–23:59** and **00:00–02:59** ET via `ingestScoreboardDatesForScheduler()` (today + **yesterday** between midnight and 3am ET for late West games). **Also:** `mapEspnStatus` / score parsing hardened in `scripts/ingest-games.js`.
 - **Product (in app):** When final (or scores-on-file with lagged status), show **final score**, **moneyline winner**, **total vs closing O/U**, **spread vs closing line**, and badges **SCHEDULED → LIVE → FINAL**.
-- **Player data quality — retired / inactive still in picks:** `GET /api/wnba/top-picks` filters `players.is_active === true`. **Ops:** `node scripts/ingest-players.js` (now also **18:00 ET** daily in `scheduler.js`). **Audit:** `node scripts/audit-players.js` flags active rows with **no `team_id`**, name fragment hits (e.g. Taurasi), and active players on **upcoming** games in `prop_analysis_results`.
+- **Player data quality — retired / inactive still in picks:** `GET /api/wnba/top-picks` filters `players.is_active === true`. **Ops:** roster jobs at **10:00** and **18:00 ET** (`scheduler.js`); **`node scripts/audit-players.js`** flags bad rows. **Cron reference:** **`/health`** → **`scheduler`**.

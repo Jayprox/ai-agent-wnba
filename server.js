@@ -12,6 +12,9 @@ const { buildCardPayload } = require('./lib/scoring');
 const { gradePropPick } = require('./lib/scoring/grade-prop-pick');
 const { summarizeModelTrackRecord, summarizeHighTierByPropType } = require('./lib/scoring/track-record');
 const { PICK_PUBLISH_MIN_CONFIDENCE } = require('./lib/scoring/constants');
+const { buildSlateFreshness, pipelineCountsForDate } = require('./lib/pipeline-health');
+const { schedulerSummaryForHealth } = require('./lib/scheduler-summary');
+const { loadLeagueRanksByTeamForSeasons } = require('./lib/team-league-ranks');
 
 function etDateString() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -184,48 +187,6 @@ function fmtInjuryStatus(status) {
   const u = String(status || '').trim().toUpperCase();
   if (u === 'GTD') return 'GTD';
   return u.slice(0, 8);
-}
-
-async function pipelineCountsForDate(dateIso) {
-  if (!supabase) throw new Error('Supabase client not initialized');
-
-  const { count: gameCount, error: gErr } = await supabase
-    .from('games')
-    .select('*', { count: 'exact', head: true })
-    .eq('game_date', dateIso);
-  if (gErr) throw gErr;
-
-  const { data: gameRows, error: idErr } = await supabase
-    .from('games')
-    .select('id')
-    .eq('game_date', dateIso);
-
-  if (idErr) throw idErr;
-
-  const ids = (gameRows || []).map(row => row.id);
-  let propCount = 0;
-  if (ids.length > 0) {
-    const { count: pc, error: pErr } = await supabase
-      .from('prop_analysis_results')
-      .select('*', { count: 'exact', head: true })
-      .in('game_id', ids);
-    if (pErr) throw pErr;
-    propCount = pc ?? 0;
-  }
-
-  const dayStartZ = `${dateIso}T00:00:00.000Z`;
-  const { count: oddsCount, error: oErr } = await supabase
-    .from('odds_snapshots')
-    .select('*', { count: 'exact', head: true })
-    .gte('snapshot_at', dayStartZ);
-
-  if (oErr) throw oErr;
-
-  return {
-    games: gameCount ?? 0,
-    props: propCount,
-    odds: oddsCount ?? 0,
-  };
 }
 
 function normalizeAbbrevForRecords(abbrev) {
@@ -401,6 +362,15 @@ function gameSeasonFallback(gameSeason) {
   return Number.isFinite(sn) ? sn : new Date().getFullYear();
 }
 
+function formatTeamWithLeagueRanks(team, gameSeason, ranksBySeason) {
+  const base = formatTeam(team);
+  if (!base) return null;
+  const seasonKey = gameSeasonFallback(gameSeason);
+  const byTeam = ranksBySeason.get(seasonKey);
+  const lr = byTeam?.get(base.id) ?? null;
+  return { ...base, league_ranks: lr };
+}
+
 function recordLookupGet(lookup, season, teamId) {
   if (teamId == null || season == null || season === '') return '0-0';
   return lookup.get(`${Number(season)}:${teamId}`) || '0-0';
@@ -429,9 +399,14 @@ app.get('/api/wnba/games', async (req, res) => {
     if (error) throw error;
 
     const list = games || [];
-    const [recordsLookup, injuryByGameId] = await Promise.all([
+    const seasons = [...new Set(list.map(g => gameSeasonFallback(g.season)))];
+    const [recordsLookup, injuryByGameId, ranksBySeason] = await Promise.all([
       loadTeamRecordsLive(list),
       buildInjuryNotesByGameId(list, teamsById),
+      loadLeagueRanksByTeamForSeasons(supabase, seasons).catch(err => {
+        console.warn('[wnba/games] league ranks unavailable:', err.message);
+        return new Map();
+      }),
     ]);
 
     res.json({
@@ -449,8 +424,8 @@ app.get('/api/wnba/games', async (req, res) => {
         postseason: game.postseason,
         period: game.period,
         time: game.time,
-        home_team: formatTeam(teamsById.get(game.home_team_id)),
-        visitor_team: formatTeam(teamsById.get(game.visitor_team_id)),
+        home_team: formatTeamWithLeagueRanks(teamsById.get(game.home_team_id), game.season, ranksBySeason),
+        visitor_team: formatTeamWithLeagueRanks(teamsById.get(game.visitor_team_id), game.season, ranksBySeason),
         home_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.home_team_id),
         visitor_record: recordLookupGet(recordsLookup, gameSeasonFallback(game.season), game.visitor_team_id),
         injury_notes: injuryByGameId.get(game.id) || [],
@@ -482,7 +457,8 @@ app.get('/api/wnba/slate', async (req, res) => {
     if (!games?.length) return res.json({ data: [] });
 
     const gameIds = games.map(game => game.id);
-    const [{ data: oddsRows, error: oddsError }, recordsLookup, injuryByGameId] = await Promise.all([
+    const seasons = [...new Set(games.map(g => gameSeasonFallback(g.season)))];
+    const [{ data: oddsRows, error: oddsError }, recordsLookup, injuryByGameId, ranksBySeason] = await Promise.all([
       supabase
         .from('odds_snapshots')
         .select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at')
@@ -492,6 +468,10 @@ app.get('/api/wnba/slate', async (req, res) => {
         .order('snapshot_at', { ascending: false }),
       loadTeamRecordsLive(games),
       buildInjuryNotesByGameId(games, teamsById),
+      loadLeagueRanksByTeamForSeasons(supabase, seasons).catch(err => {
+        console.warn('[wnba/slate] league ranks unavailable:', err.message);
+        return new Map();
+      }),
     ]);
 
     if (oddsError) throw oddsError;
@@ -534,8 +514,8 @@ app.get('/api/wnba/slate', async (req, res) => {
           postseason: game.postseason,
           period: game.period,
           time: game.time,
-          home_team: formatTeam(teamsById.get(game.home_team_id)),
-          visitor_team: formatTeam(teamsById.get(game.visitor_team_id)),
+          home_team: formatTeamWithLeagueRanks(teamsById.get(game.home_team_id), game.season, ranksBySeason),
+          visitor_team: formatTeamWithLeagueRanks(teamsById.get(game.visitor_team_id), game.season, ranksBySeason),
           spread: odds.spread ? toNullableNumber(odds.spread.line) : null,
           total: odds.total ? toNullableNumber(odds.total.line) : null,
           // ingest-odds stores h2h over_odds as home and under_odds as away.
@@ -1101,7 +1081,8 @@ app.get('/api/wnba/model-track-record', async (req, res) => {
 
 /**
  * GET /health
- * Reports pipeline freshness (today's game / prop / odds counts) plus env flags.
+ * Reports pipeline freshness (today's game / prop / odds counts), slate row freshness
+ * (`games.updated_at`, status histogram, simple anomalies), plus env flags.
  */
 app.get('/health', async (_req, res) => {
   const today = etDateString();
@@ -1109,11 +1090,15 @@ app.get('/health', async (_req, res) => {
   const base = {
     status: 'ok',
     date: today,
+    /** Expected ingest cadence (see scripts/scheduler.js — keep lib/scheduler-summary.js in sync). */
+    scheduler: schedulerSummaryForHealth(),
     today: {
       games: null,
       props: null,
       odds: null,
     },
+    /** Scoreboard row freshness + simple data-quality flags (ops / post-deploy checks). */
+    slate: null,
     env: {
       supabaseUrlSet: !!process.env.SUPABASE_URL,
       supabaseServiceRoleSet: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -1128,14 +1113,18 @@ app.get('/health', async (_req, res) => {
       status: 'degraded',
       error: 'Supabase client not initialized',
       today: { games: null, props: null, odds: null },
+      slate: null,
     });
   }
 
   try {
-    const counts = await pipelineCountsForDate(today);
+    const counts = await pipelineCountsForDate(supabase, today);
+    const yesterday = etDateMinusCalendarDays(1);
+    const slate = await buildSlateFreshness(supabase, today, yesterday);
     return res.json({
       ...base,
       today: counts,
+      slate,
     });
   } catch (e) {
     console.error('[health]', e.message);
@@ -1144,6 +1133,7 @@ app.get('/health', async (_req, res) => {
       status: 'degraded',
       error: e.message,
       today: { games: null, props: null, odds: null },
+      slate: null,
     });
   }
 });

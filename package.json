@@ -8,6 +8,8 @@
     "preview": "vite preview",
     "server": "node server.js",
     "start": "node server.js",
+    "verify:ops": "node scripts/verify-ops.js",
+    "test:team-ranks": "node --test tests/team-league-ranks.test.js",
     "test:ingest-games": "node --test tests/ingest-games-status.test.js",
     "test:scoring": "node --test tests/scoring.test.js",
     "test:track": "node --test tests/track-record.test.js",

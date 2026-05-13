@@ -530,6 +530,39 @@ function fmtGameSpread(abbr, spread) {
   return `${abbr} ${n > 0 ? '+' : ''}${fmtOne(n)}`;
 }
 
+/** Ordinal league ranks (`league_ranks` from team_opponent_stats). Away/home. */
+function fmtSlateLeagueRanksCompact(game) {
+  const va = game?.visitor_team?.league_ranks;
+  const ha = game?.home_team?.league_ranks;
+  if (!va && !ha) return null;
+  const n = x => (x == null ? '—' : `#${x}`);
+  const netPair = `${n(va?.net_rank)}/${n(ha?.net_rank)}`;
+  const offPair = `${n(va?.offense_rank)}/${n(ha?.offense_rank)}`;
+  const defPair = `${n(va?.defense_rank)}/${n(ha?.defense_rank)}`;
+  return `Ranks  NET ${netPair} · OFF ${offPair} · DEF ${defPair}  (away/home)`;
+}
+
+function slateLeagueRanksTooltip(game) {
+  const va = game?.visitor_team?.league_ranks;
+  const ha = game?.home_team?.league_ranks;
+  if (!va && !ha) return null;
+  const bits = [];
+  const fmtL = (abbr, lr) => {
+    if (!lr) return null;
+    const pr = [];
+    if (lr.net_rating != null) pr.push(`net ${fmtOne(lr.net_rating)}`);
+    if (lr.off_rating != null) pr.push(`off ${fmtOne(lr.off_rating)}`);
+    if (lr.def_rating != null) pr.push(`def ${fmtOne(lr.def_rating)}`);
+    return pr.length ? `${abbr}: ${pr.join(', ')}` : null;
+  };
+  const a = fmtL(game?.visitor_team?.abbreviation || 'AWAY', va);
+  const h = fmtL(game?.home_team?.abbreviation || 'HOME', ha);
+  if (a) bits.push(a);
+  if (h) bits.push(h);
+  const c = va?.rated_team_count_net ?? ha?.rated_team_count_net;
+  return bits.length ? `${bits.join(' · ')}${c != null ? ` · ${c} teams w/ net` : ''}` : null;
+}
+
 function fmtDate(value) {
   if (!value) return 'TBA';
   return new Date(value + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
@@ -802,9 +835,25 @@ function SlateCard({ game, onClick, topPick }) {
             {aw} <span style={{ color: T.text3, fontWeight: 400 }}>@</span> {hw}
           </div>
           <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>
-            {game.visitor_record && game.home_record
-              ? `${game.visitor_record}  ·  ${game.home_record}`
-              : (subline || ' ')}
+            {game.visitor_record && game.home_record ? (
+              <div>
+                <div>{game.visitor_record}  ·  {game.home_record}</div>
+                {fmtSlateLeagueRanksCompact(game) && (
+                  <div style={{ marginTop: 3, fontSize: 9, color: T.text2 }} title={slateLeagueRanksTooltip(game) || undefined}>
+                    {fmtSlateLeagueRanksCompact(game)}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                {subline || ' '}
+                {fmtSlateLeagueRanksCompact(game) && (
+                  <div style={{ marginTop: 3, fontSize: 9, color: T.text2 }} title={slateLeagueRanksTooltip(game) || undefined}>
+                    {fmtSlateLeagueRanksCompact(game)}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <StatusBadge game={game} />
