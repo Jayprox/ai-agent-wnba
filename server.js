@@ -736,6 +736,7 @@ app.get('/api/wnba/players', async (req, res) => {
           mpg:          m.avg_min,
           spg:          m.avg_stl,
           bpg:          m.avg_blk,
+          fg3pg:        m.avg_fg3m,
           tov:          m.avg_tov,
           usage_rate:   m.avg_usage_rate,
           games_played: m.games_played,
@@ -787,9 +788,10 @@ app.get('/api/wnba/players', async (req, res) => {
  */
 app.get('/api/wnba/stats', async (req, res) => {
   try {
-    const ids     = [].concat(req.query.player_ids || req.query['player_ids[]'] || []).map(Number).filter(Number.isFinite);
-    const seasons = [].concat(req.query.seasons    || req.query['seasons[]']    || [new Date().getFullYear()]).map(Number).filter(Number.isFinite);
-    if (!ids.length) return res.status(400).json({ error: 'player_ids[] required' });
+    // Accept comma-separated ?player_ids=1,2,3 or legacy repeated ?player_ids[]=1&player_ids[]=2
+    const raw = req.query.player_ids ?? req.query['player_ids[]'];
+    const ids = String(raw || '').split(',').map(Number).filter(Number.isFinite);
+    if (!ids.length) return res.status(400).json({ error: 'player_ids required' });
 
     // Fetch the most recent game logs for these players across any season.
     // We sort by game_date descending and let the frontend take last 5 per player.

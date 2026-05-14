@@ -1118,7 +1118,7 @@ function mergeSeasonAverages(players, averages) {
       (pid != null && Number.isFinite(Number(pid)) ? byPlayer.get(Number(pid)) : null)
       ?? byPlayer.get(String(pid));
     if (!avg) return player;
-    return { ...player, ppg: avg.pts, rpg: avg.reb, apg: avg.ast, mpg: avg.min, fga: avg.fga ?? player.fga, fta: avg.fta ?? player.fta, tov: avg.turnover ?? player.tov };
+    return { ...player, ppg: avg.pts, rpg: avg.reb, apg: avg.ast, mpg: avg.min, spg: avg.stl, bpg: avg.blk, fg3pg: avg.fg3m, fga: avg.fga ?? player.fga, fta: avg.fta ?? player.fta, tov: avg.turnover ?? player.tov };
   });
 }
 
@@ -1230,10 +1230,13 @@ async function apiGetMatchups(gameId) {
 /** Fetch game logs for ALL players in one request; returns { [playerId]: log[] } */
 async function apiGetAllGameLogs(playerIds) {
   if (IS_SANDBOX || !playerIds.length) return {};
-  const params = playerIds.map(id => `player_ids[]=${id}`).join('&') + `&seasons[]=${SEASON}`;
+  const params = `player_ids=${playerIds.join(',')}&season=${SEASON}`;
+  console.log('[gameLogs] fetching for', playerIds.length, 'players');
   const r = await fetch(`${API_BASE}/api/wnba/stats?${params}`);
-  if (!r.ok) return {};
+  console.log('[gameLogs] response status:', r.status);
+  if (!r.ok) { console.warn('[gameLogs] request failed', r.status); return {}; }
   const rows = (await r.json()).data || [];
+  console.log('[gameLogs] rows returned:', rows.length, '| sample player_ids:', [...new Set(rows.map(r => r.player_id))].slice(0, 5));
   // Group by player_id, keep last 5 logs per player
   const map = {};
   for (const row of rows) {
@@ -1243,6 +1246,7 @@ async function apiGetAllGameLogs(playerIds) {
     if (!map[key]) map[key] = [];
     if (map[key].length < 5) map[key].push(row);
   }
+  console.log('[gameLogs] map keys:', Object.keys(map).slice(0, 5), '| total players with logs:', Object.keys(map).length);
   return map;
 }
 
@@ -1363,45 +1367,48 @@ function SlateCard({ game, onClick, topPick }) {
         background:   T.card,
         border:       `1px solid ${T.border}`,
         borderRadius: 12,
-        padding:      '14px 16px 12px',
+        padding:      '14px 16px 10px',
         marginBottom: 10,
         cursor:       'pointer',
         transition:   'border-color 0.15s, background 0.15s',
       }}
     >
-      {/* Row 1: matchup + status */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-        <div>
-          <div style={{ fontSize: 17, fontWeight: 800, color: T.text, letterSpacing: -0.3 }}>
-            {aw} <span style={{ color: T.text3, fontWeight: 400 }}>@</span> {hw}
-          </div>
-          <div style={{ fontSize: 10, color: T.text3, marginTop: 4 }}>
-            {game.visitor_record && game.home_record ? (
+      {/* Header: two-row scoreboard */}
+      {(() => {
+        const bx = slateBoxScores(game);
+        const showScore = slateShowHeaderScores(game) && bx;
+        const homeWon = bx && bx.hs > bx.vs;
+        const awayWon = bx && bx.vs > bx.hs;
+        const live = slateIsLiveStatus(game);
+        return (
+          <div style={{ position: 'relative', paddingRight: 58 }}>
+            <div style={{ position: 'absolute', top: 0, right: 0 }}>
+              <StatusBadge game={game} />
+            </div>
+            {/* Away row */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
               <div>
-                <div>{game.visitor_record}  ·  {game.home_record}</div>
-                {fmtSlateLeagueRanksCompact(game) && (
-                  <div style={{ marginTop: 3, fontSize: 9, color: T.text2 }} title={slateLeagueRanksTooltip(game) || undefined}>
-                    {fmtSlateLeagueRanksCompact(game)}
-                  </div>
-                )}
+                <span style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{aw}</span>
+                {game.visitor_record && <span style={{ fontSize: 10, color: T.text3, marginLeft: 7 }}>{game.visitor_record}</span>}
               </div>
-            ) : (
+              {showScore && <span style={{ fontSize: 22, fontWeight: 900, letterSpacing: -0.5, color: awayWon ? T.text : T.text2 }}>{Math.round(bx.vs)}</span>}
+            </div>
+            {/* Home row */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 3 }}>
               <div>
-                {subline || ' '}
-                {fmtSlateLeagueRanksCompact(game) && (
-                  <div style={{ marginTop: 3, fontSize: 9, color: T.text2 }} title={slateLeagueRanksTooltip(game) || undefined}>
-                    {fmtSlateLeagueRanksCompact(game)}
-                  </div>
-                )}
+                <span style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{hw}</span>
+                {game.home_record && <span style={{ fontSize: 10, color: T.text3, marginLeft: 7 }}>{game.home_record}</span>}
               </div>
-            )}
+              {showScore && <span style={{ fontSize: 22, fontWeight: 900, letterSpacing: -0.5, color: homeWon ? T.text : T.text2 }}>{Math.round(bx.hs)}</span>}
+            </div>
+            {/* Time · venue */}
+            <div style={{ fontSize: 10, color: T.text3, marginTop: 5 }}>
+              {subline}
+              {live && <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 800, color: T.green }}>● LIVE</span>}
+            </div>
           </div>
-          <SlateHeaderScores game={game} />
-        </div>
-        <StatusBadge game={game} />
-      </div>
-
-      <SlateLifecycleTrail game={game} />
+        );
+      })()}
 
       <SlateGameScriptTags game={game} />
 
@@ -1420,45 +1427,29 @@ function SlateCard({ game, onClick, topPick }) {
         ))}
       </div>
 
-      {(() => {
-        const cap = slateLineMovementCaption(game);
-        return cap ? (
-          <div style={{ fontSize: 9, color: T.text3, marginTop: 6, lineHeight: 1.35 }}>
-            <span style={{ fontWeight: 800, color: T.text2 }}>Line move · </span>
-            {cap}
-          </div>
-        ) : null;
-      })()}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+        {(() => {
+          const cap = slateLineMovementCaption(game);
+          return cap ? (
+            <div style={{ fontSize: 9, color: T.text3, lineHeight: 1.35 }}>
+              <span style={{ fontWeight: 800, color: T.text2 }}>Line move · </span>
+              {cap}
+            </div>
+          ) : <span />;
+        })()}
+        {defaultBookLabel && (
+          <span style={{ background: T.accentDim, border: `1px solid ${T.accent}`, padding: '2px 6px', borderRadius: 4, fontSize: 8, letterSpacing: 0.5, fontWeight: 800, color: T.accent, flexShrink: 0 }}>
+            {defaultBookLabel}
+          </span>
+        )}
+      </div>
 
       {betSummary && (
-        <div style={{
-          marginTop: 10,
-          padding: '8px 10px',
-          borderRadius: 8,
-          background: T.card2,
-          border: `1px solid ${T.border}`,
-        }}>
-          <div style={{ fontSize: 10, color: T.text2, lineHeight: 1.45 }}>
-            {!slateShowHeaderScores(game) && (
-              <div style={{ fontSize: 12, fontWeight: 800, color: T.text, letterSpacing: 0.2, marginBottom: 4 }}>{betSummary.scoreLine}</div>
-            )}
-            {slateShowHeaderScores(game) && (
-              <div style={{ fontSize: 10, fontWeight: 800, color: T.text3, letterSpacing: 0.3, marginBottom: 4 }}>Vs closing line</div>
-            )}
-            <div><span style={{ color: T.text3 }}>Moneyline · </span>{betSummary.mlText}</div>
-            {betSummary.totalText && (
-              <div><span style={{ color: T.text3 }}>Total · </span>{betSummary.totalText}</div>
-            )}
-            {betSummary.spreadText && (
-              <div><span style={{ color: T.text3 }}>Spread · </span>{betSummary.spreadText}</div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {isOddsLocked(game) && (
-        <div style={{ fontSize: 9, color: T.text3, marginTop: 4, letterSpacing: 0.5 }}>
-          {slateShowBettingResults(game) ? 'Closing line (frozen)' : '🔒 Lines frozen'}
+        <div style={{ fontSize: 9, color: T.text2, lineHeight: 1.6, marginTop: 4 }}>
+          <span style={{ color: T.text3, fontWeight: 700 }}>Result · </span>
+          {betSummary.mlText}
+          {betSummary.totalText && <span> · {betSummary.totalText}</span>}
+          {betSummary.spreadText && <span> · {betSummary.spreadText}</span>}
         </div>
       )}
 
@@ -1468,72 +1459,6 @@ function SlateCard({ game, onClick, topPick }) {
         </div>
       )}
 
-      {/* Bottom info strip: venue · date · sportsbooks */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        marginTop: 8, paddingTop: 7, borderTop: `1px solid ${T.border}`,
-        fontSize: 9, color: T.text3,
-      }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 6 }}>
-          {[gameTime, venue || 'TBA', fmtDate(game.game_date || game.date)].filter(Boolean).join(' · ')}
-        </span>
-        {bookChips.length > 0 && (
-          <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
-            {bookChips.map(book => {
-              const active = book.is_default || book.sportsbook_short === defaultBookLabel;
-              const label = book.sportsbook_short || sportsbookShort(book.sportsbook);
-              return (
-                <span
-                  key={`${book.sportsbook}-${label}`}
-                  title={book.sportsbook}
-                  style={{
-                    background: active ? T.accentDim : T.card3,
-                    border: `1px solid ${active ? T.accent : T.border}`,
-                    padding: '2px 6px',
-                    borderRadius: 4,
-                    fontSize: 8,
-                    letterSpacing: 0.5,
-                    fontWeight: 800,
-                    color: active ? T.accent : T.text2,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {label}
-                </span>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Top pick footer */}
-      {topPick && (
-        <div style={{ marginTop: 8, borderTop: `1px solid ${T.border}`, paddingTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ fontSize: 10, color: T.text2, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            <span style={{ color: T.accent, fontWeight: 700, marginRight: 4 }}>TOP PICK</span>
-            {playerName(topPick.players || {})}
-            {' · '}
-            {String(topPick.prop_type || '').toUpperCase()}
-            {' '}
-            <span style={{ fontWeight: 700, color: recColor }}>
-              {topPick.recommendation} {fmtOne(topPick.line)}
-              {topPick.line_sportsbook_short && (
-                <span style={{ fontWeight: 800, color: topPick.line_sportsbook_short === 'CZR' ? T.green : T.text3, marginLeft: 4 }}>
-                  ({topPick.line_sportsbook_short})
-                </span>
-              )}
-            </span>
-          </div>
-              <div style={{ fontSize: 12, fontWeight: 800, color: scoreColor(topPick.confidence_score), marginLeft: 10, flexShrink: 0, textAlign: 'right' }}>
-                <div>{Math.round(Number(topPick.confidence_score) || 0)}</div>
-                <div style={{ fontSize: 7, color: T.text3, fontWeight: 700, letterSpacing: 0.5 }}>SCORE</div>
-              </div>
-        </div>
-      )}
-
-      <div style={{ textAlign: 'right', marginTop: topPick ? 4 : 8 }}>
-        <span style={{ fontSize: 9, color: T.text3 }}>→ Game overview</span>
-      </div>
     </div>
   );
 }
@@ -1565,6 +1490,7 @@ function OverviewTab({ game, odds }) {
             <div style={{ fontSize: 30, fontWeight: 950, color: T.text, lineHeight: 1 }}>{aw?.abbreviation || '—'}</div>
             <div style={{ fontSize: 11, color: T.text2, marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{aw?.name || '—'}</div>
             <div style={{ fontSize: 10, color: T.text3, marginTop: 5 }}>{game.visitor_record || 'Record unavailable'}</div>
+            {(() => { const bx = slateBoxScores(game); const show = slateShowHeaderScores(game) && bx; const won = bx && bx.vs > bx.hs; return show ? <div style={{ fontSize: 24, fontWeight: 900, color: won ? T.text : T.text2, marginTop: 6, lineHeight: 1 }}>{Math.round(bx.vs)}</div> : null; })()}
             <div style={{ marginTop: 7, display: 'flex', justifyContent: 'flex-end' }}>
               <FormDots form={game.visitor_form} />
             </div>
@@ -1577,16 +1503,13 @@ function OverviewTab({ game, odds }) {
             <div style={{ fontSize: 30, fontWeight: 950, color: T.text, lineHeight: 1 }}>{hw?.abbreviation || '—'}</div>
             <div style={{ fontSize: 11, color: T.text2, marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hw?.name || '—'}</div>
             <div style={{ fontSize: 10, color: T.text3, marginTop: 5 }}>{game.home_record || 'Record unavailable'}</div>
+            {(() => { const bx = slateBoxScores(game); const show = slateShowHeaderScores(game) && bx; const won = bx && bx.hs > bx.vs; return show ? <div style={{ fontSize: 24, fontWeight: 900, color: won ? T.text : T.text2, marginTop: 6, lineHeight: 1 }}>{Math.round(bx.hs)}</div> : null; })()}
             <div style={{ marginTop: 7, display: 'flex', justifyContent: 'flex-start' }}>
               <FormDots form={game.home_form} />
             </div>
           </div>
         </div>
 
-        <div style={{ marginTop: 14 }}>
-          <SlateLifecycleTrail game={game} />
-          <SlateHeaderScores game={game} />
-        </div>
 
         <SlateGameScriptTags game={game} centered />
 
@@ -1603,6 +1526,7 @@ function OverviewTab({ game, odds }) {
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${T.border}` }}>
           <span style={{ fontSize: 10, color: T.text2, background: T.card3, border: `1px solid ${T.border}`, borderRadius: 999, padding: '4px 9px' }}>{gameDate}</span>
           <span style={{ fontSize: 10, color: T.text2, background: T.card3, border: `1px solid ${T.border}`, borderRadius: 999, padding: '4px 9px' }}>{venue}</span>
+
         </div>
       </div>
 
@@ -1646,6 +1570,49 @@ function OverviewTab({ game, odds }) {
           Odds unavailable
         </div>
       )}
+
+      {(game?.visitor_team?.league_ranks || game?.home_team?.league_ranks) && (() => {
+        const va = game.visitor_team?.league_ranks;
+        const ha = game.home_team?.league_ranks;
+        const abb = (t) => t?.abbreviation || '?';
+        const n = x => (x == null ? '—' : `#${x}`);
+        const r = x => (x == null ? '—' : fmtOne(x));
+        const rows = [
+          { label: 'NET RTG',   away: n(va?.net_rank),     home: n(ha?.net_rank),     awayVal: r(va?.net_rating),  homeVal: r(ha?.net_rating) },
+          { label: 'OFF RTG',   away: n(va?.offense_rank), home: n(ha?.offense_rank), awayVal: r(va?.off_rating),  homeVal: r(ha?.off_rating) },
+          { label: 'DEF RTG',   away: n(va?.defense_rank), home: n(ha?.defense_rank), awayVal: r(va?.def_rating),  homeVal: r(ha?.def_rating) },
+        ];
+        return (
+          <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: 14, background: 'rgba(20,29,56,0.72)', marginTop: 14 }}>
+            <div style={{ fontSize: 10, color: T.accent, letterSpacing: 1.2, fontWeight: 800, marginBottom: 10 }}>LEAGUE RANKINGS</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '0 8px', alignItems: 'center' }}>
+              <div style={{ fontSize: 10, color: T.text3, textAlign: 'right', fontWeight: 700, paddingBottom: 6 }}>{abb(game.visitor_team)} (Away)</div>
+              <div style={{ fontSize: 10, color: T.text3, textAlign: 'center', paddingBottom: 6 }}></div>
+              <div style={{ fontSize: 10, color: T.text3, textAlign: 'left', fontWeight: 700, paddingBottom: 6 }}>{abb(game.home_team)} (Home)</div>
+              {rows.map(({ label, away, home, awayVal, homeVal }) => (
+                <>
+                  <div key={`a-${label}`} style={{ textAlign: 'right', paddingBottom: 8 }}>
+                    <span style={{ fontSize: 16, fontWeight: 900, color: T.text }}>{away}</span>
+                    {awayVal !== '—' && <span style={{ fontSize: 10, color: T.text3, marginLeft: 4 }}>({awayVal})</span>}
+                  </div>
+                  <div key={`l-${label}`} style={{ textAlign: 'center', paddingBottom: 8 }}>
+                    <span style={{ fontSize: 9, color: T.text3, letterSpacing: 0.8 }}>{label}</span>
+                  </div>
+                  <div key={`h-${label}`} style={{ textAlign: 'left', paddingBottom: 8 }}>
+                    <span style={{ fontSize: 16, fontWeight: 900, color: T.text }}>{home}</span>
+                    {homeVal !== '—' && <span style={{ fontSize: 10, color: T.text3, marginLeft: 4 }}>({homeVal})</span>}
+                  </div>
+                </>
+              ))}
+            </div>
+            {(va?.rated_team_count_net ?? ha?.rated_team_count_net) != null && (
+              <div style={{ fontSize: 9, color: T.text3, marginTop: 4, textAlign: 'center' }}>
+                among {va?.rated_team_count_net ?? ha?.rated_team_count_net} rated teams
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1655,17 +1622,23 @@ function PlayerDrawer({ player, logs }) {
   return (
     <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, padding: 10, margin: '4px 0 8px' }}>
       <div style={{ fontSize: 10, color: T.text3, letterSpacing: 1, marginBottom: 6 }}>LAST 5 GAMES</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr', gap: '4px 8px', fontSize: 11 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr 1fr 1fr 1fr', gap: '4px 8px', fontSize: 11 }}>
         <span style={{ color: T.text3 }}>DATE</span>
         <span style={{ color: T.text3, textAlign: 'right' }}>PTS</span>
         <span style={{ color: T.text3, textAlign: 'right' }}>REB</span>
         <span style={{ color: T.text3, textAlign: 'right' }}>AST</span>
+        <span style={{ color: T.text3, textAlign: 'right' }}>3PM</span>
+        <span style={{ color: T.text3, textAlign: 'right' }}>STL</span>
+        <span style={{ color: T.text3, textAlign: 'right' }}>BLK</span>
         {logs.map((g, i) => (
           <>
             <span key={`d${i}`} style={{ color: T.text2 }}>{g.game?.game_date ?? g.date ?? '—'}</span>
             <span key={`p${i}`} style={{ color: T.text,  textAlign: 'right', fontWeight: 700 }}>{g.pts ?? '—'}</span>
             <span key={`r${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.reb ?? '—'}</span>
             <span key={`a${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.ast ?? '—'}</span>
+            <span key={`t${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.fg3m ?? '—'}</span>
+            <span key={`s${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.stl ?? '—'}</span>
+            <span key={`b${i}`} style={{ color: T.text,  textAlign: 'right' }}>{g.blk ?? '—'}</span>
           </>
         ))}
       </div>
@@ -1723,7 +1696,7 @@ function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
                 setExpandedId(expandedId === pid ? null : pid);
               }}
               style={{
-                display: 'grid', gridTemplateColumns: '18px 1fr 40px 40px 40px 40px',
+                display: 'grid', gridTemplateColumns: '18px 1fr 40px 40px 40px 40px 40px 40px 40px',
                 gap: 4, alignItems: 'center', padding: '10px 16px',
                 borderBottom: `1px solid ${T.border}`, cursor: 'pointer',
                 background: expandedId === String(p.id) ? T.card2 : 'transparent',
@@ -1731,7 +1704,7 @@ function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
             >
               <span style={{ fontSize: 10, color: T.text3 }}>{playerPos(p)}</span>
               <span style={{ fontSize: 13, color: T.text,  fontWeight: 600 }}>{playerName(p)}</span>
-              {[{v:fmtOne(p.ppg),l:'PPG'},{v:fmtOne(p.rpg),l:'RPG'},{v:fmtOne(p.apg),l:'APG'},{v:fmtOne(p.mpg),l:'MPG'}].map(({ v, l }) => (
+              {[{v:fmtOne(p.ppg),l:'PPG'},{v:fmtOne(p.rpg),l:'RPG'},{v:fmtOne(p.apg),l:'APG'},{v:fmtOne(p.fg3pg),l:'3PG'},{v:fmtOne(p.spg),l:'SPG'},{v:fmtOne(p.bpg),l:'BPG'},{v:fmtOne(p.mpg),l:'MPG'}].map(({ v, l }) => (
                 <div key={l} style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: 12, color: T.text, fontWeight: 700 }}>{v}</div>
                   <div style={{ fontSize: 8,  color: T.text3 }}>{l}</div>
@@ -1752,8 +1725,8 @@ function LineupTab({ game, allPlayers, gameLogs, expandedId, setExpandedId }) {
   return (
     <div>
       <TeamToggle game={game} side={side} setSide={setSide} />
-      <div style={{ display: 'grid', gridTemplateColumns: '18px 1fr 40px 40px 40px 40px', gap: 4, padding: '6px 16px', borderBottom: `1px solid ${T.border}` }}>
-        {['','PLAYER','PPG','RPG','APG','MPG'].map(h => (
+      <div style={{ display: 'grid', gridTemplateColumns: '18px 1fr 40px 40px 40px 40px 40px 40px 40px', gap: 4, padding: '6px 16px', borderBottom: `1px solid ${T.border}` }}>
+        {['','PLAYER','PPG','RPG','APG','3PG','SPG','BPG','MPG'].map(h => (
           <div key={h} style={{ fontSize: 9, color: T.text3, textAlign: (h===''||h==='PLAYER') ? 'left' : 'right', letterSpacing: 0.5 }}>{h}</div>
         ))}
       </div>
@@ -1796,9 +1769,6 @@ function MatchupTab({ game, allPlayers, matchups, gameLogs, intel }) {
                     <span style={{ fontSize: 10, color: T.text3 }}>USG: <span style={{ color: T.text2, fontWeight: 700 }}>{calcUsageRate(p.fga, p.fta, p.tov, p.mpg).toFixed(2)}</span></span>
                     <span style={{ fontSize: 10, color: T.text3 }}>MPG: <span style={{ color: Number(p.mpg||0) >= 20 ? T.text2 : T.red, fontWeight: 700 }}>{fmtOne(p.mpg)}</span></span>
                   </div>
-                </div>
-                <div style={{ minWidth: 60, textAlign: 'center', marginLeft: 12 }}>
-                  <ScoreGauge score={score} />
                 </div>
               </div>
             </div>
@@ -1848,7 +1818,6 @@ function PropsTab({ game, allPlayers, matchups, gameLogs, props }) {
                 <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{playerName(p)}</div>
                 <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>{teamAbbr} · {playerPos(p)} · {fmtOne(p.mpg)} mpg</div>
               </div>
-              <ScoreGauge score={score} />
             </div>
 
             {/* Prop lines */}
@@ -3279,18 +3248,12 @@ export default function App() {
       return s === 'final' || s.includes('final');
     });
 
-    if (data.length && !allFinal) return { date, data };
-    if (date < today()) return { date, data };
+    if (data.length) return { date, data };
 
     for (let offset = 1; offset <= SLATE_LOOKAHEAD_DAYS; offset += 1) {
       const nextDate = shiftDateValue(date, offset);
       const nextData = await apiGetSlate(nextDate);
-      if (!nextData.length) continue;
-      const nextAllFinal = nextData.every(g => {
-        const s = String(g.status || '').toLowerCase();
-        return s === 'final' || s.includes('final');
-      });
-      if (!nextAllFinal) return { date: nextDate, data: nextData };
+      if (nextData.length) return { date: nextDate, data: nextData };
     }
 
     return { date, data };
@@ -3436,23 +3399,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Model score legend (not win probability) */}
-          {!loadingSlate && games.length > 0 && (
-            <div className="ps-legend" style={{ marginTop:16, padding:'10px 14px', background:T.card, borderRadius:10, border:`1px solid ${T.border}` }}>
-              <div style={{ fontSize:9, color:T.text3, letterSpacing:1, marginBottom:8 }}>MODEL SCORE (0–80, NOT WIN %)</div>
-              <div style={{ display:'flex', gap:16, flexWrap:'wrap' }}>
-                {[{ color:T.green, label:'70+', desc:'Strong setup' }, { color:T.yellow, label:'55–69', desc:'Moderate' }, { color:T.red, label:'Under 55', desc:'Speculative' }].map(({ color, label, desc }) => (
-                  <div key={desc} style={{ display:'flex', alignItems:'center', gap:6 }}>
-                    <div style={{ width:8, height:8, borderRadius:2, background:color, flexShrink:0 }} />
-                    <div>
-                      <div style={{ fontSize:9, color:T.text2 }}>{label}</div>
-                      <div style={{ fontSize:8, color:T.text3 }}>{desc}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 

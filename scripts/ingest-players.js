@@ -1,7 +1,6 @@
 require('dotenv').config();
 
 const { supabase } = require('../lib/supabase');
-const { bdlFetch } = require('../lib/bdl-client');
 
 function rosterUrl(espnTeamId) {
   return `https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/teams/${espnTeamId}/roster`;

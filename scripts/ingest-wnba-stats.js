@@ -98,7 +98,7 @@ function resultSetObject(json, endpoint) {
 async function getTeamsByLookup() {
   const { data, error } = await supabase
     .from('teams')
-    .select('id, bdl_id, name, abbreviation')
+    .select('id, name, abbreviation')
     .eq('league', 'WNBA');
 
   if (error) throw error;
@@ -111,7 +111,6 @@ async function getTeamsByLookup() {
     byName.set(normalizeName(team.name), team);
     byAbbreviation.set(String(team.abbreviation || '').toUpperCase(), team);
     byExternalId.set(Number(team.id), team);
-    byExternalId.set(Number(team.bdl_id), team);
   }
 
   return { byName, byAbbreviation, byExternalId };

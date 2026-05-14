@@ -164,10 +164,12 @@ async function buildLookups() {
   if (pErr) throw pErr;
   if (tErr) throw tErr;
 
-  // Player lookup: normalized full name → internal id
+  // Player lookup: normalized full name → internal id (lowest id wins on duplicates)
   const playersByName = new Map();
   for (const p of players || []) {
-    playersByName.set(normalize(p.full_name), p.id);
+    const key = normalize(p.full_name);
+    const existing = playersByName.get(key);
+    if (!existing || p.id < existing) playersByName.set(key, p.id);
   }
 
   // Team lookups: abbreviation and normalized name → internal id

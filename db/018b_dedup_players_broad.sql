@@ -85,6 +85,11 @@ SET    player_id = bd.keep_id
 FROM   _broad_dupes bd
 WHERE  injury_reports.player_id = bd.drop_id;
 
+UPDATE player_research_metrics
+SET    player_id = bd.keep_id
+FROM   _broad_dupes bd
+WHERE  player_research_metrics.player_id = bd.drop_id;
+
 -- ----------------------------------------------------------
 -- Delete duplicate rows (FKs now cleared)
 -- ----------------------------------------------------------

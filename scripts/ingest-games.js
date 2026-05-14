@@ -1,7 +1,6 @@
 require('dotenv').config();
 
 const { supabase } = require('../lib/supabase');
-const { bdlFetch } = require('../lib/bdl-client');
 
 // Verify after running: games should contain rows for the requested date with team FKs.
 
@@ -101,17 +100,6 @@ function normalizeGameTime(value) {
   return raw;
 }
 
-async function getTeamsByBdlId() {
-  const { data, error } = await supabase.from('teams').select('id, bdl_id, name');
-
-  if (error) throw error;
-  return new Map(
-    (data || [])
-      .filter(team => team.bdl_id != null)
-      .map(team => [team.bdl_id, team]),
-  );
-}
-
 async function getTeamsByEspnId() {
   const { data, error } = await supabase
     .from('teams')
@@ -123,35 +111,8 @@ async function getTeamsByEspnId() {
   return new Map((data || []).map(team => [String(team.espn_id), team]));
 }
 
-function mapGame(game, teamsByBdlId) {
-  const homeTeam = teamsByBdlId.get(game.home_team?.id);
-  const visitorTeam = teamsByBdlId.get(game.visitor_team?.id);
-
-  if (!homeTeam || !visitorTeam) {
-    console.warn(`[ingest-games] Skipping game ${game.id}: unresolved team FK`);
-    return null;
-  }
-
-  return {
-    bdl_id: game.id,
-    home_team_id: homeTeam.id,
-    visitor_team_id: visitorTeam.id,
-    game_date: (game.date || '').slice(0, 10),
-    status: mapStatus(game.status),
-    home_team_score: game.home_team_score ?? game.home_score ?? null,
-    visitor_team_score: game.visitor_team_score ?? game.visitor_score ?? game.away_score ?? null,
-    season: game.season,
-    season_type: game.postseason ? 'playoffs' : 'regular',
-    postseason: !!game.postseason,
-    period: game.period || null,
-    time: normalizeGameTime(game.time),
-    league: 'WNBA',
-    updated_at: new Date().toISOString(),
-  };
-}
-
 /**
- * ESPN primary: scoreboard for a date. Inserts/updates by espn_id; preserves bdl_id when present.
+ * ESPN-only scoreboard ingestion. Inserts new games by espn_id; updates scores/status for existing ones.
  */
 async function ingestEspnGames(date, teamsByEspnId, season) {
   const dateCompact = date.replace(/-/g, '');
@@ -289,40 +250,9 @@ async function ingestEspnGames(date, teamsByEspnId, season) {
 }
 
 async function ingestGames(date = getArgValue('date') || easternTodayString()) {
-  const [teamsByBdlId, teamsByEspnId] = await Promise.all([getTeamsByBdlId(), getTeamsByEspnId()]);
-
+  const teamsByEspnId = await getTeamsByEspnId();
   const season = Number(date.slice(0, 4)) || new Date().getFullYear();
-
-  const espnGames = await ingestEspnGames(date, teamsByEspnId, season);
-
-  const bdlPayload = await bdlFetch(`/wnba/v1/games?dates[]=${date}&per_page=40`).catch(err => {
-    console.warn(`[ingest-games] BDL enrichment skipped: ${err.message}`);
-    return { data: [] };
-  });
-
-  for (const bdlGame of bdlPayload.data || []) {
-    const homeTeam = teamsByBdlId.get(bdlGame.home_team?.id);
-    const visitorTeam = teamsByBdlId.get(bdlGame.visitor_team?.id);
-    if (!homeTeam || !visitorTeam) continue;
-
-    const { error } = await supabase
-      .from('games')
-      .update({
-        bdl_id: bdlGame.id,
-        status: mapStatus(bdlGame.status),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('game_date', date)
-      .eq('home_team_id', homeTeam.id)
-      .eq('visitor_team_id', visitorTeam.id)
-      .is('bdl_id', null);
-
-    if (error) {
-      console.warn(`[ingest-games] BDL backfill failed for game ${bdlGame.id}: ${error.message}`);
-    }
-  }
-
-  return espnGames;
+  return ingestEspnGames(date, teamsByEspnId, season);
 }
 
 /** Used by scheduler: refresh today + late-night yesterday so west games close out. */
@@ -350,7 +280,6 @@ if (require.main === module) {
 module.exports = {
   ingestGames,
   ingestScoreboardDatesForScheduler,
-  mapGame,
   mapStatus,
   mapEspnStatus,
   espnCompetitorScores,
