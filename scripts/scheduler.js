@@ -16,6 +16,7 @@ const { ingestWnbaStats } = require('./ingest-wnba-stats');
 const { ingestRefereeCrew } = require('./ingest-referee-crews');
 const { calcConfidence } = require('./calc-confidence');
 const { calcFirstBasket } = require('./calc-first-basket');
+const { ingestLineups }   = require('./ingest-lineups');
 
 const TIMEZONE = 'America/New_York';
 
@@ -78,6 +79,12 @@ function startScheduler() {
 
   schedule('daytime odds refresh', '0 12-23/4 * * *', () => ingestOdds());
 
+  // Pre-game lineup ingest: runs at 6 PM, 7 PM, and 7:30 PM ET to capture
+  // confirmed starters as teams release them before tip-off.
+  schedule('pre-game lineups 6pm',   '0 18 * * *',  () => ingestLineups());
+  schedule('pre-game lineups 7pm',   '0 19 * * *',  () => ingestLineups());
+  schedule('pre-game lineups 7:30pm','30 19 * * *', () => ingestLineups());
+
   // Pre-game props: runs after games + odds + injuries are all ingested for the day.
   // Generates confidence scores for tonight's slate so picks are visible before tip-off.
   schedule('pre-game confidence', '0 13 * * *', async () => {
@@ -86,9 +93,17 @@ function startScheduler() {
     await calcConfidence();
   });
 
+  // Late-evening sweeps: re-process logs for the last 2 days so partially-ingested
+  // games (where only some players got logged on a first pass) get completed.
+  // Runs at 10 PM, 11 PM, and midnight ET — covers west-coast game endings.
+  schedule('evening log sweep', '0 22,23,0 * * *', async () => {
+    await ingestEspnIds();
+    await ingestPlayerLogs({ recentDays: 2 }); // re-process recent games even if partially logged
+  });
+
   schedule('post-midnight logs + metrics', '30 0 * * *', async () => {
     await ingestEspnIds();   // link any new final games to ESPN event IDs
-    await ingestPlayerLogs(); // pull box scores from ESPN
+    await ingestPlayerLogs({ recentDays: 2 }); // pull box scores; recentDays catches partial ingestion
     await ingestTeamLogs();
     await calcMetrics();
     await calcTeamRecords(Number(process.env.SEASON || new Date().getFullYear()));

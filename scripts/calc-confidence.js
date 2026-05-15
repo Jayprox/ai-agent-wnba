@@ -239,9 +239,10 @@ async function getGames({ date, season }) {
   if (date) {
     q = q.eq('game_date', date);
   } else if (season) {
-    // Include all statuses so pre-game props are generated for scheduled games,
-    // and retroactive scores are computed for completed ones.
-    q = q.eq('season', Number(season)).in('status', ['scheduled', 'in_progress', 'final']);
+    // Only run on upcoming/live games. Final games are intentionally excluded so
+    // pre-game picks are never overwritten once a game is complete — this locks
+    // the historical analysis for accurate backtesting.
+    q = q.eq('season', Number(season)).in('status', ['scheduled', 'in_progress']);
   } else {
     q = q.eq('game_date', todayIso());
   }
@@ -1067,6 +1068,102 @@ function matchupScoreFromRating(oppRating, matchupRatings, position, field) {
   };
 }
 
+// ─── Natural-language summary builder ────────────────────────────────────────
+
+const PROP_LABELS = { pts: 'points', reb: 'rebounds', ast: 'assists', fg3m: 'threes', pra: 'PRA', stl: 'steals', blk: 'blocks' };
+
+function buildSummary({ player, field, line, recommendation, confidence, adjustedProj, seasonAvg, l5Avg, valueGap, homeAwayAvg, isHome, trend, riskFlags, keyFactors, ctx, hrL5, hrSeason, matchupRating, injuryStatus }) {
+  const name   = player.full_name;
+  const dir    = recommendation;
+  const stat   = PROP_LABELS[field] || field.toUpperCase();
+  const proj   = round(adjustedProj, 1);
+  const lineR  = round(line, 1);
+  const gap    = round(Math.abs(valueGap ?? 0), 1);
+  const gapDir = (valueGap ?? 0) >= 0 ? 'above' : 'below';
+
+  if (dir === 'PASS') {
+    return `${name} is projected for ${proj} ${stat} — the gap to the ${lineR} line is too thin to recommend a side at current confidence.`;
+  }
+
+  // ── Sentence 1: core thesis ──────────────────────────────────────────────
+  let s1 = '';
+
+  if (dir === 'OVER') {
+    s1 = `${name} is projected for ${proj} ${stat} — ${gap} ${gapDir} the ${lineR} line.`;
+  } else {
+    s1 = `${name} is projected for ${proj} ${stat} — ${gap} ${gapDir} the ${lineR} line, favouring the Under.`;
+  }
+
+  // ── Sentence 2: supporting evidence (pick top 2 signals) ─────────────────
+  const signals = [];
+
+  // Recent form
+  if (l5Avg != null) {
+    const l5R = round(l5Avg, 1);
+    if (dir === 'OVER'  && l5Avg > line) signals.push(`trending well with a ${l5R} L5 average`);
+    if (dir === 'UNDER' && l5Avg < line) signals.push(`an L5 average of ${l5R} backing the Under`);
+    if (dir === 'OVER'  && l5Avg < line) signals.push(`an L5 average of ${l5R} that lags the line, with matchup making up the gap`);
+  }
+
+  // Hit rate
+  const hr = hrL5 ?? hrSeason;
+  if (hr != null) {
+    const pct = Math.round(hr * 100);
+    if (dir === 'OVER'  && pct >= 60) signals.push(`hitting the Over in ${pct}% of recent games`);
+    if (dir === 'UNDER' && pct <= 40) signals.push(`clearing this line only ${pct}% of the time recently`);
+  }
+
+  // Matchup / opponent
+  if (matchupRating >= 65 && dir === 'OVER')   signals.push(`a favorable matchup (opp ranks poorly defending ${stat})`);
+  if (matchupRating <= 35 && dir === 'UNDER')  signals.push(`a tough matchup (strong opposition defense vs ${stat})`);
+
+  // Home/away split
+  if (homeAwayAvg != null && seasonAvg != null && Math.abs(homeAwayAvg - seasonAvg) > 1.5) {
+    const loc = isHome ? 'home' : 'road';
+    const diff = round(Math.abs(homeAwayAvg - seasonAvg), 1);
+    const better = homeAwayAvg > seasonAvg;
+    if ((dir === 'OVER' && better) || (dir === 'UNDER' && !better)) {
+      signals.push(`averages ${round(homeAwayAvg, 1)} ${stat} ${loc} (${diff} ${better ? 'better' : 'worse'} than season avg)`);
+    }
+  }
+
+  // Odds movement
+  if (ctx?.movement != null) {
+    if (dir === 'OVER'  && ctx.movement > 0.5) signals.push(`line moved ${round(ctx.movement, 1)} pts against the Over since open — value improving`);
+    if (dir === 'UNDER' && ctx.movement < -0.5) signals.push(`line steamed down ${round(Math.abs(ctx.movement), 1)} pts — sharp Under action`);
+    if (dir === 'OVER'  && ctx.movement <= -0.5) signals.push(`line moved ${round(Math.abs(ctx.movement), 1)} pts toward Over since open`);
+  }
+
+  // Season average context
+  if (seasonAvg != null && signals.length < 2) {
+    signals.push(`a season average of ${round(seasonAvg, 1)} ${stat}`);
+  }
+
+  let s2 = '';
+  if (signals.length >= 2) {
+    s2 = `Supported by ${signals[0]} and ${signals[1]}.`;
+  } else if (signals.length === 1) {
+    s2 = `Supported by ${signals[0]}.`;
+  }
+
+  // ── Sentence 3: risk caveat (optional) ───────────────────────────────────
+  let s3 = '';
+  const flags = riskFlags || [];
+  const hasInjury = injuryStatus && injuryStatus !== 'active' && injuryStatus !== 'healthy';
+  if (hasInjury) {
+    const statusMap = { questionable: 'listed questionable', doubtful: 'listed doubtful', gtd: 'game-time decision', out: 'listed out' };
+    s3 = `Note: ${name} is ${statusMap[injuryStatus] || injuryStatus} — confirm active before betting.`;
+  } else if (flags.includes('blowout_risk')) {
+    s3 = 'Blowout risk could limit minutes if the game gets lopsided — size accordingly.';
+  } else if (flags.includes('back_to_back')) {
+    s3 = 'Back-to-back situation may affect conditioning and minutes.';
+  } else if (flags.includes('volatile_minutes')) {
+    s3 = 'Minutes have been inconsistent — watch for lineup changes pre-game.';
+  }
+
+  return [s1, s2, s3].filter(Boolean).join(' ');
+}
+
 // ─── Core analysis ────────────────────────────────────────────────────────────
 
 function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupRatings, paceRatings, oddsContext, gameOddsContext, opponentStats, refRatings, injuryStatus, sInjury, usageMultiplier = 1) {
@@ -1393,7 +1490,13 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     risk_flags:              riskFlags,
     key_factors:             keyFactors,
     market_notes:            marketNotes,
-    summary: `${player.full_name} ${recommendation} ${field.toUpperCase()} ${round(line)} (${confidenceTier(confidence)}, proj ${adjustedProj}, conf ${confidence})`,
+    summary: buildSummary({
+      player, field, line, recommendation, confidence,
+      adjustedProj, seasonAvg, l5Avg, valueGap,
+      homeAwayAvg, isHome, trend, riskFlags,
+      keyFactors, ctx,
+      hrL5, hrSeason, matchupRating, injuryStatus,
+    }),
     analyzed_at:             new Date().toISOString(),
     updated_at:              new Date().toISOString(),
   };

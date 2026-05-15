@@ -1004,6 +1004,44 @@ app.get('/api/wnba/first-basket', async (req, res) => {
 });
 
 /**
+ * GET /api/wnba/first-basket-slate?date=YYYY-MM-DD
+ * Returns all first-basket picks across every game on a date, ranked by score.
+ */
+app.get('/api/wnba/first-basket-slate', async (req, res) => {
+  try {
+    const date = req.query.date || etDateString();
+
+    // Get all game ids for the date
+    const { data: games, error: gErr } = await supabase
+      .from('games')
+      .select('id, home_team_id, visitor_team_id')
+      .eq('game_date', date);
+    if (gErr) throw gErr;
+    if (!games?.length) return res.json({ data: [] });
+
+    const gameIds = games.map(g => g.id);
+
+    const { data, error } = await supabase
+      .from('first_basket_results')
+      .select(`
+        *,
+        players(id, full_name, first_name, last_name, position, team_id, teams(id, name, abbreviation)),
+        games(id, game_date, home_team_id, visitor_team_id,
+              home_team:teams!games_home_team_id_fkey(id, abbreviation, name),
+              visitor_team:teams!games_visitor_team_id_fkey(id, abbreviation, name))
+      `)
+      .in('game_id', gameIds)
+      .neq('recommendation', 'pass')
+      .order('first_basket_score', { ascending: false });
+
+    if (error) throw error;
+    res.json({ data: data || [] });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
  * GET /api/wnba/injuries?gameId=X
  * Returns latest injury reports for players on both teams in the game.
  */
@@ -1061,6 +1099,154 @@ app.get('/api/wnba/injuries', async (req, res) => {
 });
 
 /**
+ * GET /api/wnba/lineups?gameId=X
+ * Returns confirmed/projected lineup for both teams in the game.
+ * Sourced from the game_lineups table (populated by ingest-lineups.js via ESPN).
+ */
+app.get('/api/wnba/lineups', async (req, res) => {
+  try {
+    const { gameId } = req.query;
+    if (!gameId) return res.status(400).json({ error: 'gameId required' });
+
+    const { data: rows, error } = await supabase
+      .from('game_lineups')
+      .select(`
+        player_id,
+        team_id,
+        is_starter,
+        active,
+        did_not_play,
+        source,
+        fetched_at,
+        players ( id, full_name, position, espn_id ),
+        teams   ( id, abbreviation, name )
+      `)
+      .eq('game_id', gameId)
+      .order('is_starter', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({ data: rows || [] });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * GET /api/wnba/game-predictions?date=YYYY-MM-DD
+ * Returns model-projected totals and spreads for all games on a date.
+ *
+ * Model:
+ *   projected_total  = (homeOffRtg/100 × avgPace × leagueAvgDef/awayDefRtg)
+ *                    + (awayOffRtg/100 × avgPace × leagueAvgDef/homeDefRtg)
+ *   projected_spread = (homeNetRtg − awayNetRtg) × 0.6 + HOME_COURT_ADV
+ *   projected_home_ml = spread-to-moneyline conversion via standard formula
+ */
+app.get('/api/wnba/game-predictions', async (req, res) => {
+  try {
+    const date = req.query.date || etDateString();
+
+    const { data: games, error: gErr } = await supabase
+      .from('games')
+      .select('id, home_team_id, visitor_team_id, season')
+      .eq('game_date', date);
+
+    if (gErr) throw gErr;
+    if (!games?.length) return res.json({ data: [] });
+
+    const season   = games[0].season;
+    const teamIds  = [...new Set(games.flatMap(g => [g.home_team_id, g.visitor_team_id]))];
+    const gameIds  = games.map(g => g.id);
+
+    const [{ data: paceRows, error: pErr }, { data: oppRows, error: oErr }, { data: oddsRows, error: oddsErr }] = await Promise.all([
+      supabase.from('team_pace_ratings').select('team_id, pace_rating').eq('season', season).in('team_id', teamIds).lte('as_of_date', date).order('as_of_date', { ascending: false }),
+      supabase.from('team_opponent_stats').select('team_id, off_rating, def_rating, net_rating').eq('season', season).in('team_id', teamIds).lte('as_of_date', date).order('as_of_date', { ascending: false }),
+      supabase.from('odds_snapshots').select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at').in('game_id', gameIds).is('player_id', null).in('prop_type', ['spread', 'total', 'moneyline']).order('snapshot_at', { ascending: false }),
+    ]);
+
+    if (oddsErr) throw oddsErr;
+
+    if (pErr) throw pErr;
+    if (oErr) throw oErr;
+
+    const paceMap = {};
+    for (const r of paceRows || []) if (!paceMap[r.team_id]) paceMap[r.team_id] = Number(r.pace_rating);
+
+    const oppMap = {};
+    for (const r of oppRows || []) if (!oppMap[r.team_id]) oppMap[r.team_id] = r;
+
+    // Build odds map: game_id → { total, spread }
+    const oddsByGame = mergeSlateOddsByGame(oddsRows || []);
+
+    // League average defensive rating baseline — used when team data is missing
+    const defVals = Object.values(oppMap).map(r => r.def_rating).filter(v => v != null);
+    const LEAGUE_AVG_DEF = defVals.length ? defVals.reduce((a, b) => a + b, 0) / defVals.length : 105;
+    const HOME_COURT_ADV = 2.5; // pts
+
+    const predictions = games.map(game => {
+      const homePace  = paceMap[game.home_team_id]  || 73;
+      const awayPace  = paceMap[game.visitor_team_id] || 73;
+      const homeStats = oppMap[game.home_team_id]   || {};
+      const awayStats = oppMap[game.visitor_team_id] || {};
+
+      const avgPace     = (homePace + awayPace) / 2;
+      const homeOffRtg  = homeStats.off_rating != null ? Number(homeStats.off_rating) : LEAGUE_AVG_DEF;
+      const awayOffRtg  = awayStats.off_rating != null ? Number(awayStats.off_rating) : LEAGUE_AVG_DEF;
+      const homeDefRtg  = homeStats.def_rating != null ? Number(homeStats.def_rating) : LEAGUE_AVG_DEF;
+      const awayDefRtg  = awayStats.def_rating != null ? Number(awayStats.def_rating) : LEAGUE_AVG_DEF;
+      const homeNetRtg  = homeStats.net_rating != null ? Number(homeStats.net_rating) : null;
+      const awayNetRtg  = awayStats.net_rating != null ? Number(awayStats.net_rating) : null;
+
+      // Projected scores
+      const homeProj = (homeOffRtg / 100) * avgPace * (LEAGUE_AVG_DEF / awayDefRtg);
+      const awayProj = (awayOffRtg / 100) * avgPace * (LEAGUE_AVG_DEF / homeDefRtg);
+      const projTotal = Math.round((homeProj + awayProj) * 10) / 10;
+
+      // Projected spread (home perspective, negative = home favored)
+      let projSpread = null;
+      if (homeNetRtg != null && awayNetRtg != null) {
+        projSpread = Math.round(((awayNetRtg - homeNetRtg) * 0.6 - HOME_COURT_ADV) * 10) / 10;
+      }
+
+      // Moneyline from spread using standard formula
+      function spreadToML(spread) {
+        if (spread == null) return null;
+        // Approximate conversion: every 3 pts ≈ 50-60 ML points
+        const pts = Math.abs(spread);
+        const raw = pts <= 1 ? 105 : Math.round(100 + (pts - 1) * 22);
+        return spread < 0 ? -raw : raw; // negative spread = favorite (negative ML)
+      }
+
+      const gameBookMap  = oddsByGame.get(game.id) || new Map();
+      const gameOdds     = buildOddsPayloadForGameBookMap(gameBookMap);
+      const postedTotal  = gameOdds.total  != null ? Number(gameOdds.total)  : null;
+      const postedSpread = gameOdds.spread != null ? Number(gameOdds.spread) : null;
+      const totalGap     = postedTotal  != null ? Math.round((projTotal - postedTotal) * 10) / 10 : null;
+      const spreadGap    = projSpread   != null && postedSpread != null
+        ? Math.round((projSpread - postedSpread) * 10) / 10 : null;
+
+      return {
+        game_id:                game.id,
+        projected_total:        projTotal,
+        projected_spread:       projSpread,         // home perspective: negative = home favored
+        projected_home_ml:      spreadToML(projSpread),
+        projected_away_ml:      projSpread != null ? spreadToML(-projSpread) : null,
+        projected_home_score:   Math.round(homeProj * 10) / 10,
+        projected_away_score:   Math.round(awayProj * 10) / 10,
+        total_recommendation:   totalGap  != null ? (totalGap  > 0.5 ? 'OVER' : totalGap  < -0.5 ? 'UNDER' : null) : null,
+        spread_recommendation:  spreadGap != null ? (spreadGap < -0.5 ? 'HOME' : spreadGap > 0.5 ? 'AWAY' : null) : null,
+        total_gap:              totalGap,
+        spread_gap:             spreadGap,
+      };
+    });
+
+    res.json({ data: predictions });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
  * GET /api/wnba/top-picks?date=YYYY-MM-DD&limit=20
  * Returns top prop picks across all games on a given date, sorted by confidence_score DESC.
  * Used by the PICKS tab in the frontend.
@@ -1095,7 +1281,7 @@ app.get('/api/wnba/top-picks', async (req, res) => {
         score_referee, score_projection_edge, score_hit_rate, score_matchup,
         score_recent_form, score_minutes_stability, score_pace, score_rest_context,
         score_injury_impact, score_odds_movement, score_streak, score_team_context,
-        market_notes,
+        market_notes, summary,
         players(id, full_name, first_name, last_name, position, team_id)
       `)
       .in('game_id', gameIds)

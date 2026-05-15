@@ -128,7 +128,7 @@ async function fetchAll(query, batchSize = 1000) {
   return rows;
 }
 
-async function getGamesNeedingLogs({ season = null, force = false } = {}) {
+async function getGamesNeedingLogs({ season = null, force = false, recentDays = 0 } = {}) {
   let gamesQuery = supabase
     .from('games')
     .select('id, espn_id, bdl_id, game_date, season')
@@ -153,7 +153,21 @@ async function getGamesNeedingLogs({ season = null, force = false } = {}) {
   );
 
   const loggedIds = new Set((logged || []).map(r => r.game_id));
-  return finalGames.filter(g => !loggedIds.has(g.id));
+
+  // recentDays: always re-process games from the last N calendar days even if
+  // they already have some logs (catches partial ingestion from mid-game fetches).
+  let recentCutoff = null;
+  if (recentDays > 0) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - recentDays);
+    recentCutoff = cutoff.toISOString().slice(0, 10);
+  }
+
+  return finalGames.filter(g => {
+    if (!loggedIds.has(g.id)) return true;           // never ingested — always include
+    if (recentCutoff && g.game_date >= recentCutoff) return true; // recent — re-process
+    return false;
+  });
 }
 
 async function buildLookups() {
@@ -259,9 +273,10 @@ function mapAthleteToLog(athlete, names, gameId, teamId, playerId, q1Map) {
 async function ingestPlayerLogs(opts = {}) {
   const season = opts.season ?? getArg('season') ?? null;
   const force = opts.force ?? hasFlag('force');
+  const recentDays = opts.recentDays ?? (hasFlag('recent') ? 2 : 0);
 
   const [games, lookups] = await Promise.all([
-    getGamesNeedingLogs({ season, force }),
+    getGamesNeedingLogs({ season, force, recentDays }),
     buildLookups(),
   ]);
 
