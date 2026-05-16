@@ -1073,92 +1073,111 @@ function matchupScoreFromRating(oppRating, matchupRatings, position, field) {
 const PROP_LABELS = { pts: 'points', reb: 'rebounds', ast: 'assists', fg3m: 'threes', pra: 'PRA', stl: 'steals', blk: 'blocks' };
 
 function buildSummary({ player, field, line, recommendation, confidence, adjustedProj, seasonAvg, l5Avg, valueGap, homeAwayAvg, isHome, trend, riskFlags, keyFactors, ctx, hrL5, hrSeason, matchupRating, injuryStatus }) {
-  const name   = player.full_name;
-  const dir    = recommendation;
-  const stat   = PROP_LABELS[field] || field.toUpperCase();
-  const proj   = round(adjustedProj, 1);
-  const lineR  = round(line, 1);
-  const gap    = round(Math.abs(valueGap ?? 0), 1);
-  const gapDir = (valueGap ?? 0) >= 0 ? 'above' : 'below';
+  const name    = player.full_name;
+  const dir     = recommendation;
+  const stat    = PROP_LABELS[field] || field.toUpperCase();
+  const proj    = round(adjustedProj, 1);
+  const lineR   = round(line, 1);
+  const gap     = round(Math.abs(valueGap ?? 0), 1);
+  const flags   = Array.isArray(riskFlags) ? riskFlags : [];
+
+  // Normalize injuryStatus to a plain string defensively
+  const injStatus = injuryStatus && typeof injuryStatus === 'object'
+    ? String(injuryStatus.status || '')
+    : String(injuryStatus || '');
+  const injured = injStatus && !['active','healthy','available',''].includes(injStatus);
 
   if (dir === 'PASS') {
-    return `${name} is projected for ${proj} ${stat} — the gap to the ${lineR} line is too thin to recommend a side at current confidence.`;
+    return `${name} projects for ${proj} ${stat} against a ${lineR} line — the edge is too thin to commit either way right now.`;
   }
 
-  // ── Sentence 1: core thesis ──────────────────────────────────────────────
+  // ── S1: direct take ───────────────────────────────────────────────────────
   let s1 = '';
-
   if (dir === 'OVER') {
-    s1 = `${name} is projected for ${proj} ${stat} — ${gap} ${gapDir} the ${lineR} line.`;
+    if (confidence >= 65) {
+      s1 = `Like the Over here. ${name} is projecting for ${proj} ${stat} — ${gap} above the ${lineR} line — and the setup backs it up.`;
+    } else {
+      s1 = `Slight lean Over for ${name}'s ${stat}. Projection sits at ${proj} against a ${lineR} line, a ${gap}-point edge.`;
+    }
   } else {
-    s1 = `${name} is projected for ${proj} ${stat} — ${gap} ${gapDir} the ${lineR} line, favouring the Under.`;
-  }
-
-  // ── Sentence 2: supporting evidence (pick top 2 signals) ─────────────────
-  const signals = [];
-
-  // Recent form
-  if (l5Avg != null) {
-    const l5R = round(l5Avg, 1);
-    if (dir === 'OVER'  && l5Avg > line) signals.push(`trending well with a ${l5R} L5 average`);
-    if (dir === 'UNDER' && l5Avg < line) signals.push(`an L5 average of ${l5R} backing the Under`);
-    if (dir === 'OVER'  && l5Avg < line) signals.push(`an L5 average of ${l5R} that lags the line, with matchup making up the gap`);
-  }
-
-  // Hit rate
-  const hr = hrL5 ?? hrSeason;
-  if (hr != null) {
-    const pct = Math.round(hr * 100);
-    if (dir === 'OVER'  && pct >= 60) signals.push(`hitting the Over in ${pct}% of recent games`);
-    if (dir === 'UNDER' && pct <= 40) signals.push(`clearing this line only ${pct}% of the time recently`);
-  }
-
-  // Matchup / opponent
-  if (matchupRating >= 65 && dir === 'OVER')   signals.push(`a favorable matchup (opp ranks poorly defending ${stat})`);
-  if (matchupRating <= 35 && dir === 'UNDER')  signals.push(`a tough matchup (strong opposition defense vs ${stat})`);
-
-  // Home/away split
-  if (homeAwayAvg != null && seasonAvg != null && Math.abs(homeAwayAvg - seasonAvg) > 1.5) {
-    const loc = isHome ? 'home' : 'road';
-    const diff = round(Math.abs(homeAwayAvg - seasonAvg), 1);
-    const better = homeAwayAvg > seasonAvg;
-    if ((dir === 'OVER' && better) || (dir === 'UNDER' && !better)) {
-      signals.push(`averages ${round(homeAwayAvg, 1)} ${stat} ${loc} (${diff} ${better ? 'better' : 'worse'} than season avg)`);
+    if (confidence >= 65) {
+      s1 = `The Under is the play. ${name} projects for ${proj} ${stat} — ${gap} short of the ${lineR} line — and the numbers point the same direction.`;
+    } else {
+      s1 = `Lean Under on ${name}'s ${stat}. Model has her at ${proj} vs a ${lineR} line — not a huge gap, but the signals agree.`;
     }
   }
 
-  // Odds movement
-  if (ctx?.movement != null) {
-    if (dir === 'OVER'  && ctx.movement > 0.5) signals.push(`line moved ${round(ctx.movement, 1)} pts against the Over since open — value improving`);
-    if (dir === 'UNDER' && ctx.movement < -0.5) signals.push(`line steamed down ${round(Math.abs(ctx.movement), 1)} pts — sharp Under action`);
-    if (dir === 'OVER'  && ctx.movement <= -0.5) signals.push(`line moved ${round(Math.abs(ctx.movement), 1)} pts toward Over since open`);
+  // ── S2: evidence — pick 2–3 specific reasons ─────────────────────────────
+  const reasons = [];
+
+  // Recent form vs line
+  if (l5Avg != null) {
+    const l5R = round(l5Avg, 1);
+    if (dir === 'OVER' && l5Avg >= line)  reasons.push(`she's averaging ${l5R} over the last five games`);
+    if (dir === 'OVER' && l5Avg < line)   reasons.push(`recent form (${l5R} L5) lags slightly, but matchup compensates`);
+    if (dir === 'UNDER' && l5Avg < line)  reasons.push(`she's only averaging ${l5R} over her last five`);
+    if (dir === 'UNDER' && l5Avg >= line) reasons.push(`recent output (${l5R} L5) is close to the line — defense should hold it down`);
   }
 
-  // Season average context
-  if (seasonAvg != null && signals.length < 2) {
-    signals.push(`a season average of ${round(seasonAvg, 1)} ${stat}`);
+  // Hit rate — most compelling signal for a bettor
+  const hr = hrL5 ?? hrSeason;
+  if (hr != null) {
+    const pct = Math.round(hr * 100);
+    const outOf = hrL5 != null ? Math.round(hr * 5) + '/5 times' : `${pct}% of the time`;
+    if (dir === 'OVER'  && pct >= 60) reasons.push(`hit this line ${outOf} recently`);
+    if (dir === 'UNDER' && pct <= 40) reasons.push(`only cleared this line ${outOf} — the Under has been the easy side`);
+  }
+
+  // Matchup
+  if (matchupRating != null) {
+    if (matchupRating >= 68 && dir === 'OVER')  reasons.push(`the opponent is among the weaker defenses at limiting ${stat}`);
+    if (matchupRating >= 55 && dir === 'OVER' && reasons.length < 2)  reasons.push(`matchup is favorable — defense here isn't stingy on ${stat}`);
+    if (matchupRating <= 32 && dir === 'UNDER') reasons.push(`she's drawing a tough defensive assignment that tends to suppress ${stat}`);
+    if (matchupRating <= 45 && dir === 'UNDER' && reasons.length < 2) reasons.push(`this defense is solid on ${stat} — not much room to run`);
+  }
+
+  // Home/away split
+  if (homeAwayAvg != null && seasonAvg != null && Math.abs(homeAwayAvg - seasonAvg) > 1.5) {
+    const loc    = isHome ? 'at home' : 'on the road';
+    const haR    = round(homeAwayAvg, 1);
+    const better = homeAwayAvg > seasonAvg;
+    if ((dir === 'OVER' && better) || (dir === 'UNDER' && !better)) {
+      reasons.push(`${loc} she's averaging ${haR} ${stat} — ${better ? 'stronger' : 'weaker'} than her season number`);
+    }
+  }
+
+  // Odds movement — sharp money signal
+  if (ctx?.movement != null) {
+    if (dir === 'OVER'  && ctx.movement >  0.5) reasons.push(`line has drifted ${round(ctx.movement, 1)} points since open, creating better value`);
+    if (dir === 'UNDER' && ctx.movement < -0.5) reasons.push(`sharp action has already steamed this line down ${round(Math.abs(ctx.movement), 1)} points`);
+  }
+
+  // Fallback: season average if we still need something
+  if (reasons.length === 0 && seasonAvg != null) {
+    reasons.push(`her season average of ${round(seasonAvg, 1)} ${stat} supports this side`);
   }
 
   let s2 = '';
-  if (signals.length >= 2) {
-    s2 = `Supported by ${signals[0]} and ${signals[1]}.`;
-  } else if (signals.length === 1) {
-    s2 = `Supported by ${signals[0]}.`;
+  if (reasons.length >= 2) {
+    s2 = `${reasons[0].charAt(0).toUpperCase() + reasons[0].slice(1)}, and ${reasons[1]}.`;
+  } else if (reasons.length === 1) {
+    s2 = `${reasons[0].charAt(0).toUpperCase() + reasons[0].slice(1)}.`;
   }
 
-  // ── Sentence 3: risk caveat (optional) ───────────────────────────────────
+  // ── S3: honest caveat ────────────────────────────────────────────────────
   let s3 = '';
-  const flags = riskFlags || [];
-  const hasInjury = injuryStatus && injuryStatus !== 'active' && injuryStatus !== 'healthy';
-  if (hasInjury) {
-    const statusMap = { questionable: 'listed questionable', doubtful: 'listed doubtful', gtd: 'game-time decision', out: 'listed out' };
-    s3 = `Note: ${name} is ${statusMap[injuryStatus] || injuryStatus} — confirm active before betting.`;
-  } else if (flags.includes('blowout_risk')) {
-    s3 = 'Blowout risk could limit minutes if the game gets lopsided — size accordingly.';
-  } else if (flags.includes('back_to_back')) {
-    s3 = 'Back-to-back situation may affect conditioning and minutes.';
+  if (injured) {
+    const statusPhrases = { questionable: 'listed questionable', doubtful: 'listed doubtful', gtd: 'game-time decision' };
+    const phrase = statusPhrases[injStatus] || injStatus;
+    s3 = `One thing to watch — she's ${phrase} so confirm active before you lock it in.`;
   } else if (flags.includes('volatile_minutes')) {
-    s3 = 'Minutes have been inconsistent — watch for lineup changes pre-game.';
+    s3 = `Minutes have been unpredictable though — check the lineup before tip.`;
+  } else if (flags.includes('blowout_risk')) {
+    s3 = `If this game gets out of hand early, garbage time could eat into her chances — keep an eye on the score.`;
+  } else if (flags.includes('back_to_back')) {
+    s3 = `Back-to-back situation — conditioning and minutes could both take a minor hit.`;
+  } else if (flags.includes('small_sample')) {
+    s3 = `Small sample size here, so take the projection with a grain of salt.`;
   }
 
   return [s1, s2, s3].filter(Boolean).join(' ');

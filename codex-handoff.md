@@ -1,6 +1,6 @@
 # WNBA Prop Scout — Codex Handoff Document
 
-**Last updated:** 2026-05-09  
+**Last updated:** 2026-05-15  
 **Prepared by:** Claude (Cowork)  
 **For:** Claude Cowork / OpenAI Codex (continuity)
 
@@ -4684,4 +4684,210 @@ In the SLATE game card, render injury notes as a small amber line below the odds
 - SLATE game cards show "3-1" style records instead of "Record unavailable"
 - SLATE game cards show injury summary line when players are listed
 - No regressions on existing endpoints
+
+---
+
+## Cowork session — 2026-05-15 (read this first)
+
+This section covers all work completed between 2026-05-09 and 2026-05-15. Two workstreams ran in parallel: **Cowork (CW)** handled frontend + server fixes; **Cursor (Task 118)** handled the board snapshot persistence layer.
+
+---
+
+### Completed by Cowork (CW)
+
+#### 1 — Games tab SQL fix: `column games.total does not exist`
+
+**Problem:** The `/api/wnba/game-predictions` endpoint was selecting `total, spread` directly from the `games` table. Those columns don't exist — game-level odds live in `odds_snapshots`.
+
+**Fix in `server.js`:**
+- Removed `total, spread` from the `games` SELECT.
+- Added a fetch of `odds_snapshots` rows for the date's game IDs.
+- Used the existing `mergeSlateOddsByGame` + `buildOddsPayloadForGameBookMap` helpers to extract posted lines, exactly matching the pattern used in the main slate endpoint.
+
+Also added `.lte('as_of_date', date)` to both `team_pace_ratings` and `team_opponent_stats` queries in the game-predictions endpoint so **backtesting is historically accurate** — queries return the ratings that existed on the selected date, not the latest values.
+
+---
+
+#### 2 — Backtesting lock: historical views stay consistent over time
+
+**Problem:** Re-running `calcConfidence` for past dates would overwrite `prop_analysis_results` rows, changing what the UI shows when browsing historical dates.
+
+**Fix in `scripts/calc-confidence.js`:**
+- Changed the season-wide game query from `.in('status', ['scheduled', 'in_progress', 'final'])` → `.in('status', ['scheduled', 'in_progress'])`.
+- This means `calcConfidence` never touches rows for final games, so pre-game picks are locked the moment the game goes final.
+- Team ratings queries already have `as_of_date` time series — the `.lte` filter above completes the lock on the GAMES tab.
+
+No new DB tables needed. The existing `prop_analysis_results` and `as_of_date` columns handle this fully.
+
+---
+
+#### 3 — PICKS tab redesign (was BOARD tab)
+
+The old BOARD nav tab was redundant once PICKS was fully featured. Changes:
+
+- **Removed `board` from `NAV_TABS`** in `wnba-prop-scout.jsx`.
+- **Increased card gap**: `gap: 12px` → `gap: 18px` so cards breathe on desktop and mobile.
+- **Stronger hit/miss borders**: `1px solid ${T.green}66` → `2px solid ${T.green}` (full-color solid). Miss uses `T.red`, push uses `T.yellow`.
+- **Hit rate badges** added in X/5 format (SEASON %, L5 X/5, L10 X/10, VS OPP %).
+- **Filter pills** added: prop type (PTS/REB/AST/3PM/STL/BLK/PRA), direction (OVER/UNDER), tier (STRONG/VALUE).
+- **Analyst Take expandable tray** added to each card — tap to expand an AI summary explaining why the score is what it is.
+- **Final stat + result strip** on each card: when a game is final, shows actual stat value + `✓ HIT` / `✗ MISS` / `PUSH` badge.
+- **DNP exclusion**: on load, `top-picks` endpoint checks `game_lineups` for `did_not_play = true` or `active = false` and filters those players out of the picks list before returning.
+
+**`server.js` — DNP exclusion in `/api/wnba/top-picks`:**
+```javascript
+const { data: lineupRows } = await supabase
+  .from('game_lineups')
+  .select('player_id, game_id, did_not_play, active')
+  .in('game_id', gameIds)
+  .or('did_not_play.eq.true,active.eq.false');
+const dnpKeys = new Set((lineupRows || []).map(r => `${r.player_id}:${r.game_id}`));
+const activePicks = (picks || []).filter(
+  pick => !dnpKeys.has(`${pick.player_id}:${pick.game_id}`)
+);
+```
+
+---
+
+#### 4 — `buildSummary()` rewrite (calc-confidence.js)
+
+**Problems fixed:**
+- `injuryStatus` could arrive as an object `{status: 'questionable'}` instead of a plain string → `[object Object]` displayed in UI.
+- `hasInjury` was triggering for `'available'` players.
+- Language was robotic / template-y.
+
+**Fixes:**
+- Defensive cast: `const injStatus = injuryStatus && typeof injuryStatus === 'object' ? String(injuryStatus.status || '') : String(injuryStatus || '')`
+- `hasInjury` now excludes `['active','healthy','available','']`.
+- Full rewrite of the summary text: analyst-tone openers ("Like the Over here." / "The Under is the play."), hit rates as fractions ("hit this line 4/5 times"), natural caveats ("One thing to watch —", "If this game gets out of hand early…"), confidence-level-adjusted language (assertive ≥65, lean below).
+
+---
+
+#### 5 — Mobile responsive layout
+
+**`wnba-prop-scout.jsx` RESPONSIVE_CSS updates:**
+
+- `@media (max-width: 720px)`: Changed `.ps-card-grid { display: block }` → `grid-template-columns: 1fr` (preserves grid context and keeps 18px gap; `display:block` strips gap).
+- `@media (max-width: 430px)`: Added `.ps-brand-sub { display: none }` to hide "WNBA" subtitle on very narrow screens; tighter nav padding.
+- Added `className="ps-brand-sub"` to the "WNBA" subtitle span and `className="ps-stat-grid-4"` to 4-column stat grids.
+
+---
+
+#### 6 — First Basket leaderboard tab
+
+New `1ST BSKT` nav tab in `wnba-prop-scout.jsx`.
+
+**Backend (`server.js`):**
+- New `GET /api/wnba/first-basket-slate?date=YYYY-MM-DD` endpoint.
+- Returns all `first_basket_results` rows for the slate date, joined with player names and teams, sorted by `first_basket_score DESC`.
+
+**Frontend (`wnba-prop-scout.jsx`):**
+- `apiGetFirstBasketSlate(date)` helper.
+- `FirstBasketTab` component: ranked list with `ScoreBar` visualization, signal chips, STRONG / VALUE LOOK tier badges.
+
+---
+
+#### 7 — Box Score tab in game drill-down
+
+New `BOX SCORE` tab added after PROPS in every game's drill-down card.
+
+**Backend (`server.js`):**
+```javascript
+GET /api/wnba/boxscore?gameId=X
+```
+- Fetches `player_game_logs` joined with `players` and `teams`.
+- Groups rows by `team_id`.
+- Sorts players: starters first (by `pts` desc), DNPs last.
+- Computes team totals for all stat columns (pts, reb, ast, stl, blk, tov, fgm, fga, fg3m, fg3a).
+- Returns `{ [team_id]: { team, players, totals } }`.
+
+**Frontend (`wnba-prop-scout.jsx`):**
+- `apiGetBoxscore(gameId)` — lazy fetch, only fires when BOX SCORE tab is opened.
+- `BoxscoreTab` component: scrollable table per team, columns = MIN, PTS, REB, AST, STL, BLK, TOV, FG (fgm/fga), 3PM (fg3m/fg3a), +/−. Starters marked with orange **S**, DNPs faded with reason shown. Team totals row at bottom.
+- In-progress yellow warning banner. Pre-game shows "Box score will appear once the game is final."
+- `GAME_TABS = ['overview','lineup','matchup','props','boxscore']`
+- `GAME_LABELS = { ..., boxscore: 'BOX SCORE' }`
+
+**Data availability note:** `player_game_logs` are ingested by the 10 PM, 11 PM, and 12:30 AM ET sweeps in `scheduler.js`. Box score tab will show no data until the post-game ingest runs.
+
+---
+
+#### 8 — PlayerDrawer MPG + Usage fix (Lineup tab tray)
+
+The expanded player tray in the LINEUP tab was showing `Usage: 0.02/min` — a raw possessions-per-minute value that was meaningless to users, and MPG was never shown directly.
+
+**Fix in `wnba-prop-scout.jsx` `PlayerDrawer` component:**
+- Footer now shows three stats: **Role** (Starter/Bench), **MPG** (color-coded: white ≥20, yellow ≥10, red <10), **USG%** (usage rate × 100 displayed as a percentage).
+- MPG now reads directly from `player.mpg` with a `fmtOne` format.
+
+---
+
+#### 9 — GamesTab `selectedDate` prop fix
+
+`<GamesTab>` in the main render was not receiving `selectedDate`, so the GAMES tab always fetched predictions for today regardless of the selected date. Fixed by passing `selectedDate={selectedDate}`.
+
+---
+
+### Completed by Cursor (Task 118) — Board Card Snapshot Persistence
+
+This workstream adds **point-in-time board snapshots** so the locked picks for a given date can be reliably resolved against final results.
+
+#### New files
+| File | Purpose |
+|------|---------|
+| `db/005_board_card_snapshots.sql` | Schema for `board_card_snapshots` table |
+| `backend/routes/boardSnapshot.js` | `POST /api/board-snapshot` — upserts snapshot rows |
+| `backend/jobs/resolveCardSnapshotsJob.js` | Resolves yesterday's snapshots against final results |
+
+#### `board_card_snapshots` table (apply migration if not yet run)
+```sql
+-- apply db/005_board_card_snapshots.sql in Supabase SQL editor
+-- table stores: slate_date, player_id, prop_type, line, lean, market, score_tier, book_line, locked_at, resolved_at, result
+```
+
+#### Changes to existing files
+
+**`backend/jobs/scheduler.js`:**
+- `require('./resolveCardSnapshotsJob')` added.
+- Two crons at 1:00 AM and 2:00 AM (Honolulu timezone) that call `resolveCardSnapshots()` for yesterday's slate — catches late West Coast game finishes.
+
+**`backend/server.js`:**
+- `app.use('/api/board-snapshot', require('./routes/boardSnapshot'))` — accepts POST with `{ slateDate, cards }`.
+- `GET /api/admin/jobs/resolve-card-snapshots` guarded by `x-admin-secret` header, optional `?date=YYYY-MM-DD`, delegates to `resolveCardSnapshots()`.
+
+**`prop-scout-v7.jsx`:**
+- When cards are locked (before `setLockedBoardCandidates`), builds `newlyLocked` array enriched with `market`, `lean` (score ≥ 55 → `over`), `scoreTier`, `bookLine`.
+- POSTs to `POST /api/board-snapshot` with `{ slateDate: today, cards: newlyLocked }`. Errors are silently caught (`.catch(() => {})`).
+
+#### Manual smoke test
+```bash
+# Trigger resolution for a specific date
+curl -H "x-admin-secret: YOUR_SECRET" \
+  "http://localhost:3001/api/admin/jobs/resolve-card-snapshots?date=2026-05-14"
+```
+
+---
+
+### Quick file map — 2026-05-15 changes
+
+| Area | Files touched |
+|------|--------------|
+| Games tab SQL fix + backtesting lock | `server.js`, `scripts/calc-confidence.js` |
+| PICKS tab redesign | `wnba-prop-scout.jsx` |
+| buildSummary rewrite | `scripts/calc-confidence.js` |
+| Mobile responsive | `wnba-prop-scout.jsx` |
+| First Basket leaderboard tab | `server.js`, `wnba-prop-scout.jsx` |
+| Box Score tab | `server.js`, `wnba-prop-scout.jsx` |
+| PlayerDrawer MPG/USG fix | `wnba-prop-scout.jsx` |
+| GamesTab date prop fix | `wnba-prop-scout.jsx` |
+| Board snapshots | `db/005_board_card_snapshots.sql`, `backend/routes/boardSnapshot.js`, `backend/jobs/resolveCardSnapshotsJob.js`, `backend/jobs/scheduler.js`, `backend/server.js`, `prop-scout-v7.jsx` |
+
+---
+
+### Open items / next up
+
+- **Task Y (Production Hardening)** — health endpoint enrichment, startup bootstrap, scheduler alerting, team W-L records, injury summary on slate cards — still pending Codex implementation.
+- **Box score data lag** — box scores only populate after the 10 PM ET ingest sweep. No action needed, just user expectation.
+- **`board_card_snapshots` migration** — must be applied manually in Supabase SQL editor if not yet run (`db/005_board_card_snapshots.sql`).
+- **`ADMIN_SECRET` env var** — must be set in Railway/production for the resolve-card-snapshots admin route to work.
 

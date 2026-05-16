@@ -1285,6 +1285,15 @@ async function apiGetAllGameLogs(playerIds) {
   return map;
 }
 
+async function apiGetBoxscore(gameId) {
+  if (IS_SANDBOX) return {};
+  try {
+    const r = await fetch(`${API_BASE}/api/wnba/boxscore?gameId=${encodeURIComponent(gameId)}`);
+    if (!r.ok) return {};
+    return (await r.json()).data || {};
+  } catch { return {}; }
+}
+
 async function apiGetProps(gameId) {
   if (IS_SANDBOX) return SANDBOX.props;
   const r = await fetch(`${API_BASE}/api/wnba/props?gameId=${gameId}`);
@@ -1698,9 +1707,10 @@ function PlayerDrawer({ player, logs }) {
           </>
         ))}
       </div>
-      <div style={{ marginTop: 8, fontSize: 10, color: T.text3, borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>
-        <span style={{ marginRight: 12 }}>Role: {player.starter ? 'Starter' : 'Bench'}</span>
-        <span>Usage: {calcUsageRate(player.fga, player.fta, player.tov, player.mpg).toFixed(2)}/min</span>
+      <div style={{ marginTop: 8, fontSize: 10, color: T.text3, borderTop: `1px solid ${T.border}`, paddingTop: 6, display: 'flex', gap: 14 }}>
+        <span>Role: <span style={{ color: T.text2, fontWeight: 700 }}>{player.starter ? 'Starter' : 'Bench'}</span></span>
+        <span>MPG: <span style={{ color: Number(player.mpg || 0) >= 20 ? T.text2 : Number(player.mpg || 0) >= 10 ? T.yellow : T.red, fontWeight: 700 }}>{player.mpg != null ? fmtOne(player.mpg) : '—'}</span></span>
+        <span>USG%: <span style={{ color: T.text2, fontWeight: 700 }}>{(calcUsageRate(player.fga, player.fta, player.tov, player.mpg) * 100).toFixed(0)}%</span></span>
       </div>
     </div>
   );
@@ -2062,9 +2072,129 @@ function PropsTab({ game, allPlayers, matchups, gameLogs, props, confirmedLineup
   );
 }
 
+// ---- Box Score Tab ----
+function BoxscoreTab({ gameId, game }) {
+  const [bsData, setBsData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    apiGetBoxscore(gameId).then(data => { setBsData(data); setLoading(false); });
+  }, [gameId]);
+
+  const isFinal = isGameFinalStatus(game?.status);
+  const aw = game?.visitor_team;
+  const hw = game?.home_team;
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>Loading…</div>;
+
+  if (!bsData || Object.keys(bsData).length === 0) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: T.text3, fontSize: 12 }}>
+        {isFinal ? 'Box score not available.' : 'Box score will appear once the game is final.'}
+      </div>
+    );
+  }
+
+  const COLS = [
+    { key: 'min',       label: 'MIN',  fmt: v => v != null ? Math.round(Number(v)) : '—' },
+    { key: 'pts',       label: 'PTS',  fmt: v => v != null ? Math.round(Number(v)) : '—' },
+    { key: 'reb',       label: 'REB',  fmt: v => v != null ? Math.round(Number(v)) : '—' },
+    { key: 'ast',       label: 'AST',  fmt: v => v != null ? Math.round(Number(v)) : '—' },
+    { key: 'stl',       label: 'STL',  fmt: v => v != null ? Math.round(Number(v)) : '—' },
+    { key: 'blk',       label: 'BLK',  fmt: v => v != null ? Math.round(Number(v)) : '—' },
+    { key: 'tov',       label: 'TOV',  fmt: v => v != null ? Math.round(Number(v)) : '—' },
+    { key: 'fg',        label: 'FG',   fmt: (_, row) => row ? `${Math.round(Number(row.fgm)||0)}/${Math.round(Number(row.fga)||0)}` : '—' },
+    { key: 'fg3',       label: '3PM',  fmt: (_, row) => row ? `${Math.round(Number(row.fg3m)||0)}/${Math.round(Number(row.fg3a)||0)}` : '—' },
+    { key: 'plus_minus', label: '+/−', fmt: v => { if (v == null) return '—'; const n = Math.round(Number(v)); return n > 0 ? `+${n}` : String(n); } },
+  ];
+
+  function TeamTable({ teamId, label, score }) {
+    const entry = bsData[String(teamId)];
+    if (!entry) return null;
+    const { players, totals } = entry;
+
+    return (
+      <div style={{ marginBottom: 20 }}>
+        {/* Team header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: T.card2, borderRadius: '10px 10px 0 0', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 13, fontWeight: 900, color: T.text }}>{label}</div>
+          {score != null && <div style={{ fontSize: 20, fontWeight: 900, color: T.accent }}>{score}</div>}
+        </div>
+
+        {/* Column headers */}
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, minWidth: 520 }}>
+            <thead>
+              <tr style={{ background: T.card3 }}>
+                <th style={{ textAlign: 'left', padding: '6px 10px', color: T.text3, fontWeight: 700, letterSpacing: 0.5, position: 'sticky', left: 0, background: T.card3, minWidth: 130 }}>PLAYER</th>
+                {COLS.map(c => (
+                  <th key={c.key} style={{ textAlign: 'right', padding: '6px 8px', color: T.text3, fontWeight: 700, letterSpacing: 0.5, whiteSpace: 'nowrap' }}>{c.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {players.map((row, i) => {
+                const player = row.players || {};
+                const name = playerName(player);
+                const isDnp = row.dnp === true;
+                const isStarter = row.starter === true;
+                const rowBg = i % 2 === 0 ? T.card : T.card2;
+                return (
+                  <tr key={row.player_id} style={{ background: rowBg, opacity: isDnp ? 0.45 : 1 }}>
+                    <td style={{ padding: '7px 10px', color: isDnp ? T.text3 : T.text, fontWeight: isStarter ? 700 : 400, position: 'sticky', left: 0, background: rowBg, whiteSpace: 'nowrap' }}>
+                      {name}
+                      {isStarter && !isDnp && <span style={{ marginLeft: 4, fontSize: 8, color: T.accent, fontWeight: 800 }}>S</span>}
+                      {isDnp && <span style={{ marginLeft: 6, fontSize: 8, color: T.text3 }}>DNP{row.dnp_reason ? ` · ${row.dnp_reason}` : ''}</span>}
+                    </td>
+                    {isDnp
+                      ? <td colSpan={COLS.length} style={{ textAlign: 'center', color: T.text3, padding: '7px 8px' }}>—</td>
+                      : COLS.map(c => (
+                          <td key={c.key} style={{ textAlign: 'right', padding: '7px 8px', color: c.key === 'pts' ? T.text : T.text2, fontWeight: c.key === 'pts' ? 700 : 400 }}>
+                            {c.fmt(row[c.key], row)}
+                          </td>
+                        ))
+                    }
+                  </tr>
+                );
+              })}
+
+              {/* Totals row */}
+              <tr style={{ background: T.card3, borderTop: `1px solid ${T.border}` }}>
+                <td style={{ padding: '7px 10px', fontWeight: 800, color: T.text3, fontSize: 9, letterSpacing: 0.8, position: 'sticky', left: 0, background: T.card3 }}>TOTALS</td>
+                {COLS.map(c => (
+                  <td key={c.key} style={{ textAlign: 'right', padding: '7px 8px', fontWeight: 700, color: T.text2 }}>
+                    {c.fmt(totals[c.key], totals)}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style={{ height: 1, background: T.border, borderRadius: '0 0 10px 10px' }} />
+      </div>
+    );
+  }
+
+  const awayScore = game?.visitor_team_score ?? null;
+  const homeScore = game?.home_team_score   ?? null;
+
+  return (
+    <div style={{ padding: '12px 0 32px' }}>
+      {!isFinal && (
+        <div style={{ fontSize: 10, color: T.yellow, background: T.yellowDim, border: `1px solid ${T.yellow}44`, borderRadius: 8, padding: '7px 12px', marginBottom: 14 }}>
+          Game in progress — stats update as play-by-play is ingested.
+        </div>
+      )}
+      <TeamTable teamId={aw?.id} label={`${aw?.name || aw?.abbreviation} (Away)`} score={awayScore} />
+      <TeamTable teamId={hw?.id} label={`${hw?.name || hw?.abbreviation} (Home)`} score={homeScore} />
+    </div>
+  );
+}
+
 // ---- GameCard (full-screen drill-down) ----
-const GAME_TABS   = ['overview','lineup','matchup','props'];
-const GAME_LABELS = { overview:'OVERVIEW', lineup:'LINEUP', matchup:'MATCHUP', props:'PROPS' };
+const GAME_TABS   = ['overview','lineup','matchup','props','boxscore'];
+const GAME_LABELS = { overview:'OVERVIEW', lineup:'LINEUP', matchup:'MATCHUP', props:'PROPS', boxscore:'BOX SCORE' };
 
 function GameCard({ game, onClose }) {
   const [activeTab, setActiveTab]   = useState('overview');
@@ -2165,6 +2295,7 @@ function GameCard({ game, onClose }) {
           {activeTab === 'lineup'   && <LineupTab game={game} allPlayers={allPlayers} gameLogs={gameLogs} confirmedLineup={confirmedLineup} expandedId={expandedId} setExpandedId={setExpandedId} />}
           {activeTab === 'matchup'  && <MatchupTab game={game} allPlayers={allPlayers} matchups={matchups} gameLogs={gameLogs} />}
           {activeTab === 'props'    && <PropsTab game={game} allPlayers={allPlayers} matchups={matchups} gameLogs={gameLogs} props={props} confirmedLineup={confirmedLineup} />}
+          {activeTab === 'boxscore' && <BoxscoreTab gameId={game.id} game={game} />}
         </div>
       )}
     </div>
@@ -2545,9 +2676,10 @@ function HitRateBadge({ label, value, denom }) {
 function TopPicksTab({ picks, loading, error }) {
   const [track, setTrack] = useState(null);
   const [trackErr, setTrackErr] = useState(null);
-  const [filterProp, setFilterProp] = useState('ALL');
-  const [filterDir,  setFilterDir]  = useState('ALL');
-  const [filterTier, setFilterTier] = useState('ALL');
+  const [filterProp,  setFilterProp]  = useState('ALL');
+  const [filterDir,   setFilterDir]   = useState('ALL');
+  const [filterTier,  setFilterTier]  = useState('ALL');
+  const [expandedId,  setExpandedId]  = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -2671,13 +2803,20 @@ function TopPicksTab({ picks, loading, error }) {
         const matchupLabel = pick.home_team && pick.visitor_team
           ? `${pick.visitor_team.abbreviation} @ ${pick.home_team.abbreviation}`
           : null;
-        const siteLabel = pickHomeRoadLabel(pick);
-        const clv       = pickClv(pick);
+        const siteLabel  = pickHomeRoadLabel(pick);
+        const clv        = pickClv(pick);
+        const isFinal    = isGameFinalStatus(pick.game_status);
+        const result     = pickResult(pick);
+        const actualVal  = pick.actual_value != null ? Math.round(Number(pick.actual_value) * 10) / 10 : null;
+        const isDnp      = pick.dnp === true;
 
         return (
           <div key={pick.id || i} style={{
             background:   T.card,
-            border:       (() => { const r = pickResult(pick); const isFinal = isGameFinalStatus(pick.game_status); if (isFinal && r === 'hit') return `2px solid ${T.green}`; if (isFinal && r === 'miss') return `2px solid ${T.red}`; if (isFinal && r === 'push') return `2px solid ${T.yellow}`; return `1px solid ${T.border}`; })(),
+            border:       isFinal && result === 'hit'  ? `2px solid ${T.green}`
+                        : isFinal && result === 'miss' ? `2px solid ${T.red}`
+                        : isFinal && result === 'push' ? `2px solid ${T.yellow}`
+                        : `1px solid ${T.border}`,
             borderRadius: 12,
             overflow:     'hidden',
           }}>
@@ -2827,8 +2966,88 @@ function TopPicksTab({ picks, loading, error }) {
                 </div>
               )}
 
+            {/* Final result strip */}
+            {isFinal && (actualVal != null || isDnp) && (
+              <div style={{
+                margin: '10px 0 2px',
+                padding: '8px 12px',
+                background: isDnp ? T.card2
+                  : result === 'hit'  ? T.greenDim
+                  : result === 'miss' ? T.redDim
+                  : T.yellowDim,
+                borderRadius: 8,
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: T.text3, letterSpacing: 0.8 }}>FINAL</span>
+                  <span style={{ fontSize: 22, fontWeight: 900, lineHeight: 1,
+                    color: isDnp ? T.text3
+                      : result === 'hit'  ? T.green
+                      : result === 'miss' ? T.red
+                      : T.yellow,
+                  }}>
+                    {isDnp ? 'DNP' : actualVal}
+                  </span>
+                  {!isDnp && <span style={{ fontSize: 11, color: T.text3 }}>{type}</span>}
+                </div>
+                {!isDnp && result && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 900, letterSpacing: 0.8,
+                    color: result === 'hit' ? T.green : result === 'miss' ? T.red : T.yellow,
+                    background: result === 'hit' ? `${T.green}22` : result === 'miss' ? `${T.red}22` : `${T.yellow}22`,
+                    border: `1px solid ${result === 'hit' ? T.green : result === 'miss' ? T.red : T.yellow}55`,
+                    borderRadius: 5, padding: '3px 10px',
+                  }}>
+                    {result === 'hit' ? '✓ HIT' : result === 'miss' ? '✗ MISS' : 'PUSH'}
+                  </span>
+                )}
+              </div>
+            )}
 
             </div>
+
+            {/* Analysis tray */}
+            {pick.summary && (() => {
+              const cardId = pick.id || i;
+              const isOpen = expandedId === cardId;
+              return (
+                <>
+                  <button
+                    onClick={() => setExpandedId(isOpen ? null : cardId)}
+                    style={{
+                      width: '100%', padding: '8px 14px',
+                      background: isOpen ? `${T.accent}14` : T.card2,
+                      border: 'none', borderTop: `1px solid ${T.border}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      cursor: 'pointer', transition: 'background 0.15s',
+                    }}
+                  >
+                    <span style={{ fontSize: 9, fontWeight: 800, color: isOpen ? T.accent : T.text3, letterSpacing: 1 }}>
+                      ↯ ANALYST TAKE
+                    </span>
+                    <span style={{ fontSize: 10, color: T.text3, lineHeight: 1 }}>{isOpen ? '▲' : '▼'}</span>
+                  </button>
+                  {isOpen && (
+                    <div style={{
+                      padding: '12px 16px 14px',
+                      borderTop: `1px solid ${T.accent}33`,
+                      background: `${T.accent}08`,
+                    }}>
+                      <div style={{
+                        borderLeft: `3px solid ${T.accent}66`,
+                        paddingLeft: 12,
+                        fontSize: 12,
+                        lineHeight: 1.65,
+                        color: T.text2,
+                        fontStyle: 'italic',
+                      }}>
+                        {pick.summary}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         );
       })}

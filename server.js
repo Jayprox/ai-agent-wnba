@@ -1042,6 +1042,65 @@ app.get('/api/wnba/first-basket-slate', async (req, res) => {
 });
 
 /**
+ * GET /api/wnba/boxscore?gameId=X
+ * Returns full player box score for a game, grouped by team.
+ */
+app.get('/api/wnba/boxscore', async (req, res) => {
+  try {
+    const { gameId } = req.query;
+    if (!gameId) return res.status(400).json({ error: 'gameId required' });
+
+    const { data, error } = await supabase
+      .from('player_game_logs')
+      .select(`
+        player_id, team_id, starter, dnp, dnp_reason,
+        min, pts, reb, ast, stl, blk, tov, pf,
+        fgm, fga, fg_pct, fg3m, fg3a, ftm, fta, ft_pct, plus_minus,
+        players(id, full_name, first_name, last_name, position),
+        teams(id, abbreviation, name)
+      `)
+      .eq('game_id', Number(gameId))
+      .order('starter', { ascending: false });
+
+    if (error) throw error;
+
+    // Compute team totals and sort within each team (starters first, then by pts desc)
+    const rows = (data || []);
+    const byTeam = {};
+    for (const row of rows) {
+      const tid = row.team_id;
+      if (!byTeam[tid]) byTeam[tid] = { team: row.teams, players: [], totals: {} };
+      byTeam[tid].players.push(row);
+    }
+
+    for (const tid of Object.keys(byTeam)) {
+      const players = byTeam[tid].players;
+      // Sort: starters first, then pts desc, DNPs last
+      players.sort((a, b) => {
+        if (a.dnp !== b.dnp) return a.dnp ? 1 : -1;
+        if ((a.starter ?? false) !== (b.starter ?? false)) return a.starter ? -1 : 1;
+        return (Number(b.pts) || 0) - (Number(a.pts) || 0);
+      });
+      // Team totals (active players only)
+      const active = players.filter(p => !p.dnp);
+      const sum = (field) => active.reduce((acc, p) => acc + (Number(p[field]) || 0), 0);
+      const fgm = sum('fgm'), fga = sum('fga'), ftm = sum('ftm'), fta = sum('fta'), fg3m = sum('fg3m'), fg3a = sum('fg3a');
+      byTeam[tid].totals = {
+        pts: sum('pts'), reb: sum('reb'), ast: sum('ast'),
+        stl: sum('stl'), blk: sum('blk'), tov: sum('tov'),
+        fgm, fga, fg_pct: fga > 0 ? fgm / fga : null,
+        fg3m, fg3a, ft_pct: fta > 0 ? ftm / fta : null,
+        ftm, fta, plus_minus: null,
+      };
+    }
+
+    res.json({ data: byTeam });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
  * GET /api/wnba/injuries?gameId=X
  * Returns latest injury reports for players on both teams in the game.
  */
@@ -1293,7 +1352,22 @@ app.get('/api/wnba/top-picks', async (req, res) => {
 
     if (picksError) throw picksError;
 
-    const playerIds = [...new Set((picks || []).map(pick => pick.player_id).filter(Boolean))];
+    // Fetch confirmed lineup data to exclude DNP / inactive players.
+    // Only players with an explicit did_not_play=true or active=false record are dropped.
+    // If no lineup record exists for a player the pick is kept (lineup not yet confirmed).
+    const { data: lineupRows } = await supabase
+      .from('game_lineups')
+      .select('player_id, game_id, did_not_play, active')
+      .in('game_id', gameIds)
+      .or('did_not_play.eq.true,active.eq.false');
+
+    const dnpKeys = new Set((lineupRows || []).map(r => `${r.player_id}:${r.game_id}`));
+
+    const activePicks = (picks || []).filter(
+      pick => !dnpKeys.has(`${pick.player_id}:${pick.game_id}`)
+    );
+
+    const playerIds = [...new Set(activePicks.map(pick => pick.player_id).filter(Boolean))];
     const { data: logs, error: logsError } = playerIds.length
       ? await supabase
         .from('player_game_logs')
@@ -1308,7 +1382,7 @@ app.get('/api/wnba/top-picks', async (req, res) => {
       (logs || []).map(log => [`${log.player_id}:${log.game_id}`, log])
     );
 
-    const data = (picks || []).map(pick => {
+    const data = activePicks.map(pick => {
       const game       = gamesById.get(pick.game_id);
       const homeTeam   = game ? teamsById.get(game.home_team_id)    : null;
       const visitorTeam = game ? teamsById.get(game.visitor_team_id) : null;
