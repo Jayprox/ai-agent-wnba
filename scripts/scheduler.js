@@ -17,6 +17,8 @@ const { ingestRefereeCrew } = require('./ingest-referee-crews');
 const { calcConfidence } = require('./calc-confidence');
 const { calcFirstBasket } = require('./calc-first-basket');
 const { ingestLineups }   = require('./ingest-lineups');
+const { calcAiPicks } = require('./calc-ai-picks');
+const { resolveAiPicks } = require('./resolve-ai-picks');
 
 const TIMEZONE = 'America/New_York';
 
@@ -91,6 +93,7 @@ function startScheduler() {
     await ingestScoreboardDatesForScheduler();
     await ingestOdds();    // freshen lines before scoring
     await calcConfidence();
+    await calcAiPicks();
   });
 
   // Late-evening sweeps: re-process logs for the last 2 days so partially-ingested
@@ -99,6 +102,7 @@ function startScheduler() {
   schedule('evening log sweep', '0 22,23,0 * * *', async () => {
     await ingestEspnIds();
     await ingestPlayerLogs({ recentDays: 2 }); // re-process recent games even if partially logged
+    await resolveAiPicks();
   });
 
   schedule('post-midnight logs + metrics', '30 0 * * *', async () => {

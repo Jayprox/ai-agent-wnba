@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Secrets — keep .env.example for templates
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build output
+dist/
+
+# Vite / tooling caches
+.vite/
+
+# Logs & OS
+*.log
+npm-debug.log*
+.DS_Store
+
+# Test / coverage
+coverage/

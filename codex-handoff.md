@@ -4675,6 +4675,12 @@ In the SLATE game card, render injury notes as a small amber line below the odds
 
 ---
 
+### Implementation note — 2026-05-17
+
+Team records (Fix 4) are **already displaying** on the slate game cards as of 2026-05-17 (confirmed in UI: LV 3-1, ATL 2-0, SEA 1-2, etc.). Before implementing Fix 4, check whether `team_season_records` is already populated and whether `calcTeamRecords` already exists in `calc-metrics.js`. Only implement the missing pieces — do not overwrite working code.
+
+Fixes 1 (health endpoint), 2 (startup bootstrap), 3 (scheduler alerting), and 5 (injury summary on slate card) are confirmed not yet implemented.
+
 ### Acceptance checks
 
 - `GET /health` returns `today.games`, `today.props`, `today.odds` with real counts
@@ -4684,6 +4690,27 @@ In the SLATE game card, render injury notes as a small amber line below the odds
 - SLATE game cards show "3-1" style records instead of "Record unavailable"
 - SLATE game cards show injury summary line when players are listed
 - No regressions on existing endpoints
+
+---
+
+### Completion note — 2026-05-17
+
+Task Y reviewed by Codex and confirmed implemented in the current repo.
+
+- `server.js` already has a rich `/health` response using `pipelineCountsForDate`, `buildSlateFreshness`, `buildHealthFreshness`, scheduler cadence metadata, and env flags.
+- `server.js` already has `bootstrapToday()` after `app.listen()`, with ET-hour guard, `ingestGames`, `ingestOdds`, and `calcConfidence({ date })` self-healing.
+- `scripts/scheduler.js` already has `sendAlert()` / `runJob()` with optional `ALERT_WEBHOOK_URL`.
+- `scripts/calc-metrics.js` already exports `calcTeamRecords()`, and `scripts/scheduler.js` runs it after `calcMetrics()`.
+- `server.js` already attaches team records and `injury_notes`; `wnba-prop-scout.jsx` renders injury notes on slate cards.
+
+Verification run:
+- `node --check server.js` passed.
+- `node --check scripts/scheduler.js` passed.
+- `node --check scripts/calc-metrics.js` passed.
+- `node --check scripts/ingest-games.js` passed.
+- `npm run build` passed.
+
+No additional Task Y code changes were required in this pass.
 
 ---
 
@@ -4886,8 +4913,1177 @@ curl -H "x-admin-secret: YOUR_SECRET" \
 
 ### Open items / next up
 
-- **Task Y (Production Hardening)** — health endpoint enrichment, startup bootstrap, scheduler alerting, team W-L records, injury summary on slate cards — still pending Codex implementation.
+- **Task Y (Production Hardening)** — ✅ Complete.
+- **Task Z (AI Picks Tab)** — ✅ Complete. Picks lock on first write; use `--force` to regenerate.
+- **Task AA (AI Pick Resolution + Hit Rate Badges)** — see full spec below. Next up for Codex.
 - **Box score data lag** — box scores only populate after the 10 PM ET ingest sweep. No action needed, just user expectation.
 - **`board_card_snapshots` migration** — must be applied manually in Supabase SQL editor if not yet run (`db/005_board_card_snapshots.sql`).
 - **`ADMIN_SECRET` env var** — must be set in Railway/production for the resolve-card-snapshots admin route to work.
 
+---
+
+## Task AB — AI Pick Transparency: Retroactive Flag + Input Snapshot
+
+**Goal:** Two small additions to `ai_slate_picks` that keep the AI track record honest and fully auditable:
+
+1. **`is_retroactive` flag** — marks any picks generated after the slate's games are already final. The UI shows a `*` on the record when retroactive picks are included.
+2. **`input_snapshot` JSONB** — stores the exact algo picks, injury statuses, rest data, and news headlines that were fed to GPT-4o when the picks were generated. Enables full auditability of why the AI made each call.
+
+---
+
+### Step 1 — DB migration
+
+**File:** `db/022_ai_slate_picks_transparency.sql`
+
+```sql
+ALTER TABLE ai_slate_picks
+  ADD COLUMN IF NOT EXISTS is_retroactive   BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS input_snapshot   JSONB;
+
+COMMENT ON COLUMN ai_slate_picks.is_retroactive IS
+  'TRUE if picks were generated after the slate games were already final (retroactive backfill).';
+COMMENT ON COLUMN ai_slate_picks.input_snapshot IS
+  'Snapshot of the exact context fed to GPT-4o: algo_picks, injuries, headlines, rest_travel.';
+```
+
+Apply in Supabase SQL editor.
+
+---
+
+### Step 2 — Update `scripts/calc-ai-picks.js`
+
+#### 2a — Detect retroactive generation
+
+After fetching algo picks and before calling GPT, check whether the games for this date are already final:
+
+```javascript
+// After fetchAlgoPicks / fetchRestAndTravel calls:
+const { data: gamesForDate } = await supabase
+  .from('games')
+  .select('status')
+  .eq('game_date', date);
+
+const allFinal = (gamesForDate || []).length > 0 &&
+  (gamesForDate || []).every(g =>
+    ['final', 'closed', 'complete'].includes(String(g.status).toLowerCase())
+  );
+
+if (allFinal) {
+  console.log(`[calc-ai-picks] Note: all games for ${date} are final — marking as retroactive.`);
+}
+```
+
+#### 2b — Build and save input snapshot
+
+Before the GPT call, capture the context:
+
+```javascript
+const inputSnapshot = {
+  algo_picks:  algoPicks.map(p => ({
+    player:      p.players?.full_name,
+    prop_type:   p.prop_type,
+    line:        p.line,
+    recommendation: p.recommendation,
+    confidence_score: p.confidence_score,
+    key_factors: p.key_factors,
+  })),
+  injuries:    injuries,
+  headlines:   headlines,
+  rest_travel: restTravel,
+  captured_at: new Date().toISOString(),
+};
+```
+
+#### 2c — Pass both into the upsert
+
+```javascript
+await supabase
+  .from('ai_slate_picks')
+  .upsert({
+    slate_date:       date,
+    best_bets:        bestBets,
+    ai_takes:         aiTakes,
+    model_used:       MODEL,
+    prompt_tokens:    usage?.prompt_tokens ?? null,
+    completion_tokens: usage?.completion_tokens ?? null,
+    generated_at:     new Date().toISOString(),
+    is_retroactive:   allFinal,       // ← new
+    input_snapshot:   inputSnapshot,  // ← new
+  }, { onConflict: 'slate_date' });
+```
+
+Log it clearly:
+```javascript
+console.log(`[calc-ai-picks] Done — ${bestBets.length} best bets, ${aiTakes.length} AI takes. Tokens: ${usage?.total_tokens ?? 'n/a'}${allFinal ? ' [RETROACTIVE]' : ''}`);
+```
+
+---
+
+### Step 3 — Update server endpoint
+
+**File:** `server.js` — `GET /api/wnba/ai-picks`
+
+Add `is_retroactive` to the SELECT and pass it through in the response:
+
+```javascript
+supabase
+  .from('ai_slate_picks')
+  .select('best_bets, ai_takes, model_used, generated_at, is_retroactive')  // ← add is_retroactive
+  .eq('slate_date', date)
+  .maybeSingle()
+```
+
+Also compute whether any picks in the hit_rates window are retroactive, and flag it:
+
+```javascript
+// After computing hit_rates:
+const { data: retroCheck } = await supabase
+  .from('ai_slate_picks')
+  .select('is_retroactive')
+  .eq('is_retroactive', true)
+  .limit(1);
+
+const hasRetroactivePicks = (retroCheck || []).length > 0;
+
+res.json({
+  data: {
+    ...slate,
+    hit_rates: {
+      ...hitRates,
+      has_retroactive: hasRetroactivePicks,  // ← new
+    },
+  },
+});
+```
+
+---
+
+### Step 4 — Frontend: asterisk on retroactive record
+
+**File:** `wnba-prop-scout.jsx` — `AiPicksTab`
+
+When `hit_rates.has_retroactive` is true, append `*` to the season record and show a one-line footnote:
+
+```jsx
+const hasRetro = data.hit_rates?.has_retroactive;
+
+// In the section header, update the season display:
+{hasSeasonRecord && (
+  <span style={{ fontSize: 10, color: T.text3 }}>
+    Season:{' '}
+    <span style={{ color: pct >= 55 ? T.green : pct >= 45 ? T.yellow : T.red, fontWeight: 700 }}>
+      {hits}-{misses} ({pct}%){hasRetro ? '*' : ''}
+    </span>
+  </span>
+)}
+
+// Below the AI Best Bets section, add footnote when retroactive picks exist:
+{hasRetro && (
+  <div style={{ fontSize: 9, color: T.text3, marginTop: 6, fontStyle: 'italic' }}>
+    * includes retroactive picks generated after games completed
+  </div>
+)}
+```
+
+---
+
+### Acceptance checks
+
+- `node scripts/calc-ai-picks.js 2026-05-14 --force` sets `is_retroactive = TRUE` and saves `input_snapshot` for that date (games are final)
+- `node scripts/calc-ai-picks.js 2026-05-18` (future date with scheduled games) sets `is_retroactive = FALSE`
+- `input_snapshot` column in Supabase contains `algo_picks`, `injuries`, `headlines`, `rest_travel`, `captured_at`
+- `GET /api/wnba/ai-picks` response includes `is_retroactive` on the slate object and `hit_rates.has_retroactive`
+- AI PICKS section header shows "0-3 (0%)*" with footnote when retroactive picks are in the record
+- No asterisk shown when all picks were generated pre-game
+- Existing picks already in DB (e.g. 5/14) get `is_retroactive` updated on next `--force` regeneration; no migration needed for existing rows (column defaults to FALSE)
+
+### Completion note — 2026-05-17
+
+- Added `db/022_ai_slate_picks_transparency.sql` with `is_retroactive` and `input_snapshot` columns plus column comments.
+- Updated `scripts/calc-ai-picks.js` to detect fully final slates, log `[RETROACTIVE]`, save `is_retroactive`, and store an auditable `input_snapshot` containing algo picks, injury context, headlines, rest/travel, and `captured_at`.
+- Updated `GET /api/wnba/ai-picks` to select/pass through `is_retroactive` and include `hit_rates.has_retroactive` for the UI record marker.
+- Updated `AiPicksTab` so season records show `*` when retroactive AI rows exist, with a one-line footnote below the AI Best Bets section.
+- Verification passed: `node --check scripts/calc-ai-picks.js`, `node --check server.js`, and `npm run build`.
+- Manual step still required before the live acceptance runs: apply `db/022_ai_slate_picks_transparency.sql` in Supabase, then run the documented `calc-ai-picks` regeneration checks with `OPENAI_API_KEY` set.
+
+---
+
+## Task AA — AI Pick Resolution + Hit Rate Badges
+
+**Goal:** Grade each AI Best Bet after games go final, store results in a queryable table, and surface two hit rate indicators in the UI: (1) an overall **AI Record** in the section header (e.g. "Season: 8-3 · 73%"), and (2) a **prop-type badge** on each Best Bet card showing the AI's historical hit rate for that prop type (e.g. "PTS: 3/5").
+
+This mirrors the hit rate badges on the PICKS tab but tracks the AI's own track record independently from the algo model.
+
+---
+
+### Prerequisites
+
+- Task Z (AI Picks Tab) must be complete and `ai_slate_picks` table must exist.
+- Uses existing `lib/scoring/grade-prop-pick.js` (`propActualValue`, `gradePropPick`) — do not rewrite.
+- Uses existing `player_game_logs` and `games` tables for grading.
+
+---
+
+### Step 1 — DB migration
+
+**File:** `db/021_create_ai_pick_results.sql`
+
+```sql
+CREATE TABLE IF NOT EXISTS ai_pick_results (
+  id              SERIAL PRIMARY KEY,
+  slate_date      DATE NOT NULL,
+  player          TEXT NOT NULL,
+  team            TEXT,
+  prop_type       TEXT NOT NULL,
+  line            DECIMAL(6,2) NOT NULL,
+  recommendation  TEXT NOT NULL,        -- 'OVER' | 'UNDER'
+  actual_value    DECIMAL(6,2),
+  result          TEXT,                 -- 'hit' | 'miss' | 'push' | NULL (pending)
+  hit             BOOLEAN,
+  dnp             BOOLEAN NOT NULL DEFAULT FALSE,
+  resolved_at     TIMESTAMPTZ,
+  UNIQUE(slate_date, player, prop_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_pick_results_date       ON ai_pick_results(slate_date DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_pick_results_prop_type  ON ai_pick_results(prop_type, result);
+
+GRANT ALL ON TABLE ai_pick_results TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE ai_pick_results_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+Apply in Supabase SQL editor.
+
+---
+
+### Step 2 — Resolution script
+
+**File:** `scripts/resolve-ai-picks.js` (new file)
+
+This script runs nightly and grades any unresolved AI Best Bets for dates where games are final.
+
+```javascript
+'use strict';
+const { createClient } = require('@supabase/supabase-js');
+const { propActualValue } = require('../lib/scoring/grade-prop-pick');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+);
+
+function timestamp() { return new Date().toISOString(); }
+
+/**
+ * For a given player name, find their player_id in the DB.
+ * Uses exact full_name match first, then case-insensitive fallback.
+ */
+async function resolvePlayerId(playerName) {
+  const { data } = await supabase
+    .from('players')
+    .select('id, full_name')
+    .ilike('full_name', playerName)
+    .limit(1);
+  return data?.[0]?.id ?? null;
+}
+
+/**
+ * For a player + game, fetch their game log row.
+ */
+async function fetchGameLog(playerId, gameId) {
+  const { data } = await supabase
+    .from('player_game_logs')
+    .select('pts, reb, ast, stl, blk, tov, fg3m, min, dnp')
+    .eq('player_id', playerId)
+    .eq('game_id', gameId)
+    .maybeSingle();
+  return data;
+}
+
+/**
+ * Find the game for a given team abbreviation on a given date.
+ * Matches on home or visitor team abbreviation.
+ */
+async function findGame(team, date) {
+  const { data } = await supabase
+    .from('games')
+    .select('id, status, home_team:teams!games_home_team_id_fkey(abbreviation), visitor_team:teams!games_visitor_team_id_fkey(abbreviation)')
+    .eq('game_date', date)
+    .in('status', ['final', 'closed', 'complete']);
+
+  return (data || []).find(g =>
+    g.home_team?.abbreviation === team ||
+    g.visitor_team?.abbreviation === team
+  ) ?? null;
+}
+
+async function resolveAiPicks(dateStr) {
+  const date = dateStr || new Date(Date.now() - 86400000).toISOString().slice(0, 10); // yesterday by default
+  console.log(`[resolve-ai-picks] Resolving for ${date}`);
+
+  // Load AI picks for this date
+  const { data: slate } = await supabase
+    .from('ai_slate_picks')
+    .select('best_bets')
+    .eq('slate_date', date)
+    .maybeSingle();
+
+  if (!slate?.best_bets?.length) {
+    console.log(`[resolve-ai-picks] No AI best bets found for ${date} — skipping.`);
+    return;
+  }
+
+  // Skip picks already fully resolved
+  const { data: existing } = await supabase
+    .from('ai_pick_results')
+    .select('player, prop_type, result')
+    .eq('slate_date', date);
+
+  const resolvedKeys = new Set((existing || [])
+    .filter(r => r.result !== null)
+    .map(r => `${r.player}:${r.prop_type}`));
+
+  let graded = 0;
+  let skipped = 0;
+
+  for (const bet of slate.best_bets) {
+    const key = `${bet.player}:${bet.prop_type}`;
+    if (resolvedKeys.has(key)) { skipped++; continue; }
+
+    // Find player + game
+    const playerId = await resolvePlayerId(bet.player);
+    if (!playerId) {
+      console.warn(`[resolve-ai-picks] Could not find player: ${bet.player}`);
+      continue;
+    }
+
+    const game = await findGame(bet.team, date);
+    if (!game) {
+      // Game not final yet — leave unresolved
+      continue;
+    }
+
+    const log = await fetchGameLog(playerId, game.id);
+    const isDnp = !log || log.dnp === true;
+    const actualValue = isDnp ? 0 : propActualValue(log, bet.prop_type);
+
+    let result = null;
+    let hit = null;
+
+    if (actualValue !== null) {
+      const line = Number(bet.line);
+      const rec  = String(bet.recommendation || '').toUpperCase();
+      if (actualValue === line) {
+        result = 'push';
+      } else if (rec === 'OVER') {
+        hit = actualValue > line;
+        result = hit ? 'hit' : 'miss';
+      } else if (rec === 'UNDER') {
+        hit = actualValue < line;
+        result = hit ? 'hit' : 'miss';
+      }
+    }
+
+    await supabase
+      .from('ai_pick_results')
+      .upsert({
+        slate_date:    date,
+        player:        bet.player,
+        team:          bet.team,
+        prop_type:     bet.prop_type,
+        line:          bet.line,
+        recommendation: bet.recommendation,
+        actual_value:  isDnp ? 0 : actualValue,
+        result,
+        hit,
+        dnp:           isDnp,
+        resolved_at:   result !== null ? new Date().toISOString() : null,
+      }, { onConflict: 'slate_date,player,prop_type' });
+
+    console.log(`[resolve-ai-picks] ${bet.player} ${bet.prop_type} ${bet.recommendation} ${bet.line} → ${result ?? 'pending'}`);
+    graded++;
+  }
+
+  console.log(`[resolve-ai-picks] Done — ${graded} graded, ${skipped} already resolved.`);
+}
+
+module.exports = { resolveAiPicks };
+
+if (require.main === module) {
+  const dateArg = process.argv.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a));
+  resolveAiPicks(dateArg).catch(err => {
+    console.error('[resolve-ai-picks] Failed:', err.message);
+    process.exit(1);
+  });
+}
+```
+
+---
+
+### Step 3 — Wire into scheduler
+
+**File:** `scripts/scheduler.js`
+
+```javascript
+const { resolveAiPicks } = require('./resolve-ai-picks');
+```
+
+Add to the evening log sweep (runs at 10 PM, 11 PM ET — same time box scores are ingested, so game logs exist when grading runs):
+
+```javascript
+schedule('evening log sweep', '0 22,23,0 * * *', async () => {
+  await runJob('ingestEspnIds',  () => ingestEspnIds());
+  await runJob('ingestPlayerLogs', () => ingestPlayerLogs({ recentDays: 2 }));
+  await runJob('resolveAiPicks',   () => resolveAiPicks()); // ← add this line
+});
+```
+
+---
+
+### Step 4 — Extend server endpoint
+
+**File:** `server.js` — extend `GET /api/wnba/ai-picks`
+
+After fetching `ai_slate_picks`, also compute hit rate stats from `ai_pick_results`:
+
+```javascript
+app.get('/api/wnba/ai-picks', async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+
+    const [{ data: slate }, { data: results }] = await Promise.all([
+      supabase
+        .from('ai_slate_picks')
+        .select('best_bets, ai_takes, model_used, generated_at')
+        .eq('slate_date', date)
+        .maybeSingle(),
+      supabase
+        .from('ai_pick_results')
+        .select('prop_type, result, hit, slate_date')
+        .not('result', 'eq', 'push')   // exclude pushes from rate calculation
+        .order('slate_date', { ascending: false })
+        .limit(200),
+    ]);
+
+    if (!slate) return res.json({ data: null });
+
+    // Season overall record
+    const settled  = (results || []).filter(r => r.result !== null);
+    const hits     = settled.filter(r => r.hit === true).length;
+    const misses   = settled.filter(r => r.hit === false).length;
+    const total    = hits + misses;
+
+    // Hit rate by prop type
+    const byProp = {};
+    for (const r of settled) {
+      if (!byProp[r.prop_type]) byProp[r.prop_type] = { hits: 0, total: 0 };
+      byProp[r.prop_type].total++;
+      if (r.hit) byProp[r.prop_type].hits++;
+    }
+
+    // L5 picks overall
+    const l5 = settled.slice(0, 5);
+    const l5Hits = l5.filter(r => r.hit).length;
+
+    res.json({
+      data: {
+        ...slate,
+        hit_rates: {
+          season: { hits, misses, total, pct: total > 0 ? Math.round((hits / total) * 100) : null },
+          l5:     { hits: l5Hits, total: l5.length },
+          by_prop: byProp,
+        },
+      },
+    });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+```
+
+---
+
+### Step 5 — Frontend: hit rate badges
+
+**File:** `wnba-prop-scout.jsx`
+
+#### Section header — overall AI record
+
+In `AiPicksTab`, update the section header to show the season record:
+
+```jsx
+const { hits, misses, total, pct } = data.hit_rates?.season || {};
+const hasRecord = total > 0;
+
+// Replace the existing section label with:
+<div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+  <span style={{ fontSize: 11, fontWeight: 800, color: '#a78bfa', letterSpacing: 1 }}>★ AI BEST BETS</span>
+  {hasRecord && (
+    <span style={{ fontSize: 10, color: T.text3 }}>
+      Season: <span style={{ color: pct >= 55 ? T.green : pct >= 45 ? T.yellow : T.red, fontWeight: 700 }}>
+        {hits}-{misses} ({pct}%)
+      </span>
+    </span>
+  )}
+  {data.hit_rates?.l5?.total >= 3 && (
+    <span style={{ fontSize: 10, color: T.text3 }}>
+      L5: <span style={{ color: T.text2, fontWeight: 700 }}>{data.hit_rates.l5.hits}/{data.hit_rates.l5.total}</span>
+    </span>
+  )}
+  {generatedTime && <span style={{ fontSize: 9, color: T.text3, marginLeft: 'auto' }}>Generated {generatedTime}</span>}
+</div>
+```
+
+#### Per-card prop type badge
+
+In `AiBestBetCard`, pass in `hitRates` and show a small badge:
+
+```jsx
+function AiBestBetCard({ pick, hitRates }) {
+  const propRate = hitRates?.by_prop?.[pick.prop_type];
+  // ... existing card JSX ...
+
+  // Add below the key flags row:
+  {propRate && propRate.total >= 3 && (
+    <div style={{ marginTop: 8, fontSize: 9, color: T.text3 }}>
+      AI on {pick.prop_type?.toUpperCase()}:{' '}
+      <span style={{ color: propRate.hits / propRate.total >= 0.55 ? T.green : T.yellow, fontWeight: 700 }}>
+        {propRate.hits}/{propRate.total}
+      </span>
+    </div>
+  )}
+}
+
+// Pass hitRates from AiPicksTab:
+<AiBestBetCard key={i} pick={pick} hitRates={data.hit_rates} />
+```
+
+> **Note:** Both hit rate indicators are hidden until there is enough data (`total >= 3` for prop-type badge, `total > 0` for section header). They appear automatically as results accumulate over the first few days.
+
+---
+
+### Acceptance checks
+
+- `node scripts/resolve-ai-picks.js 2026-05-14` runs and grades Best Bets for that date; rows appear in `ai_pick_results`
+- Picks already resolved don't get overwritten on re-run
+- If game is not final yet, pick stays unresolved (no result)
+- `GET /api/wnba/ai-picks?date=2026-05-14` returns `hit_rates.season`, `hit_rates.l5`, `hit_rates.by_prop`
+- AI PICKS section header shows "Season: X-X (Y%)" once at least 1 pick is resolved
+- Per-card prop badge shows "AI on PTS: 2/3" once ≥3 picks of that type are resolved
+- Scheduler wires resolve into the 10 PM sweep alongside player log ingestion
+- Pushes are excluded from hit rate calculations (not counted as hit or miss)
+- DNP players are counted as a miss (graded at 0 vs line, same as algo grading)
+
+### Completion note — 2026-05-17
+
+- Added `db/021_create_ai_pick_results.sql` with the finalized `ai_pick_results` schema, indexes, and grants.
+- Added `scripts/resolve-ai-picks.js`; it resolves AI Best Bets by player/date/team, reuses `gradePropPick()` for normal final-game/push behavior, forces DNPs to misses per Task AA, skips already-resolved picks, and leaves non-final games pending.
+- Wired `resolveAiPicks()` into the scheduler evening log sweep after recent player logs are ingested.
+- Extended `GET /api/wnba/ai-picks` to return `hit_rates.season`, `hit_rates.l5`, and `hit_rates.by_prop`, excluding pushes from rates.
+- Updated the AI Picks UI to show the season record in the AI Best Bets header and per-prop hit badges on cards once enough history exists.
+- Verification passed: `node --check scripts/resolve-ai-picks.js`, `node --check server.js`, `node --check scripts/scheduler.js`, and `npm run build`.
+- Manual step still required before live resolving: apply `db/021_create_ai_pick_results.sql` in Supabase. The full resolver run should be done after that migration exists.
+
+---
+
+## Task Z — AI Picks Tab (GPT-4o Powered)
+
+**Goal:** A polished "AI PICKS" nav tab that surfaces every morning with two sections: (1) **AI Best Bets** — 3–5 picks Claude independently selects after reading the full slate, news, and rest context; (2) **AI Takes** — the top 8–10 algorithmic picks with an AI commentary layer added. The AI is the analyst; the algorithm is the research assistant.
+
+This is a hybrid: the AI reads the algo scores as input, but makes its own judgments and can override, skip, or surface picks the model scored conservatively.
+
+---
+
+### Prerequisites
+
+- `OPENAI_API_KEY` env var set in Railway (and `.env.local` for dev).
+- `npm install openai` in the project root.
+- Apply the DB migration below before running.
+
+---
+
+### Step 1 — DB migration
+
+**File:** `db/016_create_ai_slate_picks.sql`
+
+```sql
+CREATE TABLE IF NOT EXISTS ai_slate_picks (
+  id              SERIAL PRIMARY KEY,
+  slate_date      DATE NOT NULL UNIQUE,
+  best_bets       JSONB NOT NULL DEFAULT '[]',
+  ai_takes        JSONB NOT NULL DEFAULT '[]',
+  model_used      VARCHAR(50) NOT NULL DEFAULT 'gpt-4o',
+  prompt_tokens   INTEGER,
+  completion_tokens INTEGER,
+  generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_slate_picks_date ON ai_slate_picks(slate_date DESC);
+
+GRANT ALL ON TABLE ai_slate_picks TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE ai_slate_picks_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+Apply in Supabase SQL editor.
+
+---
+
+### Step 2 — Data gathering helpers
+
+**File:** `scripts/calc-ai-picks.js` (new file)
+
+This script is responsible for assembling context, calling GPT-4o, and upserting the result.
+
+#### 2a — Fetch algo picks for the slate date
+
+```javascript
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+
+async function fetchAlgoPicks(date) {
+  // Pull top 15 prop_analysis_results for the date, ordered by confidence_score desc
+  // Join players (full_name), teams (abbreviation), games (status, home_team_id, visitor_team_id)
+  const { data } = await supabase
+    .from('prop_analysis_results')
+    .select(`
+      player_id, prop_type, line, confidence_score, recommendation, key_factors, summary,
+      hit_rate_season, hit_rate_l5, hit_rate_l10, hit_rate_vs_opp,
+      players(full_name),
+      games(id, game_date, status, home_team_id, visitor_team_id,
+        home_team:teams!games_home_team_id_fkey(abbreviation, name),
+        visitor_team:teams!games_visitor_team_id_fkey(abbreviation, name))
+    `)
+    .eq('game_date', date)
+    .in('recommendation', ['OVER', 'UNDER'])
+    .order('confidence_score', { ascending: false })
+    .limit(15);
+  return data || [];
+}
+```
+
+#### 2b — Fetch injury context
+
+```javascript
+async function fetchInjuryContext(date) {
+  // Get latest injury_reports for all players with games today
+  // Return array of { playerName, team, status, updated_at }
+  const { data: games } = await supabase
+    .from('games')
+    .select('home_team_id, visitor_team_id')
+    .eq('game_date', date);
+
+  const teamIds = [...new Set((games || []).flatMap(g => [g.home_team_id, g.visitor_team_id]))];
+
+  const { data } = await supabase
+    .from('injury_reports')
+    .select('player_id, status, updated_at, players(full_name), teams(abbreviation)')
+    .in('team_id', teamIds)
+    .in('status', ['out', 'doubtful', 'questionable', 'gtd'])
+    .order('updated_at', { ascending: false });
+
+  return (data || []).map(r => ({
+    player: r.players?.full_name,
+    team: r.teams?.abbreviation,
+    status: r.status,
+    updatedAt: r.updated_at,
+  }));
+}
+```
+
+#### 2c — Fetch ESPN WNBA news headlines
+
+```javascript
+async function fetchNewsHeadlines() {
+  // ESPN WNBA news RSS — no auth required
+  // Parse the 8 most recent headlines as plain text
+  try {
+    const res = await fetch('https://www.espn.com/espn/rss/wnba/news');
+    const xml = await res.text();
+    const titles = [...xml.matchAll(/<title><!\[CDATA\[(.+?)\]\]><\/title>/g)]
+      .map(m => m[1])
+      .filter(t => !t.toLowerCase().includes('espn'))
+      .slice(0, 8);
+    return titles;
+  } catch {
+    return [];
+  }
+}
+```
+
+#### 2d — Compute rest and travel context
+
+```javascript
+async function fetchRestAndTravel(date) {
+  // For each team with a game today, find their last game before this date
+  // Compute: days_rest, is_back_to_back, is_away (for today's game), consecutive_road_games
+  const { data: todayGames } = await supabase
+    .from('games')
+    .select('id, home_team_id, visitor_team_id, home_team:teams!games_home_team_id_fkey(abbreviation), visitor_team:teams!games_visitor_team_id_fkey(abbreviation)')
+    .eq('game_date', date);
+
+  const result = {};
+
+  for (const game of (todayGames || [])) {
+    for (const [teamId, isHome] of [[game.home_team_id, true], [game.visitor_team_id, false]]) {
+      const abbr = isHome ? game.home_team?.abbreviation : game.visitor_team?.abbreviation;
+
+      // Last game before today for this team
+      const { data: lastGames } = await supabase
+        .from('games')
+        .select('game_date, home_team_id, visitor_team_id')
+        .or(`home_team_id.eq.${teamId},visitor_team_id.eq.${teamId}`)
+        .lt('game_date', date)
+        .in('status', ['final', 'closed', 'complete'])
+        .order('game_date', { ascending: false })
+        .limit(5);
+
+      const lastGame = lastGames?.[0];
+      const daysRest = lastGame
+        ? Math.round((new Date(date) - new Date(lastGame.game_date)) / 86400000)
+        : null;
+
+      // Count consecutive road games leading into today (including today if away)
+      let consecutiveRoad = 0;
+      if (!isHome) {
+        consecutiveRoad = 1;
+        for (const g of (lastGames || [])) {
+          if (g.visitor_team_id === teamId) consecutiveRoad++;
+          else break;
+        }
+      }
+
+      result[abbr] = {
+        daysRest,
+        isBackToBack: daysRest === 1,
+        isHome,
+        consecutiveRoadGames: consecutiveRoad,
+      };
+    }
+  }
+
+  return result;
+}
+```
+
+---
+
+### Step 3 — Build prompt and call GPT-4o
+
+```javascript
+const OpenAI = require('openai');
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function callGpt(algoPicks, injuries, headlines, restTravel) {
+  const systemPrompt = `You are a sharp WNBA sports betting analyst with deep knowledge of player props, line movement, and situational betting. You have access to an algorithmic model's picks and additional context. Your job is to produce two outputs:
+
+1. AI_BEST_BETS: 3 to 5 picks you believe in most after reviewing everything. These are YOUR picks — you can agree with the model, partially agree, or go a different direction. Prioritize edge: rest advantages, news context, matchups the model might underweight, or value where the line seems soft.
+
+2. AI_TAKES: For each of the top algorithmic picks provided, write a concise analyst take (2-4 sentences) that adds context beyond the model score. Agree, disagree, add a caveat, flag a risk — be direct and honest, not promotional.
+
+Always be specific. Reference actual stats, matchups, rest situations, injury context where relevant. Sound like a bettor who has done real research, not a content generator.`;
+
+  // Format algo picks for the prompt
+  const picksText = algoPicks.map((p, i) => {
+    const player = p.players?.full_name || 'Unknown';
+    const team = p.games?.home_team_id === p.player_id ? p.games?.home_team?.abbreviation : p.games?.visitor_team?.abbreviation;
+    const opp = p.games?.home_team_id === p.player_id ? p.games?.visitor_team?.abbreviation : p.games?.home_team?.abbreviation;
+    const rest = restTravel[team] || {};
+    return `${i + 1}. ${player} (${team} vs ${opp}) — ${p.prop_type.toUpperCase()} ${p.recommendation} ${p.line} | Model Score: ${p.confidence_score} | L5: ${p.hit_rate_l5 ?? '—'} | Season: ${p.hit_rate_season ?? '—'} | Key factors: ${(p.key_factors || []).join(', ')} | Rest: ${rest.daysRest ?? '?'} days${rest.isBackToBack ? ' ⚠ BACK-TO-BACK' : ''}${rest.consecutiveRoadGames > 2 ? ` (${rest.consecutiveRoadGames} straight road)` : ''}`;
+  }).join('\n');
+
+  const injuryText = injuries.length
+    ? injuries.map(i => `${i.player} (${i.team}): ${i.status}`).join(', ')
+    : 'No notable injuries reported.';
+
+  const newsText = headlines.length
+    ? headlines.join(' | ')
+    : 'No recent headlines available.';
+
+  const userPrompt = `Today's slate — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+
+ALGORITHMIC PICKS (ranked by model score):
+${picksText}
+
+INJURY REPORT:
+${injuryText}
+
+RECENT WNBA NEWS:
+${newsText}
+
+Produce your response as valid JSON with this exact structure:
+{
+  "best_bets": [
+    {
+      "player": "string",
+      "team": "string",
+      "prop_type": "pts|reb|ast|fg3m|stl|blk|pra",
+      "line": number,
+      "recommendation": "OVER|UNDER",
+      "confidence_tier": "STRONG|VALUE",
+      "headline": "string (max 10 words, punchy)",
+      "reasoning": "string (3-5 sentences, analyst tone, specific)",
+      "algo_score": number | null,
+      "key_flags": ["string"] // e.g. ["back-to-back fade", "soft matchup", "news tailwind"]
+    }
+  ],
+  "ai_takes": [
+    {
+      "player": "string",
+      "prop_type": "string",
+      "line": number,
+      "recommendation": "OVER|UNDER",
+      "algo_score": number,
+      "stance": "agree|lean|fade|neutral",
+      "take": "string (2-4 sentences)"
+    }
+  ]
+}`;
+
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    response_format: { type: 'json_object' },
+    temperature: 0.7,
+  });
+
+  const content = JSON.parse(response.choices[0].message.content);
+  return {
+    bestBets: content.best_bets || [],
+    aiTakes: content.ai_takes || [],
+    usage: response.usage,
+  };
+}
+```
+
+---
+
+### Step 4 — Main export function
+
+```javascript
+async function calcAiPicks(dateStr) {
+  const date = dateStr || new Date().toISOString().slice(0, 10);
+  console.log(`[calc-ai-picks] Running for ${date}`);
+
+  const [algoPicks, injuries, headlines, restTravel] = await Promise.all([
+    fetchAlgoPicks(date),
+    fetchInjuryContext(date),
+    fetchNewsHeadlines(),
+    fetchRestAndTravel(date),
+  ]);
+
+  if (!algoPicks.length) {
+    console.log('[calc-ai-picks] No algo picks found — skipping GPT call.');
+    return;
+  }
+
+  const { bestBets, aiTakes, usage } = await callGpt(algoPicks, injuries, headlines, restTravel);
+
+  await supabase
+    .from('ai_slate_picks')
+    .upsert({
+      slate_date: date,
+      best_bets: bestBets,
+      ai_takes: aiTakes,
+      model_used: 'gpt-4o',
+      prompt_tokens: usage?.prompt_tokens ?? null,
+      completion_tokens: usage?.completion_tokens ?? null,
+      generated_at: new Date().toISOString(),
+    }, { onConflict: 'slate_date' });
+
+  console.log(`[calc-ai-picks] Done — ${bestBets.length} best bets, ${aiTakes.length} AI takes. Tokens: ${usage?.total_tokens}`);
+}
+
+module.exports = { calcAiPicks };
+
+// Allow direct run: node scripts/calc-ai-picks.js 2026-05-16
+if (require.main === module) {
+  calcAiPicks(process.argv[2]).catch(console.error);
+}
+```
+
+---
+
+### Step 5 — Server endpoint
+
+**File:** `server.js`
+
+```javascript
+/**
+ * GET /api/wnba/ai-picks?date=YYYY-MM-DD
+ * Returns GPT-4o generated best bets and AI takes for the date.
+ */
+app.get('/api/wnba/ai-picks', async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from('ai_slate_picks')
+      .select('best_bets, ai_takes, model_used, generated_at')
+      .eq('slate_date', date)
+      .single();
+
+    if (error || !data) return res.json({ data: null });
+    res.json({ data });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+```
+
+---
+
+### Step 6 — Wire into scheduler
+
+**File:** `scripts/scheduler.js`
+
+```javascript
+const { calcAiPicks } = require('./calc-ai-picks');
+```
+
+Add to the post-midnight job (after `calcConfidence` completes, since AI picks need algo picks to exist first):
+
+```javascript
+schedule('daily AI picks', '30 11 * * *', async () => {
+  // Runs at 11:30 AM ET — after odds (11 AM) and confidence (1 PM pre-game run not yet done)
+  // Actually schedule after the pre-game confidence run at 1 PM:
+});
+
+// Better: append to the pre-game confidence job
+schedule('pre-game confidence + AI picks', '0 13 * * *', async () => {
+  await ingestScoreboardDatesForScheduler();
+  await ingestOdds();
+  await calcConfidence();
+  await calcAiPicks();   // ← add this line
+});
+```
+
+This ensures AI picks always have fresh algo picks to read.
+
+---
+
+### Step 7 — Frontend: AI PICKS tab
+
+**File:** `wnba-prop-scout.jsx`
+
+#### 7a — Add to nav
+
+```javascript
+const NAV_TABS = ['picks', 'ai', 'games', '1st bskt', 'model'];
+const NAV_LABELS = { picks: 'PICKS', ai: 'AI PICKS', games: 'GAMES', '1st bskt': '1ST BSKT', model: 'MODEL' };
+```
+
+#### 7b — API helper
+
+```javascript
+async function apiGetAiPicks(date) {
+  if (IS_SANDBOX) return null;
+  try {
+    const r = await fetch(`${API_BASE}/api/wnba/ai-picks?date=${encodeURIComponent(date)}`);
+    if (!r.ok) return null;
+    return (await r.json()).data || null;
+  } catch { return null; }
+}
+```
+
+#### 7c — AiPicksTab component
+
+The tab has two sections stacked vertically.
+
+**Section 1 — AI Best Bets:**
+
+Each best bet card is more editorial than algo cards. Layout:
+- Top bar: `AI PICK` purple badge + confidence tier badge (STRONG = green, VALUE = blue) + timestamp "Generated 11:34 AM ET"
+- Player name (large) + team + prop line (e.g. "PTS OVER 22.5")
+- Headline in large italic font (punchy, e.g. "Steals the show on tired legs")
+- Reasoning paragraph (the full GPT text)
+- Key flags as small chips at the bottom (e.g. "back-to-back fade", "soft matchup")
+- Algo score shown as a small footnote: "Model: 74" or "Not in model top picks"
+
+```jsx
+function AiPicksTab({ selectedDate }) {
+  const [data, setData]     = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    apiGetAiPicks(selectedDate).then(d => { setData(d); setLoading(false); });
+  }, [selectedDate]);
+
+  if (loading) return <LoadingState />;
+
+  if (!data) return (
+    <EmptyState
+      icon="🤖"
+      title="AI Picks not yet generated"
+      subtitle="AI picks are generated daily at ~1 PM ET after the algorithmic model runs."
+    />
+  );
+
+  const generatedTime = data.generated_at
+    ? new Date(data.generated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
+    : null;
+
+  return (
+    <div style={{ padding: '12px 0 40px' }}>
+
+      {/* Section 1: AI Best Bets */}
+      <div style={{ padding: '0 16px', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+          <span style={{ fontSize: 11, fontWeight: 800, color: '#a78bfa', letterSpacing: 1 }}>★ AI BEST BETS</span>
+          {generatedTime && <span style={{ fontSize: 9, color: T.text3 }}>Generated {generatedTime}</span>}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {(data.best_bets || []).map((pick, i) => (
+            <AiBestBetCard key={i} pick={pick} />
+          ))}
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: T.border, margin: '20px 0' }} />
+
+      {/* Section 2: AI Takes on Algo Picks */}
+      <div style={{ padding: '0 16px' }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: T.text3, letterSpacing: 1, marginBottom: 12 }}>
+          MODEL PICKS · AI COMMENTARY
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {(data.ai_takes || []).map((take, i) => (
+            <AiTakeCard key={i} take={take} />
+          ))}
+        </div>
+      </div>
+
+    </div>
+  );
+}
+```
+
+**AiBestBetCard component:**
+```jsx
+function AiBestBetCard({ pick }) {
+  const tierColor = pick.confidence_tier === 'STRONG' ? T.green : '#60a5fa';
+  const stanceColors = { agree: T.green, lean: T.yellow, fade: T.red, neutral: T.text3 };
+
+  return (
+    <div style={{
+      background: T.card,
+      border: `1px solid #6b46c144`,
+      borderLeft: `3px solid #a78bfa`,
+      borderRadius: 10,
+      padding: 14,
+    }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <span style={{ fontSize: 8, fontWeight: 800, color: '#a78bfa', background: '#6b46c122', border: '1px solid #6b46c144', borderRadius: 3, padding: '2px 5px', letterSpacing: 0.8 }}>AI PICK</span>
+        <span style={{ fontSize: 8, fontWeight: 800, color: tierColor, background: `${tierColor}22`, border: `1px solid ${tierColor}44`, borderRadius: 3, padding: '2px 5px', letterSpacing: 0.8 }}>{pick.confidence_tier}</span>
+        <div style={{ flex: 1 }} />
+        {pick.algo_score != null && (
+          <span style={{ fontSize: 9, color: T.text3 }}>Model: {pick.algo_score}</span>
+        )}
+      </div>
+
+      {/* Player + prop line */}
+      <div style={{ fontSize: 15, fontWeight: 800, color: T.text, marginBottom: 2 }}>{pick.player}</div>
+      <div style={{ fontSize: 11, color: T.accent, fontWeight: 700, marginBottom: 8 }}>
+        {pick.team} · {pick.prop_type?.toUpperCase()} {pick.recommendation} {pick.line}
+      </div>
+
+      {/* AI Headline */}
+      <div style={{ fontSize: 13, fontStyle: 'italic', color: T.text2, marginBottom: 8, lineHeight: 1.4 }}>
+        "{pick.headline}"
+      </div>
+
+      {/* Reasoning */}
+      <div style={{ fontSize: 11, color: T.text2, lineHeight: 1.6, marginBottom: 10 }}>
+        {pick.reasoning}
+      </div>
+
+      {/* Key flags */}
+      {(pick.key_flags || []).length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+          {pick.key_flags.map((flag, i) => (
+            <span key={i} style={{ fontSize: 9, color: T.text3, background: T.card2, border: `1px solid ${T.border}`, borderRadius: 4, padding: '2px 7px' }}>{flag}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+**AiTakeCard component:**
+```jsx
+function AiTakeCard({ take }) {
+  const stanceColor = { agree: T.green, lean: T.yellow, fade: T.red, neutral: T.text3 }[take.stance] || T.text3;
+  const stanceLabel = { agree: '✓ AGREE', lean: '~ LEAN', fade: '✗ FADE', neutral: '· NEUTRAL' }[take.stance] || take.stance?.toUpperCase();
+
+  return (
+    <div style={{
+      background: T.card,
+      border: `1px solid ${T.border}`,
+      borderRadius: 8,
+      padding: '10px 12px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{take.player}</span>
+        <span style={{ fontSize: 10, color: T.accent, fontWeight: 600 }}>{take.prop_type?.toUpperCase()} {take.recommendation} {take.line}</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 8, fontWeight: 800, color: stanceColor, background: `${stanceColor}22`, border: `1px solid ${stanceColor}44`, borderRadius: 3, padding: '2px 5px' }}>{stanceLabel}</span>
+        <span style={{ fontSize: 9, color: T.text3 }}>{take.algo_score}</span>
+      </div>
+      <div style={{ fontSize: 11, color: T.text2, lineHeight: 1.5 }}>{take.take}</div>
+    </div>
+  );
+}
+```
+
+---
+
+### Acceptance checks
+
+- `node scripts/calc-ai-picks.js 2026-05-16` runs without error, inserts a row into `ai_slate_picks`
+- `GET /api/wnba/ai-picks?date=2026-05-16` returns `{ data: { best_bets: [...], ai_takes: [...] } }`
+- AI PICKS tab appears in nav and renders both sections
+- Best bet cards show purple left border, AI PICK badge, headline in italics, reasoning paragraph, key flags
+- AI Takes cards show stance badge (✓ AGREE / ~ LEAN / ✗ FADE) alongside algo score
+- "Not yet generated" empty state shows if `ai_slate_picks` has no row for today
+- If `OPENAI_API_KEY` is missing, script logs a clear error and exits without crashing the scheduler
+- `response_format: { type: 'json_object' }` is set — GPT-4o always returns valid JSON; no try/parse issues
+- Token usage is logged and stored; confirm ~3,000–6,000 tokens per run (~$0.02–0.05 per day)
+
+---
+
+### Notes for Codex
+
+- The ESPN RSS feed URL may need tweaking if the CDATA format changes — make the news fetch defensive (wrap in try/catch, return `[]` on any failure). AI picks should still generate even with no news.
+- `temperature: 0.7` gives some variety day-to-day without being unpredictable. Do not set to 0 (picks become repetitive).
+- The `stance` field in `ai_takes` is intentional — "fade" means the AI disagrees with the algo pick. This is valuable signal for users and should be displayed, not suppressed.
+- If `OPENAI_API_KEY` is not set, add a guard at the top of `calcAiPicks`: `if (!process.env.OPENAI_API_KEY) { console.warn('[calc-ai-picks] No OPENAI_API_KEY — skipping'); return; }` so it fails gracefully in scheduler.
+- The `ai_slate_picks` table uses `UNIQUE(slate_date)` with upsert — re-running for the same date regenerates the picks. This is intentional (allows manual refresh if needed).
+- Add `OPENAI_API_KEY` to `.env.example` so it's documented for any future dev setup.
+
+### Completion note — 2026-05-17
+
+Task Z implemented by Codex.
+
+- Added `db/020_create_ai_slate_picks.sql` for `ai_slate_picks`. Note: the spec requested `db/016_create_ai_slate_picks.sql`, but this repo already had `016_player_name_aliases.sql`, so Codex used the next available migration number.
+- Added `scripts/calc-ai-picks.js`, which gathers top algo picks, injury context, ESPN WNBA headlines, rest/travel context, calls GPT-4o with JSON response format, and upserts `best_bets` / `ai_takes`.
+- Added `GET /api/wnba/ai-picks?date=YYYY-MM-DD` in `server.js`.
+- Wired `calcAiPicks()` into the 13:00 ET pre-game scheduler job after `calcConfidence()`, and updated `lib/scheduler-summary.js`.
+- Added `AI PICKS` to `wnba-prop-scout.jsx` nav with AI Best Bets and AI Takes sections.
+- Added `openai` dependency and documented `OPENAI_API_KEY` in `.env.example`.
+
+Verification:
+- `node --check scripts/calc-ai-picks.js` passed.
+- `node --check server.js` passed.
+- `node --check scripts/scheduler.js` passed.
+- `node --check lib/scheduler-summary.js` passed.
+- `npm run build` passed.
+- `OPENAI_API_KEY` missing guard verified with `env OPENAI_API_KEY= node scripts/calc-ai-picks.js 2026-05-16`.
+
+Manual follow-up required:
+- Apply `db/020_create_ai_slate_picks.sql` in Supabase SQL editor.
+- Set `OPENAI_API_KEY` in Railway/local env before expecting AI picks to generate.

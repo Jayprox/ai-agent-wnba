@@ -1084,6 +1084,15 @@ async function apiGetFirstBasketSlate(date) {
   } catch { return []; }
 }
 
+async function apiGetAiPicks(date) {
+  if (IS_SANDBOX) return null;
+  try {
+    const r = await fetch(`${API_BASE}/api/wnba/ai-picks?date=${encodeURIComponent(date)}`);
+    if (!r.ok) return null;
+    return (await r.json()).data || null;
+  } catch { return null; }
+}
+
 async function apiGetModelTrackRecord(days = 30) {
   if (IS_SANDBOX) return SANDBOX.modelTrackRecord;
   const r = await fetch(`${API_BASE}/api/wnba/model-track-record?days=${days}&breakdown=1`);
@@ -3056,6 +3065,208 @@ function TopPicksTab({ picks, loading, error }) {
   );
 }
 
+// ---- AI Picks tab ----
+function aiRateColor(pct) {
+  if (pct == null) return T.text3;
+  if (pct >= 55) return T.green;
+  if (pct >= 45) return T.yellow;
+  return T.red;
+}
+
+function AiBestBetCard({ pick, hitRates }) {
+  const tierColor = String(pick.confidence_tier || '').toUpperCase() === 'STRONG' ? T.green : '#60a5fa';
+  const type = String(pick.prop_type || '').toUpperCase();
+  const propKey = String(pick.prop_type || '').toLowerCase();
+  const propRate = hitRates?.by_prop?.[propKey];
+  const rec = String(pick.recommendation || '').toUpperCase();
+
+  return (
+    <div style={{
+      background: T.card,
+      border: '1px solid #7c3aed55',
+      borderLeft: '3px solid #a78bfa',
+      borderRadius: 10,
+      padding: 14,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <span style={{ fontSize: 8, fontWeight: 900, color: '#a78bfa', background: '#6b46c122', border: '1px solid #7c3aed55', borderRadius: 4, padding: '2px 6px', letterSpacing: 0.8 }}>AI PICK</span>
+        <span style={{ fontSize: 8, fontWeight: 900, color: tierColor, background: `${tierColor}22`, border: `1px solid ${tierColor}55`, borderRadius: 4, padding: '2px 6px', letterSpacing: 0.8 }}>
+          {pick.confidence_tier || 'VALUE'}
+        </span>
+        <div style={{ flex: 1 }} />
+        {pick.algo_score != null && <span style={{ fontSize: 9, color: T.text3 }}>Model: {pick.algo_score}</span>}
+      </div>
+
+      <div style={{ fontSize: 15, fontWeight: 900, color: T.text, marginBottom: 3 }}>{pick.player || 'Unknown'}</div>
+      <div style={{ fontSize: 11, color: T.accent, fontWeight: 800, marginBottom: 9 }}>
+        {pick.team || '—'} · {type} {rec} {fmtOne(pick.line)}
+      </div>
+
+      {pick.headline && (
+        <div style={{ fontSize: 13, fontStyle: 'italic', color: T.text2, marginBottom: 9, lineHeight: 1.45 }}>
+          “{pick.headline}”
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: T.text2, lineHeight: 1.6 }}>
+        {pick.reasoning || 'No AI reasoning returned.'}
+      </div>
+
+      {Array.isArray(pick.key_flags) && pick.key_flags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 11 }}>
+          {pick.key_flags.map((flag, i) => (
+            <span key={`${flag}-${i}`} style={{ fontSize: 9, color: T.text3, background: T.card2, border: `1px solid ${T.border}`, borderRadius: 5, padding: '2px 7px' }}>
+              {flag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {propRate && propRate.total >= 3 && (
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            fontSize: 9,
+            color: aiRateColor(propRate.pct),
+            background: `${aiRateColor(propRate.pct)}18`,
+            border: `1px solid ${aiRateColor(propRate.pct)}44`,
+            borderRadius: 5,
+            padding: '3px 7px',
+            fontWeight: 900,
+            letterSpacing: 0.5,
+          }}>
+            AI ON {type}: {propRate.hits}/{propRate.total}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiTakeCard({ take }) {
+  const stance = String(take.stance || 'neutral').toLowerCase();
+  const stanceColor = { agree: T.green, lean: T.yellow, fade: T.red, neutral: T.text3 }[stance] || T.text3;
+  const stanceLabel = { agree: 'AGREE', lean: 'LEAN', fade: 'FADE', neutral: 'NEUTRAL' }[stance] || stance.toUpperCase();
+
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 9, padding: '11px 12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: T.text }}>{take.player || 'Unknown'}</span>
+        <span style={{ fontSize: 10, color: T.accent, fontWeight: 800 }}>
+          {String(take.prop_type || '').toUpperCase()} {String(take.recommendation || '').toUpperCase()} {fmtOne(take.line)}
+        </span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 8, fontWeight: 900, color: stanceColor, background: `${stanceColor}22`, border: `1px solid ${stanceColor}55`, borderRadius: 4, padding: '2px 6px', letterSpacing: 0.5 }}>
+          {stanceLabel}
+        </span>
+        {take.algo_score != null && <span style={{ fontSize: 9, color: T.text3 }}>{take.algo_score}</span>}
+      </div>
+      <div style={{ fontSize: 11, color: T.text2, lineHeight: 1.55 }}>{take.take || 'No take returned.'}</div>
+    </div>
+  );
+}
+
+function AiPicksTab({ selectedDate }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    apiGetAiPicks(selectedDate)
+      .then(result => { if (!cancelled) setData(result); })
+      .catch(err => { if (!cancelled) setError(err.message || 'Failed to load AI picks'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedDate]);
+
+  const generatedTime = data?.generated_at
+    ? new Date(data.generated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
+    : null;
+  const seasonRate = data?.hit_rates?.season || {};
+  const l5Rate = data?.hit_rates?.l5 || {};
+  const hasSeasonRecord = Number(seasonRate.total) > 0;
+  const hasRetro = Boolean(data?.hit_rates?.has_retroactive);
+
+  if (loading) return <div className="ps-empty-state">Loading AI picks…</div>;
+  if (error) return <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>;
+  if (!data) {
+    return (
+      <div>
+        <div className="ps-daily-card">
+          <span>✦ AI PICKS</span>
+          <span style={{ color: T.text3 }}>PENDING</span>
+        </div>
+        <div className="ps-empty-state">AI picks are generated daily after the pre-game model run.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="ps-daily-card">
+        <span>✦ AI PICKS</span>
+        <span style={{ color: T.text3 }}>{generatedTime ? `Generated ${generatedTime}` : data.model_used || 'GPT-4o'}</span>
+      </div>
+
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+          <span style={{ fontSize: 11, fontWeight: 900, color: '#a78bfa', letterSpacing: 1 }}>AI BEST BETS</span>
+          {hasSeasonRecord && (
+            <span style={{ fontSize: 10, color: T.text3 }}>
+              Season:{' '}
+              <span style={{ color: aiRateColor(seasonRate.pct), fontWeight: 900 }}>
+                {seasonRate.hits}-{seasonRate.misses} ({seasonRate.pct}%){hasRetro ? '*' : ''}
+              </span>
+            </span>
+          )}
+          {Number(l5Rate.total) >= 3 && (
+            <span style={{ fontSize: 10, color: T.text3 }}>
+              L5:{' '}
+              <span style={{ color: aiRateColor(l5Rate.pct), fontWeight: 900 }}>
+                {l5Rate.hits}/{l5Rate.total}
+              </span>
+            </span>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 9, color: T.text3 }}>
+            {generatedTime ? `Generated ${generatedTime}` : data.model_used || 'gpt-4o'}
+          </span>
+        </div>
+        {(data.best_bets || []).length ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', gap: 14 }}>
+            {(data.best_bets || []).map((pick, i) => (
+              <AiBestBetCard key={`${pick.player}-${i}`} pick={pick} hitRates={data.hit_rates} />
+            ))}
+          </div>
+        ) : (
+          <div className="ps-empty-state">No AI best bets returned for this slate.</div>
+        )}
+        {hasRetro && (
+          <div style={{ fontSize: 9, color: T.text3, marginTop: 8, fontStyle: 'italic' }}>
+            * includes retroactive picks generated after games completed
+          </div>
+        )}
+      </div>
+
+      <div style={{ height: 1, background: T.border, margin: '20px 0' }} />
+
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 900, color: T.text3, letterSpacing: 1, marginBottom: 12 }}>
+          MODEL PICKS · AI COMMENTARY
+        </div>
+        {(data.ai_takes || []).length ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {(data.ai_takes || []).map((take, i) => <AiTakeCard key={`${take.player}-${take.prop_type}-${i}`} take={take} />)}
+          </div>
+        ) : (
+          <div className="ps-empty-state">No AI takes returned for this slate.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- First Basket tab ----
 function FirstBasketTab({ selectedDate }) {
   const [rows, setRows]       = useState(null);
@@ -4138,8 +4349,8 @@ function BoardTab({ picks: todayPicks, loading: todayLoading, error: todayError,
 // ============================================================
 // APP ROOT
 // ============================================================
-const NAV_TABS   = ['slate', 'games', 'picks', 'fb', 'model'];
-const NAV_LABELS = { slate:'SLATE', games:'GAMES', picks:'PICKS', fb:'1ST BSKT', model:'MODEL' };
+const NAV_TABS   = ['slate', 'games', 'picks', 'ai', 'fb', 'model'];
+const NAV_LABELS = { slate:'SLATE', games:'GAMES', picks:'PICKS', ai:'AI PICKS', fb:'1ST BSKT', model:'MODEL' };
 
 export default function App() {
   const [activeNav, setActiveNav]           = useState('slate');
@@ -4348,6 +4559,13 @@ export default function App() {
       {activeNav === 'picks' && (
         <div className="ps-shell ps-page">
           <TopPicksTab picks={topPicks} loading={loadingPicks} error={picksError} />
+        </div>
+      )}
+
+      {/* ── AI PICKS tab ── */}
+      {activeNav === 'ai' && (
+        <div className="ps-shell ps-page">
+          <AiPicksTab selectedDate={selectedDate} />
         </div>
       )}
 

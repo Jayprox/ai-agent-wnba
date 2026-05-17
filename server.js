@@ -1101,6 +1101,84 @@ app.get('/api/wnba/boxscore', async (req, res) => {
 });
 
 /**
+ * GET /api/wnba/ai-picks?date=YYYY-MM-DD
+ * Returns GPT-4o generated best bets and AI takes for the date.
+ */
+app.get('/api/wnba/ai-picks', async (req, res) => {
+  try {
+    const date = req.query.date || etDateString();
+    const [{ data, error }, { data: results, error: resultsError }, { data: retroCheck, error: retroError }] = await Promise.all([
+      supabase
+        .from('ai_slate_picks')
+        .select('best_bets, ai_takes, model_used, prompt_tokens, completion_tokens, generated_at, is_retroactive')
+        .eq('slate_date', date)
+        .maybeSingle(),
+      supabase
+        .from('ai_pick_results')
+        .select('prop_type, result, hit, slate_date, resolved_at')
+        .in('result', ['hit', 'miss'])
+        .order('slate_date', { ascending: false })
+        .order('resolved_at', { ascending: false })
+        .limit(200),
+      supabase
+        .from('ai_slate_picks')
+        .select('is_retroactive')
+        .eq('is_retroactive', true)
+        .limit(1),
+    ]);
+
+    if (error) throw error;
+    if (resultsError) throw resultsError;
+    if (retroError) throw retroError;
+    if (!data) return res.json({ data: null });
+
+    const settled = results || [];
+    const hits = settled.filter(row => row.hit === true).length;
+    const misses = settled.filter(row => row.hit === false).length;
+    const total = hits + misses;
+
+    const byProp = {};
+    for (const row of settled) {
+      const propType = String(row.prop_type || '').toLowerCase();
+      if (!propType) continue;
+      if (!byProp[propType]) byProp[propType] = { hits: 0, total: 0, pct: null };
+      byProp[propType].total += 1;
+      if (row.hit === true) byProp[propType].hits += 1;
+    }
+    for (const propType of Object.keys(byProp)) {
+      const prop = byProp[propType];
+      prop.pct = prop.total > 0 ? Math.round((prop.hits / prop.total) * 100) : null;
+    }
+
+    const l5 = settled.slice(0, 5);
+    const l5Hits = l5.filter(row => row.hit === true).length;
+
+    res.json({
+      data: {
+        ...data,
+        hit_rates: {
+          season: {
+            hits,
+            misses,
+            total,
+            pct: total > 0 ? Math.round((hits / total) * 100) : null,
+          },
+          l5: {
+            hits: l5Hits,
+            total: l5.length,
+            pct: l5.length > 0 ? Math.round((l5Hits / l5.length) * 100) : null,
+          },
+          by_prop: byProp,
+          has_retroactive: (retroCheck || []).length > 0,
+        },
+      },
+    });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
  * GET /api/wnba/injuries?gameId=X
  * Returns latest injury reports for players on both teams in the game.
  */
