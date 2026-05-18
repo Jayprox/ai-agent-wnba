@@ -2716,7 +2716,7 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
       line: pick.line,
       recommendation: pick.recommendation,
       score_tier: Number(pick.confidence_score || 0) >= 65 ? 'STRONG' : 'VALUE',
-      confidence_score: pick.confidence_score,
+      confidence_score: pick.confidence_score != null ? Math.round(pick.confidence_score) : null,
       market: pick.prop_type,
       book_line: pick.line,
     }));
