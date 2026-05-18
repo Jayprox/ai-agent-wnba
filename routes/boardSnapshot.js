@@ -54,13 +54,13 @@ router.post('/', async (req, res) => {
       return res.json({ ok: true, slateDate, count: 0 });
     }
 
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('board_card_snapshots')
-      .upsert(rows, { onConflict: 'slate_date,player_id,prop_type,source', ignoreDuplicates: true })
-      .select('id');
+      .insert(rows);
 
-    if (error) throw error;
-    res.json({ ok: true, slateDate, count: data?.length ?? rows.length });
+    // 23505 = unique_violation — row already exists for this date, that's fine
+    if (error && error.code !== '23505') throw error;
+    res.json({ ok: true, slateDate, count: rows.length });
   } catch (error) {
     console.error('[board-snapshot]', error.message);
     res.status(502).json({ error: error.message });

@@ -1216,12 +1216,10 @@ app.post('/api/wnba/board-snapshot', async (req, res) => {
 
     const { error } = await supabase
       .from('board_card_snapshots')
-      .upsert(rows, {
-        onConflict: 'slate_date,player_id,prop_type,source',
-        ignoreDuplicates: true,
-      });
+      .insert(rows);
 
-    if (error) throw error;
+    // 23505 = unique_violation — row already exists for this date, that's fine
+    if (error && error.code !== '23505') throw error;
     res.json({ ok: true, saved: rows.length });
   } catch (e) {
     handleError(res, e);

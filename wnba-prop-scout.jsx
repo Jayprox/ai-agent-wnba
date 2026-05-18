@@ -2725,7 +2725,9 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ slateDate: selectedDate, cards }),
-    }).catch(() => {});
+    }).then(r => {
+      if (!r.ok) r.json().then(e => console.warn('[board-snapshot] POST failed:', e)).catch(() => {});
+    }).catch(e => console.warn('[board-snapshot] POST error:', e));
   }, [picks, loading, error, selectedDate]);
 
   // Filter the picks list
