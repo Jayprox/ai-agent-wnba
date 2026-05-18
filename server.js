@@ -10,6 +10,7 @@ const cors    = require('cors');
 const { supabase } = require('./lib/supabase');
 const { buildCardPayload } = require('./lib/scoring');
 const { gradePropPick } = require('./lib/scoring/grade-prop-pick');
+const { estimateProbability, calcEV, calcKelly } = require('./lib/scoring/ev-kelly');
 const {
   summarizeModelTrackRecord,
   summarizeHighTierByPropType,
@@ -1556,7 +1557,7 @@ app.get('/api/wnba/top-picks', async (req, res) => {
       const visitorTeam = game ? teamsById.get(game.visitor_team_id) : null;
       const log        = logsByPlayerGame.get(`${pick.player_id}:${pick.game_id}`);
       const grade      = gradePropPick(pick, log, game);
-      return buildCardPayload({
+      const cardPayload = buildCardPayload({
         ...pick,
         ...grade,
         line_sportsbook_short: sportsbookShortLabel(pick.sportsbook),
@@ -1565,6 +1566,21 @@ app.get('/api/wnba/top-picks', async (req, res) => {
         home_team:    homeTeam    ? formatTeam(homeTeam)    : null,
         visitor_team: visitorTeam ? formatTeam(visitorTeam) : null,
       });
+
+      const pHit = estimateProbability(
+        pick.confidence_score,
+        pick.hit_rate_over_season,
+        pick.hit_rate_over_l5
+      );
+      const ev = calcEV(pHit);
+      const kellyFraction = calcKelly(pHit);
+
+      return {
+        ...cardPayload,
+        p_hit: Math.round(pHit * 1000) / 1000,
+        ev: Math.round(ev * 10000) / 10000,
+        kelly_fraction: Math.round(kellyFraction * 10000) / 10000,
+      };
     });
 
     res.json({ data });

@@ -2898,6 +2898,20 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
                 {pick.correlated_opportunity && (
                   <span style={{ background: T.greenDim, color: T.green, border: `1px solid ${T.green}`, borderRadius: 4, fontSize: 9, padding: '2px 6px' }}>CORRELATED</span>
                 )}
+                {pick.ev > 0 && (
+                  <span style={{
+                    fontSize: 9,
+                    fontWeight: 700,
+                    color: T.accent,
+                    background: `${T.accent}18`,
+                    border: `1px solid ${T.accent}44`,
+                    borderRadius: 4,
+                    padding: '2px 6px',
+                    letterSpacing: 0.5,
+                  }}>
+                    +EV {(pick.ev * 100).toFixed(1)}¢/$
+                  </span>
+                )}
               </div>
 
               {/* Stats row */}
@@ -2917,6 +2931,36 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
                   <HitRateBadge label="L5" value={hrL5} denom={5} />
                   <HitRateBadge label="L10" value={pick.hit_rate_over_l10} denom={10} />
                   <HitRateBadge label="VS OPP" value={hrOpp} />
+                </div>
+              )}
+
+              {pick.p_hit != null && (() => {
+                const pct = Math.round(pick.p_hit * 100);
+                const bar = Math.min(100, Math.max(0, Math.round(((pick.p_hit - 0.45) / 0.25) * 100)));
+                const col = pick.p_hit >= 0.63 ? T.green
+                  : pick.p_hit >= 0.58 ? T.accent
+                  : pick.p_hit >= 0.53 ? T.yellow
+                  : T.red;
+                return (
+                  <div style={{ marginTop: 7 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontSize: 9, color: T.text3, letterSpacing: 0.5 }}>EST. P(HIT)</span>
+                      <span style={{ fontSize: 10, color: col, fontWeight: 700 }}>{pct}%</span>
+                    </div>
+                    <div style={{ height: 4, background: T.border, borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${bar}%`, background: col, borderRadius: 2, transition: 'width 0.3s' }} />
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {pick.kelly_fraction > 0.005 && (
+                <div style={{ marginTop: 6, fontSize: 9, color: T.text3 }}>
+                  Kelly sizing:{' '}
+                  <span style={{ color: T.text2, fontWeight: 600 }}>
+                    {(pick.kelly_fraction * 100).toFixed(1)}% of bankroll
+                  </span>
+                  {' '}(1/4 Kelly, -110)
                 </div>
               )}
 

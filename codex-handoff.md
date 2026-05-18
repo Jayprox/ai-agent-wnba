@@ -6525,3 +6525,274 @@ Verification:
 Manual follow-up required:
 - Apply `db/020_create_ai_slate_picks.sql` in Supabase SQL editor.
 - Set `OPENAI_API_KEY` in Railway/local env before expecting AI picks to generate.
+
+---
+
+## Task AE — EV + Kelly Sizing on PICKS Cards
+
+**Goal:** Add expected-value (EV) and Kelly Criterion sizing signals to every card in the PICKS tab. This gives users not just a direction but a probabilistic edge estimate and a suggested bet size relative to bankroll. The system stays completely client-side / server-side — no new DB tables, no new ingestion scripts.
+
+**Files to change:**
+- `lib/scoring/ev-kelly.js` (new file — pure functions, fully unit-testable)
+- `server.js` — enrich `GET /api/wnba/top-picks` response with `p_hit`, `ev`, `kelly_fraction`
+- `wnba-prop-scout.jsx` — add probability bar, EV chip, Kelly sizing text to PICKS card layout
+
+---
+
+### Background
+
+The PICKS tab already shows `confidence_score` (0–80), `score_tier` (HIGH/VALUE/SPEC), and historical hit-rate badges (season %, L5 fraction). What's missing is the leap from "this pick is high confidence" to "how much edge does that confidence represent at current juice?" Two bettors both know the model likes a pick; only the one who understands EV and sizing has a framework for comparing it to every other pick on the board.
+
+This task adds:
+1. **`p_hit`** — estimated probability the pick hits (blended model score + historical rates)
+2. **EV** — expected dollars per $100 bet at standard -110 juice
+3. **Kelly fraction** — quarter-Kelly bankroll % recommendation, capped at 5%
+
+---
+
+### Step 1 — New file: `lib/scoring/ev-kelly.js`
+
+Create this file. All three functions are pure (no DB, no side effects). Uses CommonJS `module.exports`.
+
+```js
+'use strict';
+
+/**
+ * Estimate the probability a pick hits.
+ *
+ * Blend three signals:
+ *   1. Model confidence score (0–80 scale) → mapped to a 0.50–0.72 probability range
+ *   2. Season hit rate (proportion, 0–1)
+ *   3. L5 hit rate (proportion, 0–1)
+ *
+ * When historical rates are unavailable, fall back to model signal only.
+ *
+ * @param {number}      confidenceScore   0–80 confidence score from prop_analysis_results
+ * @param {number|null} hitRateSeason     e.g. 0.62 = 62% season hit rate (null if no data)
+ * @param {number|null} hitRateL5         e.g. 0.80 = 4/5 in last 5 (null if no data)
+ * @returns {number} p_hit in [0, 1]
+ */
+function estimateProbability(confidenceScore, hitRateSeason, hitRateL5) {
+  const score = Math.max(0, Math.min(80, Number(confidenceScore) || 0));
+
+  // Model signal: linear map [0, 80] → [0.48, 0.72]
+  // At 55 (publish min) → ~0.545; at 70 (HIGH tier) → ~0.64; at 80 → 0.72
+  const modelP = 0.48 + (score / 80) * 0.24;
+
+  const season = typeof hitRateSeason === 'number' && isFinite(hitRateSeason) ? hitRateSeason : null;
+  const l5     = typeof hitRateL5 === 'number'     && isFinite(hitRateL5)     ? hitRateL5     : null;
+
+  // Determine blend weights based on data availability
+  if (season !== null && l5 !== null) {
+    // All three signals available: model 50%, season 30%, L5 20%
+    return Math.max(0.35, Math.min(0.85, modelP * 0.50 + season * 0.30 + l5 * 0.20));
+  }
+  if (season !== null) {
+    // Model + season only: 60/40
+    return Math.max(0.35, Math.min(0.85, modelP * 0.60 + season * 0.40));
+  }
+  if (l5 !== null) {
+    // Model + L5 only: 70/30
+    return Math.max(0.35, Math.min(0.85, modelP * 0.70 + l5 * 0.30));
+  }
+  // Model signal only — clamp conservatively
+  return Math.max(0.40, Math.min(0.75, modelP));
+}
+
+/**
+ * Calculate expected value per $1 wagered at a given American odds line.
+ * Standard -110 juice if not provided.
+ *
+ * EV = (p_hit × payout) − (1 − p_hit) × 1.0
+ * where payout = 100 / |americanOdds| for negative odds (e.g. -110 → 100/110 ≈ 0.909)
+ *
+ * @param {number} pHit           Probability of winning (0–1)
+ * @param {number} [americanOdds] American moneyline (e.g. -110). Defaults to -110.
+ * @returns {number} EV per $1 risked (positive = +EV)
+ */
+function calcEV(pHit, americanOdds = -110) {
+  if (!isFinite(pHit) || pHit <= 0 || pHit >= 1) return 0;
+  const odds = Number(americanOdds) || -110;
+  const payout = odds < 0 ? 100 / Math.abs(odds) : odds / 100;
+  return pHit * payout - (1 - pHit) * 1.0;
+}
+
+/**
+ * Calculate quarter-Kelly bankroll fraction for a pick.
+ *
+ * Full Kelly: f* = (b × p − q) / b
+ *   where b = decimal payout (e.g. 0.909 at -110), p = p_hit, q = 1 − p_hit
+ *
+ * Quarter Kelly: f = f* × 0.25
+ * Capped at 5% bankroll (0.05) to avoid catastrophic sizing on variance.
+ * Returns 0 when Kelly is negative (no edge).
+ *
+ * @param {number} pHit           Probability of winning (0–1)
+ * @param {number} [americanOdds] American moneyline. Defaults to -110.
+ * @returns {number} Recommended fraction of bankroll to wager (0–0.05)
+ */
+function calcKelly(pHit, americanOdds = -110) {
+  if (!isFinite(pHit) || pHit <= 0 || pHit >= 1) return 0;
+  const odds = Number(americanOdds) || -110;
+  const b = odds < 0 ? 100 / Math.abs(odds) : odds / 100;
+  const fullKelly = (b * pHit - (1 - pHit)) / b;
+  if (fullKelly <= 0) return 0;
+  return Math.min(0.05, fullKelly * 0.25);
+}
+
+module.exports = { estimateProbability, calcEV, calcKelly };
+```
+
+---
+
+### Step 2 — Enrich `GET /api/wnba/top-picks` in `server.js`
+
+**Where to change:** In the top-picks handler, after `buildCardPayload` is applied to each pick (look for where `buildCardPayload` or the response array is assembled), add the EV/Kelly fields.
+
+At the top of the handler file (or just below the other `require` calls in `server.js`):
+
+```js
+const { estimateProbability, calcEV, calcKelly } = require('./lib/scoring/ev-kelly');
+```
+
+In the per-pick enrichment step (after `buildCardPayload`), add:
+
+```js
+// EV + Kelly enrichment
+const pHit = estimateProbability(
+  pick.confidence_score,
+  pick.hit_rate_over_season,   // already in top-picks response
+  pick.hit_rate_over_l5,       // already in top-picks response
+);
+const ev             = calcEV(pHit);
+const kelly_fraction = calcKelly(pHit);
+
+return {
+  ...cardPayload,
+  p_hit:          Math.round(pHit * 1000) / 1000,   // 3 decimal places
+  ev:             Math.round(ev * 10000) / 10000,    // 4 decimal places (small number)
+  kelly_fraction: Math.round(kelly_fraction * 10000) / 10000,
+};
+```
+
+The three new fields are additive only — no existing field is removed or renamed. `p_hit`, `ev`, and `kelly_fraction` are included in every pick object returned by the endpoint.
+
+**Note on hit-rate field names:** The existing top-picks endpoint may expose hit rate data as `hit_rate_over_season` / `hit_rate_over_l5` (check `server.js` around the top-picks query to confirm the exact field names). Use whatever names the endpoint already returns — do not rename them.
+
+---
+
+### Step 3 — Frontend PICKS card updates in `wnba-prop-scout.jsx`
+
+Three visual additions to every top-pick card in `TopPicksTab`:
+
+**3a — Probability bar**
+
+Below the existing hit-rate badges row, add a probability meter. The bar fills left-to-right as `p_hit` increases. Color transitions:
+- `p_hit < 0.53` → red (below EV threshold)
+- `0.53 ≤ p_hit < 0.58` → yellow (marginal)
+- `0.58 ≤ p_hit < 0.63` → `T.accent` (orange — solid edge)
+- `p_hit ≥ 0.63` → `T.green` (strong edge)
+
+```jsx
+{pick.p_hit != null && (() => {
+  const pct  = Math.round(pick.p_hit * 100);
+  const bar  = Math.min(100, Math.max(0, Math.round((pick.p_hit - 0.45) / 0.25 * 100)));
+  const col  = pick.p_hit >= 0.63 ? T.green
+             : pick.p_hit >= 0.58 ? T.accent
+             : pick.p_hit >= 0.53 ? T.yellow : T.red;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+        <span style={{ fontSize: 9, color: T.text3, letterSpacing: 0.5 }}>EST. P(HIT)</span>
+        <span style={{ fontSize: 10, color: col, fontWeight: 700 }}>{pct}%</span>
+      </div>
+      <div style={{ height: 4, background: T.border, borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${bar}%`, background: col, borderRadius: 2, transition: 'width 0.3s' }} />
+      </div>
+    </div>
+  );
+})()}
+```
+
+**3b — EV chip**
+
+In the stat row (alongside confidence score, tier badge, etc.), add an EV chip. Only show when `pick.ev > 0` (positive EV):
+
+```jsx
+{pick.ev > 0 && (
+  <span style={{
+    fontSize: 9,
+    fontWeight: 700,
+    color: T.accent,
+    background: `${T.accent}18`,
+    border: `1px solid ${T.accent}44`,
+    borderRadius: 4,
+    padding: '2px 6px',
+    letterSpacing: 0.5,
+  }}>
+    +EV {(pick.ev * 100).toFixed(1)}¢/$
+  </span>
+)}
+```
+
+This shows the EV as cents earned per dollar wagered. Example: `ev = 0.042` → `+EV 4.2¢/$`. The format is familiar to sharp bettors.
+
+When `pick.ev <= 0`, show nothing (don't show negative EV to avoid cluttering the card — the confidence score already communicates the tier).
+
+**3c — Kelly sizing text**
+
+Below the probability bar (or at the bottom of the card, after key factors), add a small Kelly sizing line. Only show when `pick.kelly_fraction > 0.005` (0.5% minimum — below that it's noise):
+
+```jsx
+{pick.kelly_fraction > 0.005 && (
+  <div style={{ marginTop: 6, fontSize: 9, color: T.text3 }}>
+    Kelly sizing: <span style={{ color: T.text2, fontWeight: 600 }}>
+      {(pick.kelly_fraction * 100).toFixed(1)}% of bankroll
+    </span>
+    {' '}(¼ Kelly, −110)
+  </div>
+)}
+```
+
+This keeps sizing context in view without dominating the card. The `(¼ Kelly, −110)` footnote tells the user it's already derated from full Kelly and assumes standard juice.
+
+---
+
+### Summary of new fields on pick cards
+
+| Field | Example value | Shown when |
+|-------|--------------|------------|
+| `p_hit` | `0.614` | Always (bar visible) |
+| `ev` | `0.0421` | `ev > 0` only |
+| `kelly_fraction` | `0.0187` | `kelly_fraction > 0.005` |
+
+---
+
+### Acceptance checks
+
+- `node --check lib/scoring/ev-kelly.js` passes
+- `require('./lib/scoring/ev-kelly')` in a Node REPL returns all three functions
+- Smoke test: `estimateProbability(72, 0.62, 0.80)` returns a value in `[0.60, 0.75]`
+- Smoke test: `calcEV(0.55)` returns approximately `0.0` (near break-even at 55%)
+- Smoke test: `calcEV(0.60)` returns approximately `0.045` (positive EV)
+- Smoke test: `calcKelly(0.60)` returns approximately `0.014` (1.4%, well under 5% cap)
+- Smoke test: `calcKelly(0.50)` returns `0` (no edge at coin flip)
+- `GET /api/wnba/top-picks?date=<any date>` returns `p_hit`, `ev`, `kelly_fraction` on each pick
+- PICKS cards show the probability bar for all picks
+- EV chip only appears on picks where `ev > 0`
+- Kelly sizing text only appears when `kelly_fraction > 0.005`
+- Picks with `confidence_score < 55` should show red probability bars (p_hit near or below 0.53)
+- HIGH tier picks (`confidence_score ≥ 70`) should typically show `+EV` chips
+- `node --check server.js` passes
+- `npm run build` passes
+- No regressions on existing PICKS tab rendering (snapshots, hit badges, filter pills, Analyst Take tray all unaffected)
+
+### Completion note — 2026-05-18
+
+- Added `lib/scoring/ev-kelly.js` with pure CommonJS helpers: `estimateProbability`, `calcEV`, and `calcKelly`.
+- Updated `GET /api/wnba/top-picks` in `server.js` to enrich every returned pick with rounded `p_hit`, `ev`, and `kelly_fraction` after `buildCardPayload()`.
+- Updated PICKS cards in `wnba-prop-scout.jsx` to show a positive-EV chip, an estimated hit-probability meter, and quarter-Kelly bankroll sizing when the suggested fraction clears 0.5%.
+- Verification passed: `node --check lib/scoring/ev-kelly.js`, `node --check server.js`, and `npm run build`.
+- Helper smoke test passed for exports and probability range: `estimateProbability(72, 0.62, 0.80) = 0.6940`; `calcKelly(0.50) = 0`.
+- Note: using the formula specified in Task AE, `calcEV(0.55) = 0.0500`, `calcEV(0.60) = 0.1455`, and `calcKelly(0.60) = 0.0400`; these differ from the prose approximations but match the provided EV/Kelly formulas at -110.
+- API smoke test passed: `GET /api/wnba/top-picks?date=2026-05-08&limit=1` returned `p_hit`, `ev`, and `kelly_fraction`.
