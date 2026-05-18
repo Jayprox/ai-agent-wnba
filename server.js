@@ -41,6 +41,7 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 app.use((req, res, next) => { console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`); next(); });
+app.use('/api/board-snapshot', require('./routes/boardSnapshot'));
 
 // ============================================================
 // ERROR HELPER
@@ -1173,6 +1174,95 @@ app.get('/api/wnba/ai-picks', async (req, res) => {
         },
       },
     });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * POST /api/wnba/board-snapshot
+ * Upserts a batch of top picks as point-in-time board card snapshots.
+ * Called by the frontend when the PICKS tab loads for a new date.
+ * Body: { slateDate: 'YYYY-MM-DD', cards: [...] }
+ */
+app.post('/api/wnba/board-snapshot', async (req, res) => {
+  try {
+    const { slateDate, cards } = req.body || {};
+    if (!slateDate || !Array.isArray(cards) || cards.length === 0) {
+      return res.status(400).json({ error: 'slateDate and cards[] required' });
+    }
+
+    const rows = cards
+      .map(card => ({
+        slate_date: slateDate,
+        player_id: card.player_id,
+        prop_type: card.prop_type,
+        line: card.line,
+        recommendation: card.recommendation,
+        lean: String(card.recommendation || '').toLowerCase(),
+        market: card.market || null,
+        score_tier: card.score_tier || null,
+        confidence_score: card.confidence_score || null,
+        book_line: card.book_line || card.line,
+        locked_at: new Date().toISOString(),
+        source: 'wnba',
+      }))
+      .filter(row => row.player_id && row.prop_type && row.recommendation);
+
+    if (!rows.length) {
+      return res.status(400).json({ error: 'No valid snapshot cards provided' });
+    }
+
+    const { error } = await supabase
+      .from('board_card_snapshots')
+      .upsert(rows, {
+        onConflict: 'slate_date,player_id,prop_type,source',
+        ignoreDuplicates: true,
+      });
+
+    if (error) throw error;
+    res.json({ ok: true, saved: rows.length });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * GET /api/admin/jobs/resolve-card-snapshots?date=YYYY-MM-DD
+ * Manually trigger board card snapshot resolution for a given date.
+ * Guarded by x-admin-secret header.
+ */
+app.get('/api/admin/jobs/resolve-card-snapshots', async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const { resolveCardSnapshots } = require('./jobs/resolveCardSnapshotsJob');
+    const date = req.query.date || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    await resolveCardSnapshots(date);
+    res.json({ ok: true, date });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+
+/**
+ * GET /api/admin/jobs/resolve-board-snapshots?date=YYYY-MM-DD
+ * Manually trigger board snapshot resolution for the WNBA app.
+ */
+app.get('/api/admin/jobs/resolve-board-snapshots', async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const { resolveBoardSnapshots } = require('./scripts/resolve-board-snapshots');
+    const date = req.query.date || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    await resolveBoardSnapshots(date);
+    res.json({ ok: true, date });
   } catch (e) {
     handleError(res, e);
   }

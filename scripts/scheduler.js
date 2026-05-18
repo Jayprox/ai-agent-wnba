@@ -19,8 +19,11 @@ const { calcFirstBasket } = require('./calc-first-basket');
 const { ingestLineups }   = require('./ingest-lineups');
 const { calcAiPicks } = require('./calc-ai-picks');
 const { resolveAiPicks } = require('./resolve-ai-picks');
+const { resolveBoardSnapshots } = require('./resolve-board-snapshots');
+const { resolveCardSnapshots } = require('../jobs/resolveCardSnapshotsJob');
 
 const TIMEZONE = 'America/New_York';
+const HONOLULU_TIMEZONE = 'Pacific/Honolulu';
 
 function timestamp() {
   return new Date().toISOString();
@@ -58,6 +61,11 @@ async function runJob(name, fn) {
 function schedule(name, expression, fn) {
   cron.schedule(expression, () => runJob(name, fn), { timezone: TIMEZONE });
   console.log(`[scheduler] Scheduled ${name}: ${expression} (${TIMEZONE})`);
+}
+
+function scheduleInTimezone(name, expression, timezone, fn) {
+  cron.schedule(expression, () => runJob(name, fn), { timezone });
+  console.log(`[scheduler] Scheduled ${name}: ${expression} (${timezone})`);
 }
 
 function startScheduler() {
@@ -103,6 +111,7 @@ function startScheduler() {
     await ingestEspnIds();
     await ingestPlayerLogs({ recentDays: 2 }); // re-process recent games even if partially logged
     await resolveAiPicks();
+    await resolveBoardSnapshots();
   });
 
   schedule('post-midnight logs + metrics', '30 0 * * *', async () => {
@@ -117,6 +126,9 @@ function startScheduler() {
     await calcConfidence();   // generate prop recommendations from updated metrics
     await calcFirstBasket();
   });
+
+  scheduleInTimezone('resolve board card snapshots 1am HST', '0 1 * * *', HONOLULU_TIMEZONE, () => resolveCardSnapshots());
+  scheduleInTimezone('resolve board card snapshots 2am HST', '0 2 * * *', HONOLULU_TIMEZONE, () => resolveCardSnapshots());
 
   console.log(`[scheduler] Running indefinitely as of ${timestamp()}`);
 }

@@ -4915,10 +4915,448 @@ curl -H "x-admin-secret: YOUR_SECRET" \
 
 - **Task Y (Production Hardening)** — ✅ Complete.
 - **Task Z (AI Picks Tab)** — ✅ Complete. Picks lock on first write; use `--force` to regenerate.
-- **Task AA (AI Pick Resolution + Hit Rate Badges)** — see full spec below. Next up for Codex.
+- **Task AA (AI Pick Resolution + Hit Rate Badges)** — ✅ Complete.
+- **Task AB (AI Pick Transparency)** — ✅ Complete. `is_retroactive` flag + `input_snapshot` JSONB on `ai_slate_picks`. Asterisk shown in UI when retroactive picks exist.
+- **Game predictions on GAMES tab** — ✅ Complete. Confirmed via code audit 2026-05-17. `/api/wnba/game-predictions` endpoint live; `GamesTab` renders projected total, spread, moneyline, and team scores.
+- **Cursor Task 118 (board_card_snapshots)** — ✅ Complete in `backend/` (Cursor's workspace). Confirmed by Codex 2026-05-17.
+- **Task AC (Board Card Snapshots — WNBA app)** — ⏳ Pending. Port board card snapshots to the WNBA app (`server.js` root + `wnba-prop-scout.jsx`). See Task AD below.
 - **Box score data lag** — box scores only populate after the 10 PM ET ingest sweep. No action needed, just user expectation.
-- **`board_card_snapshots` migration** — must be applied manually in Supabase SQL editor if not yet run (`db/005_board_card_snapshots.sql`).
-- **`ADMIN_SECRET` env var** — must be set in Railway/production for the resolve-card-snapshots admin route to work.
+
+---
+
+## Task AD — Board Card Snapshots for WNBA App
+
+**Background:** The `prop-scout-v7.jsx` / `backend/` side of the repo already has board card snapshots wired up (Cursor Task 118). This task ports the same concept to the WNBA Prop Scout app (`wnba-prop-scout.jsx` + root `server.js` + `scripts/`).
+
+**Goal:** When the PICKS tab loads for a date, capture a point-in-time snapshot of the top picks being shown. After games go final, resolve each snapshot row against actual box score results. This gives a reliable historical record of what the app was surfacing each day — separate from the full `prop_analysis_results` table which stores all 200+ analyzed props.
+
+**Important context:**
+- The WNBA app lives at the **repo root**: `server.js`, `scripts/`, `db/`, `wnba-prop-scout.jsx`
+- Do NOT modify anything in `backend/` — that's a separate frontend (prop-scout-v7)
+- The `board_card_snapshots` table may already exist from the `backend/migrations/005_board_card_snapshots.sql` migration — check before creating a new one
+- Use existing `lib/scoring/grade-prop-pick.js` (`propActualValue`, `gradePropPick`) for grading
+- Use existing `supabase` client from `lib/supabase.js`
+
+---
+
+### Step 1 — DB migration
+
+**File:** `db/023_board_card_snapshots_wnba.sql`
+
+Check if `board_card_snapshots` already exists. If not, create it:
+
+```sql
+CREATE TABLE IF NOT EXISTS board_card_snapshots (
+  id            SERIAL PRIMARY KEY,
+  slate_date    DATE NOT NULL,
+  player_id     INTEGER REFERENCES players(id),
+  prop_type     TEXT NOT NULL,
+  line          DECIMAL(6,2),
+  recommendation TEXT NOT NULL,         -- 'OVER' | 'UNDER'
+  lean          TEXT,                   -- 'over' | 'under' (alias for recommendation)
+  market        TEXT,                   -- e.g. 'player_points'
+  score_tier    TEXT,                   -- 'STRONG' | 'VALUE'
+  confidence_score INTEGER,
+  book_line     DECIMAL(6,2),
+  locked_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at   TIMESTAMPTZ,
+  actual_value  DECIMAL(6,2),
+  result        TEXT,                   -- 'hit' | 'miss' | 'push' | NULL (pending)
+  hit           BOOLEAN,
+  dnp           BOOLEAN NOT NULL DEFAULT FALSE,
+  source        TEXT NOT NULL DEFAULT 'wnba',  -- distinguishes from prop-scout-v7 rows
+  UNIQUE(slate_date, player_id, prop_type, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bcs_slate_date ON board_card_snapshots(slate_date DESC);
+CREATE INDEX IF NOT EXISTS idx_bcs_player_id  ON board_card_snapshots(player_id);
+CREATE INDEX IF NOT EXISTS idx_bcs_result     ON board_card_snapshots(result);
+CREATE INDEX IF NOT EXISTS idx_bcs_source     ON board_card_snapshots(source);
+
+GRANT ALL ON TABLE board_card_snapshots TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE board_card_snapshots_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+The `source` column distinguishes WNBA app rows from prop-scout-v7 rows if both write to the same table.
+
+---
+
+### Step 2 — POST endpoint in `server.js`
+
+```javascript
+/**
+ * POST /api/wnba/board-snapshot
+ * Upserts a batch of top picks as point-in-time board card snapshots.
+ * Called by the frontend when the PICKS tab loads for a new date.
+ * Body: { slateDate: 'YYYY-MM-DD', cards: [...] }
+ */
+app.post('/api/wnba/board-snapshot', async (req, res) => {
+  try {
+    const { slateDate, cards } = req.body || {};
+    if (!slateDate || !Array.isArray(cards) || cards.length === 0) {
+      return res.status(400).json({ error: 'slateDate and cards[] required' });
+    }
+
+    const rows = cards.map(c => ({
+      slate_date:       slateDate,
+      player_id:        c.player_id,
+      prop_type:        c.prop_type,
+      line:             c.line,
+      recommendation:   c.recommendation,
+      lean:             String(c.recommendation || '').toLowerCase(),
+      market:           c.market || null,
+      score_tier:       c.score_tier || null,
+      confidence_score: c.confidence_score || null,
+      book_line:        c.book_line || c.line,
+      locked_at:        new Date().toISOString(),
+      source:           'wnba',
+    }));
+
+    const { error } = await supabase
+      .from('board_card_snapshots')
+      .upsert(rows, { onConflict: 'slate_date,player_id,prop_type,source', ignoreDuplicates: true });
+
+    if (error) throw error;
+    res.json({ ok: true, saved: rows.length });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+```
+
+Note: `ignoreDuplicates: true` means existing rows for a date are never overwritten — the first snapshot wins (backtesting safety).
+
+---
+
+### Step 3 — Resolution script
+
+**File:** `scripts/resolve-board-snapshots.js` (new file)
+
+Grades unresolved WNBA board card snapshots after games go final.
+
+```javascript
+'use strict';
+const { createClient } = require('@supabase/supabase-js');
+const { gradePropPick, propActualValue } = require('../lib/scoring/grade-prop-pick');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+);
+
+async function resolveBoardSnapshots(dateStr) {
+  const date = dateStr || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  console.log(`[resolve-board-snapshots] Resolving for ${date}`);
+
+  // Get unresolved WNBA snapshots for this date
+  const { data: snapshots } = await supabase
+    .from('board_card_snapshots')
+    .select('id, player_id, prop_type, line, recommendation')
+    .eq('slate_date', date)
+    .eq('source', 'wnba')
+    .is('result', null);
+
+  if (!snapshots?.length) {
+    console.log(`[resolve-board-snapshots] No unresolved snapshots for ${date}`);
+    return;
+  }
+
+  // Get game IDs for this date that are final
+  const { data: games } = await supabase
+    .from('games')
+    .select('id, status')
+    .eq('game_date', date)
+    .in('status', ['final', 'closed', 'complete']);
+
+  if (!games?.length) {
+    console.log(`[resolve-board-snapshots] No final games for ${date} — skipping`);
+    return;
+  }
+
+  const gameIds = games.map(g => g.id);
+  let graded = 0;
+
+  for (const snap of snapshots) {
+    // Find this player's log in any of today's final games
+    const { data: logs } = await supabase
+      .from('player_game_logs')
+      .select('pts, reb, ast, stl, blk, tov, fg3m, min, dnp, game_id')
+      .eq('player_id', snap.player_id)
+      .in('game_id', gameIds)
+      .limit(1);
+
+    const log = logs?.[0] || null;
+    const game = games.find(g => g.id === log?.game_id) || games[0];
+
+    const gradeResult = gradePropPick(
+      { prop_type: snap.prop_type, line: snap.line, recommendation: snap.recommendation },
+      log,
+      game
+    );
+
+    if (gradeResult.result === null) continue; // game not final yet
+
+    await supabase
+      .from('board_card_snapshots')
+      .update({
+        actual_value: gradeResult.actual_value,
+        result:       gradeResult.result,
+        hit:          gradeResult.hit,
+        dnp:          gradeResult.dnp,
+        resolved_at:  new Date().toISOString(),
+      })
+      .eq('id', snap.id);
+
+    console.log(`[resolve-board-snapshots] player ${snap.player_id} ${snap.prop_type} ${snap.recommendation} ${snap.line} → ${gradeResult.result_label}`);
+    graded++;
+  }
+
+  console.log(`[resolve-board-snapshots] Done — ${graded}/${snapshots.length} resolved`);
+}
+
+module.exports = { resolveBoardSnapshots };
+
+if (require.main === module) {
+  const dateArg = process.argv.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a));
+  resolveBoardSnapshots(dateArg).catch(err => {
+    console.error('[resolve-board-snapshots] Failed:', err.message);
+    process.exit(1);
+  });
+}
+```
+
+---
+
+### Step 4 — Admin route in `server.js`
+
+```javascript
+/**
+ * GET /api/admin/jobs/resolve-board-snapshots?date=YYYY-MM-DD
+ * Manually trigger board snapshot resolution for the WNBA app.
+ */
+app.get('/api/admin/jobs/resolve-board-snapshots', async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { resolveBoardSnapshots } = require('./scripts/resolve-board-snapshots');
+    const date = req.query.date || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    await resolveBoardSnapshots(date);
+    res.json({ ok: true, date });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+```
+
+Add `ADMIN_SECRET` to `.env.example` if not already present:
+```
+ADMIN_SECRET=your-secret-here
+```
+
+---
+
+### Step 5 — Wire into scheduler
+
+**File:** `scripts/scheduler.js`
+
+```javascript
+const { resolveBoardSnapshots } = require('./resolve-board-snapshots');
+```
+
+Add to the evening log sweep after `resolveAiPicks`:
+
+```javascript
+schedule('evening log sweep', '0 22,23,0 * * *', async () => {
+  await runJob('ingestEspnIds',        () => ingestEspnIds());
+  await runJob('ingestPlayerLogs',     () => ingestPlayerLogs({ recentDays: 2 }));
+  await runJob('resolveAiPicks',       () => resolveAiPicks());
+  await runJob('resolveBoardSnapshots', () => resolveBoardSnapshots()); // ← add
+});
+```
+
+---
+
+### Step 6 — Frontend fire-and-forget in `wnba-prop-scout.jsx`
+
+In `TopPicksTab`, after picks are loaded and rendered, POST a snapshot once per date. Use a ref to avoid re-posting on re-renders:
+
+```javascript
+function TopPicksTab({ selectedDate }) {
+  const [picks, setPicks] = useState([]);
+  const snapshotFiredRef = useRef({});
+
+  useEffect(() => {
+    // ... existing fetch logic ...
+    apiGetTopPicks(selectedDate).then(data => {
+      setPicks(data || []);
+
+      // Fire-and-forget snapshot — only once per date, skip if already sent or sandbox
+      if (!IS_SANDBOX && data?.length && !snapshotFiredRef.current[selectedDate]) {
+        snapshotFiredRef.current[selectedDate] = true;
+        const cards = data.map(p => ({
+          player_id:        p.player_id,
+          prop_type:        p.prop_type,
+          line:             p.line,
+          recommendation:   p.recommendation,
+          score_tier:       p.confidence_score >= 65 ? 'STRONG' : 'VALUE',
+          confidence_score: p.confidence_score,
+          market:           p.prop_type,
+          book_line:        p.line,
+        }));
+        fetch(`${API_BASE}/api/wnba/board-snapshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slateDate: selectedDate, cards }),
+        }).catch(() => {}); // silent — never block the UI
+      }
+    });
+  }, [selectedDate]);
+  // ... rest of component ...
+}
+```
+
+---
+
+### Acceptance checks
+
+- `db/023_board_card_snapshots_wnba.sql` exists and creates table (or confirms existing table is reused)
+- Opening the PICKS tab inserts rows into `board_card_snapshots` with `source = 'wnba'`
+- Opening the PICKS tab a second time for the same date does NOT insert duplicate rows (`ignoreDuplicates: true`)
+- `node scripts/resolve-board-snapshots.js 2026-05-14` resolves any snapshotted picks for that date
+- `GET /api/admin/jobs/resolve-board-snapshots` without header → 401; with correct header → `{ ok: true }`
+- Evening scheduler runs `resolveBoardSnapshots()` after player logs are ingested
+- No regressions on existing PICKS tab behavior — snapshot is fire-and-forget, never blocks render
+
+### Completion note — 2026-05-18
+
+- Added `db/023_board_card_snapshots_wnba.sql` as an additive/repair migration for `board_card_snapshots`; it creates the full WNBA schema when missing, adds missing WNBA columns when the Task AC table already exists, adds `source`, and ensures the `slate_date,player_id,prop_type,source` uniqueness needed by the WNBA upsert.
+- Added `POST /api/wnba/board-snapshot` in root `server.js`; it upserts WNBA top-pick snapshots with `source = 'wnba'` and `ignoreDuplicates: true` so the first snapshot wins.
+- Added `scripts/resolve-board-snapshots.js`; it grades unresolved WNBA snapshots using `gradePropPick()` and writes `actual_value`, `result`, `hit`, `dnp`, and `resolved_at`.
+- Added `GET /api/admin/jobs/resolve-board-snapshots?date=YYYY-MM-DD` in root `server.js`, guarded by `x-admin-secret === process.env.ADMIN_SECRET`.
+- Wired `resolveBoardSnapshots()` into the evening log sweep in `scripts/scheduler.js` immediately after `resolveAiPicks()`.
+- Updated `TopPicksTab` in `wnba-prop-scout.jsx` to silently POST snapshots once per selected date, skip sandbox mode, and never block rendering.
+- Verification passed: `node --check server.js`, `node --check scripts/scheduler.js`, `node --check scripts/resolve-board-snapshots.js`, and `npm run build`.
+- Local route smoke test passed: no-secret request to `/api/admin/jobs/resolve-board-snapshots` returned `401 Unauthorized`.
+- Manual step still required: apply `db/023_board_card_snapshots_wnba.sql` in Supabase before testing live snapshot insertion/resolution.
+
+---
+
+## Task AC — Complete Cursor Task 118: Board Card Snapshots
+
+**Background:** Cursor's Task 118 implemented board card snapshot persistence for the `prop-scout-v7.jsx` frontend, but left two critical pieces unfinished:
+
+1. The DB migration (`db/005_board_card_snapshots.sql`) was never created — the `board_card_snapshots` table does not exist in Supabase.
+2. The `GET /api/admin/jobs/resolve-card-snapshots` route was never added to `server.js`.
+
+The other pieces from Task 118 are already in place: `backend/routes/boardSnapshot.js`, `backend/jobs/resolveCardSnapshotsJob.js`, and scheduler wiring all exist. This task only completes the two missing pieces.
+
+---
+
+### Step 1 — DB migration
+
+**File:** `db/005_board_card_snapshots.sql` (create this file — it does not exist)
+
+```sql
+CREATE TABLE IF NOT EXISTS board_card_snapshots (
+  id            SERIAL PRIMARY KEY,
+  slate_date    DATE NOT NULL,
+  player_id     INTEGER REFERENCES players(id),
+  prop_type     TEXT NOT NULL,
+  line          DECIMAL(6,2),
+  lean          TEXT,                -- 'over' | 'under'
+  market        TEXT,                -- prop market label
+  score_tier    TEXT,                -- 'STRONG' | 'VALUE'
+  book_line     DECIMAL(6,2),
+  locked_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at   TIMESTAMPTZ,
+  result        TEXT,                -- 'hit' | 'miss' | 'push' | NULL
+  UNIQUE(slate_date, player_id, prop_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bcs_slate_date  ON board_card_snapshots(slate_date DESC);
+CREATE INDEX IF NOT EXISTS idx_bcs_player_id   ON board_card_snapshots(player_id);
+CREATE INDEX IF NOT EXISTS idx_bcs_result      ON board_card_snapshots(result);
+
+GRANT ALL ON TABLE board_card_snapshots TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE board_card_snapshots_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+Apply in Supabase SQL editor after Codex creates the file.
+
+---
+
+### Step 2 — Admin route in `server.js`
+
+Add the following route to `server.js` alongside the other `/api/admin` routes:
+
+```javascript
+/**
+ * GET /api/admin/jobs/resolve-card-snapshots?date=YYYY-MM-DD
+ * Manually trigger board card snapshot resolution for a given date.
+ * Guarded by x-admin-secret header.
+ */
+app.get('/api/admin/jobs/resolve-card-snapshots', async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { resolveCardSnapshots } = require('./jobs/resolveCardSnapshotsJob');
+    const date = req.query.date || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    await resolveCardSnapshots(date);
+    res.json({ ok: true, date });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+```
+
+Add `ADMIN_SECRET` to `.env.example`:
+```
+# Required for admin job trigger routes
+ADMIN_SECRET=your-secret-here
+```
+
+---
+
+### Step 3 — Verify existing Task 118 files are intact
+
+Before implementing, confirm these files exist and are wired correctly — do not rewrite them, just verify:
+
+- `backend/routes/boardSnapshot.js` — handles `POST /api/board-snapshot`
+- `backend/jobs/resolveCardSnapshotsJob.js` — exports `resolveCardSnapshots(date)`
+- `backend/jobs/scheduler.js` — imports and calls `resolveCardSnapshots` at 1 AM and 2 AM
+- `backend/server.js` — mounts `app.use('/api/board-snapshot', require('./routes/boardSnapshot'))`
+
+If any of these are missing, implement them per the original Task 118 description:
+- `POST /api/board-snapshot` accepts `{ slateDate, cards }` and upserts rows into `board_card_snapshots`
+- `resolveCardSnapshots(date)` grades each snapshot row against `player_game_logs` using `gradePropPick` from `lib/scoring/grade-prop-pick.js`
+
+---
+
+### Acceptance checks
+
+- `db/005_board_card_snapshots.sql` file exists with full schema
+- `board_card_snapshots` table created in Supabase after running the migration
+- `POST /api/board-snapshot` with `{ slateDate: '2026-05-17', cards: [...] }` upserts rows (no "table not found" error)
+- `GET /api/admin/jobs/resolve-card-snapshots` without header returns 401
+- `GET /api/admin/jobs/resolve-card-snapshots` with correct `x-admin-secret` header returns `{ ok: true, date }`
+- `ADMIN_SECRET` documented in `.env.example`
+- No regressions on existing endpoints
+
+### Completion note — 2026-05-18
+
+- Verified the MLB-style `backend/` Task 118 files were not present in this WNBA repo, which uses a root `server.js` plus `scripts/` layout.
+- Added `db/005_board_card_snapshots.sql` with the required `board_card_snapshots` schema, indexes, unique constraint, and grants.
+- Added `routes/boardSnapshot.js` and mounted `POST /api/board-snapshot` from root `server.js`; it accepts `{ slateDate, cards }` and upserts snapshot rows on `slate_date,player_id,prop_type`.
+- Added `jobs/resolveCardSnapshotsJob.js`; it exports `resolveCardSnapshots(date)` and grades unresolved snapshots against `player_game_logs` using `gradePropPick()`.
+- Wired `resolveCardSnapshots()` into `scripts/scheduler.js` at 1:00 AM and 2:00 AM Pacific/Honolulu.
+- Added `GET /api/admin/jobs/resolve-card-snapshots?date=YYYY-MM-DD` to `server.js`, guarded by `x-admin-secret === process.env.ADMIN_SECRET`, and documented `ADMIN_SECRET` in `.env.example`.
+- Verification passed: `node --check server.js`, `node --check scripts/scheduler.js`, `node --check jobs/resolveCardSnapshotsJob.js`, `node --check routes/boardSnapshot.js`, and `npm run build`.
+- Local route smoke test passed: no-secret request to `/api/admin/jobs/resolve-card-snapshots` returned `401 Unauthorized`.
+- Manual step still required: apply `db/005_board_card_snapshots.sql` in Supabase before live POST/resolve tests.
 
 ---
 

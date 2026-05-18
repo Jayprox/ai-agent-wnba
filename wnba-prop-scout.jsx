@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 // ============================================================
 // CONFIG — flip IS_SANDBOX to true to use local mock data
@@ -2682,13 +2682,14 @@ function HitRateBadge({ label, value, denom }) {
   );
 }
 
-function TopPicksTab({ picks, loading, error }) {
+function TopPicksTab({ picks, loading, error, selectedDate }) {
   const [track, setTrack] = useState(null);
   const [trackErr, setTrackErr] = useState(null);
   const [filterProp,  setFilterProp]  = useState('ALL');
   const [filterDir,   setFilterDir]   = useState('ALL');
   const [filterTier,  setFilterTier]  = useState('ALL');
   const [expandedId,  setExpandedId]  = useState(null);
+  const snapshotFiredRef = useRef({});
 
   useEffect(() => {
     let cancelled = false;
@@ -2702,6 +2703,30 @@ function TopPicksTab({ picks, loading, error }) {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (IS_SANDBOX || loading || error || !selectedDate || !picks?.length || snapshotFiredRef.current[selectedDate]) {
+      return;
+    }
+
+    snapshotFiredRef.current[selectedDate] = true;
+    const cards = picks.map(pick => ({
+      player_id: pick.player_id,
+      prop_type: pick.prop_type,
+      line: pick.line,
+      recommendation: pick.recommendation,
+      score_tier: Number(pick.confidence_score || 0) >= 65 ? 'STRONG' : 'VALUE',
+      confidence_score: pick.confidence_score,
+      market: pick.prop_type,
+      book_line: pick.line,
+    }));
+
+    fetch(`${API_BASE}/api/wnba/board-snapshot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slateDate: selectedDate, cards }),
+    }).catch(() => {});
+  }, [picks, loading, error, selectedDate]);
 
   // Filter the picks list
   const filtered = (picks || []).filter(pick => {
@@ -4558,7 +4583,7 @@ export default function App() {
       {/* ── PICKS tab ── */}
       {activeNav === 'picks' && (
         <div className="ps-shell ps-page">
-          <TopPicksTab picks={topPicks} loading={loadingPicks} error={picksError} />
+          <TopPicksTab picks={topPicks} loading={loadingPicks} error={picksError} selectedDate={selectedDate} />
         </div>
       )}
 
