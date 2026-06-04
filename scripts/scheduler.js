@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const cron = require('node-cron');
+const { supabase } = require('../lib/supabase');
 const { ingestTeams } = require('./ingest-teams');
 const { ingestPlayers } = require('./ingest-players');
 const { ingestGames, ingestScoreboardDatesForScheduler } = require('./ingest-games');
@@ -19,14 +20,19 @@ const { calcFirstBasket } = require('./calc-first-basket');
 const { ingestLineups }   = require('./ingest-lineups');
 const { calcAiPicks } = require('./calc-ai-picks');
 const { resolveAiPicks } = require('./resolve-ai-picks');
-const { resolveBoardSnapshots } = require('./resolve-board-snapshots');
+const { resolveBoardSnapshots, resolvePickLog } = require('./resolve-board-snapshots');
 const { resolveCardSnapshots } = require('../jobs/resolveCardSnapshotsJob');
+const { cacheGamePredictions } = require('./cache-game-predictions');
 
 const TIMEZONE = 'America/New_York';
 const HONOLULU_TIMEZONE = 'Pacific/Honolulu';
 
 function timestamp() {
   return new Date().toISOString();
+}
+
+function etDateString() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
 }
 
 async function sendAlert(jobName, error) {
@@ -68,6 +74,51 @@ function scheduleInTimezone(name, expression, timezone, fn) {
   console.log(`[scheduler] Scheduled ${name}: ${expression} (${timezone})`);
 }
 
+async function lockPropsAtTipoff() {
+  if (!supabase) return;
+
+  const today = etDateString();
+  const { data: liveGames, error: gameError } = await supabase
+    .from('games')
+    .select('id, status')
+    .eq('game_date', today)
+    .in('status', ['in_progress', 'halftime', 'live', '1st_half', '2nd_half']);
+
+  if (gameError || !liveGames?.length) return;
+
+  const liveGameIds = liveGames.map(game => game.id);
+  const { data: unlocked, error: propError } = await supabase
+    .from('prop_analysis_results')
+    .select('id, game_id, line, market_notes')
+    .in('game_id', liveGameIds)
+    .is('locked_at', null);
+
+  if (propError || !unlocked?.length) return;
+
+  const now = new Date().toISOString();
+  const updates = unlocked.map(row => {
+    const juiceRaw = row.market_notes?.juice ?? row.market_notes?.over_juice ?? -110;
+    const juice = Number.isFinite(Number(juiceRaw)) ? Math.round(Number(juiceRaw)) : -110;
+    return {
+      id: row.id,
+      game_id: row.game_id,
+      locked_at: now,
+      locked_line: row.line,
+      locked_juice: juice,
+    };
+  });
+
+  for (let i = 0; i < updates.length; i += 50) {
+    const chunk = updates.slice(i, i + 50);
+    const { error } = await supabase
+      .from('prop_analysis_results')
+      .upsert(chunk, { onConflict: 'id' });
+    if (error) console.warn('[lockPropsAtTipoff] prop lock error:', error.message);
+  }
+
+  console.log(`[lockPropsAtTipoff] Locked ${updates.length} props across ${liveGameIds.length} live game(s)`);
+}
+
 function startScheduler() {
   schedule('daily teams + players', '0 10 * * *', async () => {
     await ingestTeams();
@@ -78,8 +129,12 @@ function startScheduler() {
 
   schedule('daily games', '0 11 * * *', () => ingestScoreboardDatesForScheduler());
 
+  schedule('cache game predictions', '0 6 * * *', () => cacheGamePredictions(etDateString()));
+
   // ESPN scoreboard during game windows (was only 11am/1pm ET — slate stayed pre-game all evening).
   schedule('live scoreboard refresh', '*/15 0-2,11-23 * * *', () => ingestScoreboardDatesForScheduler());
+
+  schedule('lock props at tipoff', '*/10 18-23 * * *', () => lockPropsAtTipoff());
 
   schedule('midday odds + injuries', '0 12 * * *', async () => {
     await ingestOdds();
@@ -112,6 +167,7 @@ function startScheduler() {
     await ingestPlayerLogs({ recentDays: 2 }); // re-process recent games even if partially logged
     await resolveAiPicks();
     await resolveBoardSnapshots();
+    await resolvePickLog();
   });
 
   schedule('post-midnight logs + metrics', '30 0 * * *', async () => {
@@ -142,4 +198,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { startScheduler, runJob };
+module.exports = { startScheduler, runJob, lockPropsAtTipoff };

@@ -36,6 +36,10 @@ const RESPONSIVE_CSS = `
   html, body, #root { min-height: 100%; background: ${T.bg}; }
   body { margin: 0; }
   * { box-sizing: border-box; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
   .ps-app {
     min-height: 100dvh;
     background:
@@ -1058,6 +1062,43 @@ function maxSlateDate() {
   return shiftDateValue(today(), SLATE_LOOKAHEAD_DAYS);
 }
 
+function supportsHoverDevice() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(hover: hover)').matches;
+}
+
+function useLongPress(onLongPress, delay = 500) {
+  const timerRef = useRef(null);
+
+  const start = useCallback(() => {
+    timerRef.current = setTimeout(() => {
+      onLongPress();
+      timerRef.current = null;
+    }, delay);
+  }, [onLongPress, delay]);
+
+  const cancel = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  return {
+    onMouseDown: start,
+    onMouseUp: cancel,
+    onMouseLeave: cancel,
+    onTouchStart: e => {
+      if (e.target?.closest?.('button,input,textarea,select,a')) return;
+      e.preventDefault();
+      start();
+    },
+    onTouchEnd: cancel,
+    onTouchMove: cancel,
+  };
+}
+
 // ============================================================
 // API LAYER
 // ============================================================
@@ -1073,6 +1114,13 @@ async function apiGetTopPicks(date, limit = 50) {
   const r = await fetch(`${API_BASE}/api/wnba/top-picks?date=${date}&limit=${limit}`);
   if (!r.ok) return [];
   return (await r.json()).data || [];
+}
+
+async function apiGetPickLog(date) {
+  if (IS_SANDBOX) return { picks: [], summary: { hits: 0, misses: 0, pushes: 0, total: 0, win_rate: null, pnl: 0 } };
+  const r = await fetch(`${API_BASE}/api/wnba/pick-log?date=${encodeURIComponent(date)}`);
+  if (!r.ok) throw new Error(`pick log fetch failed: ${r.status}`);
+  return await r.json();
 }
 
 async function apiGetFirstBasketSlate(date) {
@@ -1424,12 +1472,26 @@ function SlateCard({ game, onClick, topPick }) {
   const awayMlLabel  = game.away_ml  != null ? fmtML(game.away_ml)            : '—';
   const hasOdds      = game.spread != null || game.total != null || game.home_ml != null;
   const betSummary   = slateGameBettingSummary(game);
+  const slateLogCard = game.total != null ? {
+    label: `${aw} @ ${hw} O/U ${fmtOne(game.total)}`,
+    line: game.total,
+    pick_type: 'game_total',
+    prop_type: 'total',
+    player_id: null,
+    game_id: game.id,
+    lean_default: null,
+    juice: -110,
+    sportsbook: defaultBookLabel || game.odds_sportsbook || null,
+    confidence_score: null,
+    slate_date: game.game_date || game.date || today(),
+  } : topPick ? pickLogCardFromModelPick(topPick, game.game_date || game.date || today()) : null;
 
   const recColor = topPick?.recommendation === 'OVER'  ? T.green
                  : topPick?.recommendation === 'UNDER' ? T.red
                  : T.accent;
 
   return (
+    <LoggablePickWrapper card={slateLogCard}>
     <div
       onClick={onClick}
       style={{
@@ -1529,6 +1591,7 @@ function SlateCard({ game, onClick, topPick }) {
       )}
 
     </div>
+    </LoggablePickWrapper>
   );
 }
 
@@ -2682,6 +2745,236 @@ function HitRateBadge({ label, value, denom }) {
   );
 }
 
+function pickLogCardFromModelPick(pick, slateDate) {
+  const rec = String(pick?.recommendation || '').toUpperCase();
+  return {
+    label: `${playerName(pick?.players || {})} ${(pick?.prop_type || '').toUpperCase()} ${fmtOne(pick?.line)}`,
+    line: pick?.line,
+    pick_type: 'player_prop',
+    prop_type: pick?.prop_type,
+    player_id: pick?.player_id,
+    game_id: pick?.game_id,
+    lean_default: rec === 'OVER' ? 'over' : rec === 'UNDER' ? 'under' : null,
+    juice: pick?.locked_juice ?? pick?.market_notes?.juice ?? pick?.market_notes?.over_juice ?? null,
+    sportsbook: pick?.line_sportsbook_short || pick?.line_sportsbook || pick?.sportsbook || null,
+    confidence_score: pick?.confidence_score ?? null,
+    slate_date: slateDate,
+  };
+}
+
+function PickLogPopover({ card, onConfirm, onClose }) {
+  const [lean, setLean] = useState(card.lean_default || null);
+  const [betAmount, setBetAmount] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const dirOptions = card.pick_type === 'moneyline'
+    ? [{ val: 'home', label: 'HOME ML' }, { val: 'away', label: 'AWAY ML' }]
+    : [{ val: 'over', label: 'OVER' }, { val: 'under', label: 'UNDER' }];
+
+  async function confirm() {
+    if (!lean) return;
+    setSaving(true);
+    try {
+      if (!IS_SANDBOX) {
+        await fetch(`${API_BASE}/api/wnba/pick-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            slate_date: card.slate_date,
+            pick_type: card.pick_type,
+            player_id: card.player_id ?? null,
+            game_id: card.game_id ?? null,
+            prop_type: card.prop_type ?? null,
+            line: card.line,
+            lean,
+            juice: card.juice ?? null,
+            sportsbook: card.sportsbook ?? null,
+            confidence_score: card.confidence_score ?? null,
+            bet_amount: betAmount ? parseFloat(betAmount) : null,
+          }),
+        });
+      }
+      onConfirm();
+    } catch (error) {
+      console.warn('[pick-log]', error.message);
+      onConfirm();
+    }
+  }
+
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      onMouseDown={e => e.stopPropagation()}
+      onTouchStart={e => e.stopPropagation()}
+      style={{
+        position: 'absolute',
+        zIndex: 999,
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        background: T.card2,
+        border: `1px solid ${T.accent}`,
+        borderRadius: 12,
+        padding: 16,
+        width: 250,
+        boxShadow: '0 12px 36px rgba(0,0,0,0.5)',
+      }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 900, color: T.accent, letterSpacing: '0.1em', marginBottom: 6 }}>+ LOG PICK</div>
+      <div style={{ fontSize: 13, fontWeight: 800, color: T.text, marginBottom: 2, lineHeight: 1.3 }}>{card.label}</div>
+      {card.line != null && (
+        <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>
+          Line: {fmtOne(card.line)}{card.juice ? ` (${card.juice > 0 ? '+' : ''}${card.juice})` : ''}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        {dirOptions.map(opt => (
+          <button key={opt.val} onClick={() => setLean(opt.val)} style={{
+            flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
+            cursor: 'pointer', fontWeight: 900, fontSize: 11, letterSpacing: '0.06em',
+            background: lean === opt.val ? T.accent : T.card3,
+            color: lean === opt.val ? '#fff' : T.text2,
+          }}>{opt.label}</button>
+        ))}
+      </div>
+      <label style={{ fontSize: 10, color: T.text3, fontWeight: 800, display: 'block', marginBottom: 4 }}>BET AMOUNT</label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+        <span style={{ color: T.text3, fontSize: 14 }}>$</span>
+        <input
+          type="number"
+          min="1"
+          placeholder="optional"
+          value={betAmount}
+          onChange={e => setBetAmount(e.target.value)}
+          style={{ flex: 1, background: T.card3, border: `1px solid ${T.border}`, borderRadius: 7, padding: '7px 9px', color: T.text, fontSize: 13 }}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={onClose} style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${T.border}`, background: 'transparent', color: T.text3, fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+        <button onClick={confirm} disabled={!lean || saving} style={{
+          flex: 2, padding: '8px 0', borderRadius: 8, border: 'none',
+          background: lean && !saving ? T.accent : T.border,
+          color: '#fff', fontSize: 12, fontWeight: 900, cursor: lean ? 'pointer' : 'default',
+        }}>{saving ? 'Saving…' : 'Log Pick'}</button>
+      </div>
+    </div>
+  );
+}
+
+function LoggablePickWrapper({ card, onLogged, children }) {
+  const [showPopover, setShowPopover] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [logged, setLogged] = useState(false);
+  const longPress = useLongPress(() => setShowPopover(true), 500);
+
+  const handleConfirm = useCallback(() => {
+    setShowPopover(false);
+    setLogged(true);
+    if (onLogged) onLogged();
+  }, [onLogged]);
+
+  if (!card) return children;
+
+  return (
+    <div
+      style={{ position: 'relative', overflow: 'visible' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={event => { setHovered(false); longPress.onMouseLeave(event); }}
+      onMouseDown={longPress.onMouseDown}
+      onMouseUp={longPress.onMouseUp}
+      onTouchStart={longPress.onTouchStart}
+      onTouchEnd={longPress.onTouchEnd}
+      onTouchMove={longPress.onTouchMove}
+    >
+      {children}
+      {!showPopover && (
+        <button
+          onClick={e => { e.stopPropagation(); setShowPopover(true); }}
+          title="Log this pick"
+          style={{
+            position: 'absolute', top: 10, right: 10, zIndex: 20,
+            width: 27, height: 27, borderRadius: '50%', border: 'none',
+            background: logged ? T.green : T.accent, color: '#fff',
+            fontSize: 16, fontWeight: 900, display: 'flex', alignItems: 'center',
+            justifyContent: 'center', cursor: 'pointer', boxShadow: '0 6px 16px rgba(0,0,0,0.35)',
+            opacity: logged || hovered || !supportsHoverDevice() ? 1 : 0.45,
+            transition: 'opacity 0.12s, transform 0.12s',
+            transform: hovered ? 'scale(1.04)' : 'scale(1)',
+          }}
+        >
+          {logged ? '✓' : '⊕'}
+        </button>
+      )}
+      {showPopover && (
+        <PickLogPopover card={card} onConfirm={handleConfirm} onClose={() => setShowPopover(false)} />
+      )}
+    </div>
+  );
+}
+
+function MyLogPickCard({ pick, onRemove }) {
+  const [removing, setRemoving] = useState(false);
+  const resultColor = pick.result === 'hit' ? T.green : pick.result === 'miss' ? T.red : pick.result === 'push' ? T.yellow : T.border;
+  const leanLabel = { over: 'OVER', under: 'UNDER', home: 'HOME ML', away: 'AWAY ML' }[pick.lean] || String(pick.lean || '').toUpperCase();
+  const teams = pick.games ? `${pick.games.visitor_team?.abbreviation || 'AW'} @ ${pick.games.home_team?.abbreviation || 'HM'}` : 'WNBA';
+  const label = pick.pick_type === 'player_prop'
+    ? `${pick.players?.full_name || 'Player'} · ${String(pick.prop_type || '').toUpperCase()} ${fmtOne(pick.line)}`
+    : pick.pick_type === 'game_total'
+      ? `${teams} · O/U ${fmtOne(pick.line)}`
+      : `${teams} · ML`;
+
+  return (
+    <div style={{ background: T.card, border: `1px solid ${resultColor}`, borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 9, fontWeight: 900, letterSpacing: '0.1em', background: T.accent, color: '#fff', borderRadius: 5, padding: '3px 7px', flexShrink: 0 }}>
+          {leanLabel}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 2 }}>
+            {pick.sportsbook ? `${pick.sportsbook} · ` : ''}
+            {pick.juice ? `${pick.juice > 0 ? '+' : ''}${pick.juice} · ` : ''}
+            {pick.logged_at_display || new Date(pick.logged_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+          </div>
+        </div>
+        {pick.result ? (
+          <span style={{ fontSize: 11, fontWeight: 900, color: pick.result === 'hit' ? T.green : pick.result === 'miss' ? T.red : T.yellow }}>
+            {pick.result === 'hit' ? '✓ HIT' : pick.result === 'miss' ? '✗ MISS' : 'PUSH'}
+          </span>
+        ) : (
+          <span style={{ fontSize: 10, color: T.text3, fontWeight: 800 }}>Pending</span>
+        )}
+        {onRemove && (
+          <button
+            onClick={async () => {
+              if (removing) return;
+              setRemoving(true);
+              await onRemove();
+              setRemoving(false);
+            }}
+            title="Remove pick"
+            style={{
+              marginLeft: 4, background: 'none', border: 'none', cursor: removing ? 'default' : 'pointer',
+              color: removing ? T.text3 : T.red, fontSize: 16, lineHeight: 1, padding: '0 2px',
+              opacity: removing ? 0.4 : 0.7, transition: 'opacity 0.12s',
+              flexShrink: 0,
+            }}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {(pick.actual_value != null || pick.bet_amount != null || pick.confidence_score != null) && (
+        <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 11, color: T.text3, flexWrap: 'wrap' }}>
+          {pick.actual_value != null && <span>Actual <strong style={{ color: T.text }}>{fmtOne(pick.actual_value)}</strong></span>}
+          {pick.bet_amount != null && <span>Bet <strong style={{ color: T.text }}>${Number(pick.bet_amount).toFixed(2)}</strong></span>}
+          {pick.confidence_score != null && <span>Model <strong style={{ color: T.text2 }}>{Math.round(Number(pick.confidence_score))}</strong></span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TopPicksTab({ picks, loading, error, selectedDate }) {
   const [track, setTrack] = useState(null);
   const [trackErr, setTrackErr] = useState(null);
@@ -2689,6 +2982,11 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
   const [filterDir,   setFilterDir]   = useState('ALL');
   const [filterTier,  setFilterTier]  = useState('ALL');
   const [expandedId,  setExpandedId]  = useState(null);
+  const [picksSubTab, setPicksSubTab] = useState('algo');
+  const [myLog, setMyLog] = useState(null);
+  const [logPicks, setLogPicks] = useState([]);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logRefresh, setLogRefresh] = useState(0);
   const snapshotFiredRef = useRef({});
 
   useEffect(() => {
@@ -2730,6 +3028,27 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
     }).catch(e => console.warn('[board-snapshot] POST error:', e));
   }, [picks, loading, error, selectedDate]);
 
+  useEffect(() => {
+    setMyLog(null);
+    setPicksSubTab('algo');
+  }, [selectedDate]);
+
+  useEffect(() => {
+    if (picksSubTab !== 'mylog' || !selectedDate) return;
+    let cancelled = false;
+    setLogLoading(true);
+    apiGetPickLog(selectedDate)
+      .then(data => { if (!cancelled) setMyLog(data); })
+      .catch(() => { if (!cancelled) setMyLog({ picks: [], summary: null }); })
+      .finally(() => { if (!cancelled) setLogLoading(false); });
+    return () => { cancelled = true; };
+  }, [picksSubTab, selectedDate, logRefresh]);
+
+  const handlePickLogged = useCallback(() => {
+    setMyLog(null);
+    setLogRefresh(v => v + 1);
+  }, []);
+
   // Filter the picks list
   const filtered = (picks || []).filter(pick => {
     const type = String(pick.prop_type || '').toLowerCase();
@@ -2751,6 +3070,108 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
       <TrackRecordPickStrip track={track} trackErr={trackErr} />
     </>
   );
+
+  const subTabBar = (
+    <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+      {[
+        ['algo', 'ALGO PICKS'],
+        ['mylog', 'MY LOG'],
+      ].map(([id, label]) => (
+        <button key={id} onClick={() => setPicksSubTab(id)} style={{
+          padding: '7px 16px',
+          borderRadius: 999,
+          border: `1px solid ${picksSubTab === id ? T.accent : T.border}`,
+          cursor: 'pointer',
+          fontSize: 11,
+          fontWeight: 900,
+          letterSpacing: '0.06em',
+          background: picksSubTab === id ? T.accent : T.card2,
+          color: picksSubTab === id ? '#fff' : T.text3,
+        }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  // Keep logPicks in sync when myLog loads/changes
+  useEffect(() => { if (myLog?.picks) setLogPicks(myLog.picks); }, [myLog]);
+
+  if (picksSubTab === 'mylog') {
+
+    const resolved = logPicks.filter(p => p.result && p.result !== 'dnp');
+    const hits    = resolved.filter(p => p.result === 'hit').length;
+    const misses  = resolved.filter(p => p.result === 'miss').length;
+    const pushes  = resolved.filter(p => p.result === 'push').length;
+    const pending = logPicks.filter(p => !p.result).length;
+    const pct     = resolved.length > 0 ? Math.round((hits / (hits + misses || 1)) * 100) : null;
+    // Units P&L: each resolved bet = 1 unit risked; win returns juice-adjusted units
+    const pnl     = resolved.reduce((acc, p) => {
+      const juice = p.juice || -110;
+      if (p.result === 'hit') {
+        return acc + (juice < 0 ? 100 / Math.abs(juice) : juice / 100);
+      }
+      if (p.result === 'miss') return acc - 1;
+      return acc; // push
+    }, 0);
+
+    return (
+      <div>
+        {header}
+        {subTabBar}
+        <div style={{
+          display: 'flex',
+          gap: 14,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          background: T.card,
+          border: `1px solid ${T.border}`,
+          borderRadius: 10,
+          padding: '11px 14px',
+          marginBottom: 14,
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 900, color: T.text }}>MY LOG</span>
+          {logPicks.length === 0 ? (
+            <span style={{ fontSize: 11, color: T.text3 }}>No picks logged yet. Long-press any card to add one.</span>
+          ) : (
+            <>
+              <span style={{ fontSize: 12, color: T.text2 }}>
+                <span style={{ color: T.green, fontWeight: 900 }}>{hits}</span>
+                {' – '}
+                <span style={{ color: T.red, fontWeight: 900 }}>{misses}</span>
+                {pushes > 0 && <span style={{ color: T.yellow, fontWeight: 900 }}> – {pushes}</span>}
+              </span>
+              {pct != null && (
+                <span style={{ fontSize: 11, color: pct >= 55 ? T.green : pct >= 45 ? T.yellow : T.red, fontWeight: 900 }}>
+                  {pct}%
+                </span>
+              )}
+              {pending > 0 && (
+                <span style={{ fontSize: 11, color: T.text3 }}>· {pending} pending</span>
+              )}
+              <span style={{ fontSize: 11, fontWeight: 900, marginLeft: 'auto', color: pnl > 0 ? T.green : pnl < 0 ? T.red : T.text3 }}>
+                {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}u
+              </span>
+            </>
+          )}
+        </div>
+        {logLoading && <div className="ps-empty-state">Loading your log…</div>}
+        {!logLoading && logPicks.length === 0 && <div className="ps-empty-state">No picks logged for this slate.</div>}
+        {!logLoading && logPicks.map(pick => (
+          <MyLogPickCard
+            key={pick.id}
+            pick={pick}
+            onRemove={async () => {
+              if (!IS_SANDBOX) {
+                await fetch(`${API_BASE}/api/wnba/pick-log/${pick.id}`, { method: 'DELETE' });
+              }
+              setLogPicks(prev => prev.filter(p => p.id !== pick.id));
+            }}
+          />
+        ))}
+      </div>
+    );
+  }
 
   // Filter bar (shown even during load so skeleton doesn't jump)
   const filterBar = (
@@ -2779,6 +3200,7 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
     return (
       <div>
         {header}
+        {subTabBar}
         {filterBar}
         <div className="ps-empty-state">Loading picks…</div>
       </div>
@@ -2788,6 +3210,7 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
     return (
       <div>
         {header}
+        {subTabBar}
         {filterBar}
         <div className="ps-empty-state" style={{ color: T.red }}>{error}</div>
       </div>
@@ -2797,6 +3220,7 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
     return (
       <div>
         {header}
+        {subTabBar}
         {filterBar}
         <div className="ps-empty-state">
           No picks available yet. Check back after the daily model run (runs at 12:30 AM ET).
@@ -2808,6 +3232,7 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
   return (
     <div>
       {header}
+      {subTabBar}
       {filterBar}
       <div style={{ fontSize: 10, color: T.text3, lineHeight: 1.5, marginBottom: 14 }}>
         Model score ranks setup strength (about 0–80). It is not win probability. Check results after games to judge the model.
@@ -2847,7 +3272,8 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
         const isDnp      = pick.dnp === true;
 
         return (
-          <div key={pick.id || i} style={{
+          <LoggablePickWrapper key={pick.id || i} card={pickLogCardFromModelPick(pick, selectedDate)} onLogged={handlePickLogged}>
+          <div style={{
             background:   T.card,
             border:       isFinal && result === 'hit'  ? `2px solid ${T.green}`
                         : isFinal && result === 'miss' ? `2px solid ${T.red}`
@@ -2899,6 +3325,11 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
                 <span style={{ background: recBg, color: recFg, fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 5 }}>{rec}</span>
                 {pick.correlated_opportunity && (
                   <span style={{ background: T.greenDim, color: T.green, border: `1px solid ${T.green}`, borderRadius: 4, fontSize: 9, padding: '2px 6px' }}>CORRELATED</span>
+                )}
+                {pick.game_is_live && (
+                  <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.08em', background: T.red, color: '#fff', borderRadius: 4, padding: '2px 6px', animation: 'pulse 1.5s infinite' }}>
+                    LIVE
+                  </span>
                 )}
                 {pick.ev > 0 && (
                   <span style={{
@@ -2963,6 +3394,12 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
                     {(pick.kelly_fraction * 100).toFixed(1)}% of bankroll
                   </span>
                   {' '}(1/4 Kelly, -110)
+                </div>
+              )}
+
+              {pick.locked_at_display && (
+                <div style={{ marginTop: 5, fontSize: 9, color: T.text3 }}>
+                  Locked {pick.locked_at_display}
                 </div>
               )}
 
@@ -3129,8 +3566,349 @@ function TopPicksTab({ picks, loading, error, selectedDate }) {
               );
             })()}
           </div>
+          </LoggablePickWrapper>
         );
       })}
+      </div>
+    </div>
+  );
+}
+
+function ScoutHistoryPanel({ history }) {
+  const summary = history?.summary || {};
+  const sessions = history?.sessions || [];
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', background: T.card2, borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+        {[
+          ['Win Rate', summary.win_rate != null ? `${(summary.win_rate * 100).toFixed(1)}%` : '—'],
+          ['P&L', summary.total_pnl != null ? `${summary.total_pnl >= 0 ? '+' : ''}$${Number(summary.total_pnl).toFixed(0)}` : '—'],
+          ['Record', `${summary.total_hits || 0}-${summary.total_misses || 0}-${summary.total_pushes || 0}`],
+          ['Sessions', String(summary.total_sessions || 0)],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <div style={{ fontSize: 10, color: T.text3, fontWeight: 700 }}>{label}</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{value}</div>
+          </div>
+        ))}
+      </div>
+      {sessions.slice(0, 14).map(session => (
+        <div key={session.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 14px', borderBottom: `1px solid ${T.border}`, fontSize: 12 }}>
+          <span style={{ color: T.text2 }}>{session.session_date}</span>
+          <span style={{ color: T.text3 }}>{session.actual_hits}W-{session.actual_misses}L-{session.actual_pushes}P</span>
+          <span style={{ fontWeight: 700, color: Number(session.actual_pnl) >= 0 ? T.green : T.red }}>
+            {Number(session.actual_pnl) >= 0 ? '+' : ''}${Number(session.actual_pnl || 0).toFixed(0)}
+          </span>
+          <span style={{ fontSize: 10, color: session.status === 'complete' ? T.green : T.text3 }}>
+            {session.status === 'complete' ? 'DONE' : 'OPEN'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ScoutPickCard({ pick, onMark }) {
+  const [expanded, setExpanded] = useState(false);
+  const tierColor = pick.score_tier === 'HIGH' ? T.green : pick.score_tier === 'SOLID' ? T.yellow : T.accent;
+  const typeLabel = pick.pick_type === 'player_prop' ? 'PLAYER PROP' : pick.pick_type === 'game_total' ? 'GAME TOTAL' : 'MONEYLINE';
+  const dirLabel = pick.lean === 'over' ? 'OVER' : pick.lean === 'under' ? 'UNDER' : pick.lean === 'home' ? 'HOME ML' : 'AWAY ML';
+  const resultBg = pick.result === 'hit' ? T.greenDim : pick.result === 'miss' ? T.redDim : pick.result === 'push' ? T.yellowDim : undefined;
+  const resultBorder = pick.result === 'hit' ? T.green : pick.result === 'miss' ? T.red : pick.result === 'push' ? T.yellow : T.border;
+  const ks = pick.key_stats || {};
+  const playerNameText = pick.players?.full_name || pick.player_name || 'Player';
+
+  return (
+    <div style={{ background: resultBg ?? T.card, border: `1px solid ${resultBorder}`, borderRadius: 12, overflow: 'hidden' }}>
+      <div onClick={() => setExpanded(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', cursor: 'pointer' }}>
+        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', background: tierColor, color: '#06101f', borderRadius: 5, padding: '3px 7px', flexShrink: 0 }}>
+          {dirLabel}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {pick.pick_type === 'player_prop'
+              ? `${playerNameText} ${fmtOne(pick.line)} ${String(pick.prop_type || '').toUpperCase()}`
+              : pick.pick_type === 'game_total'
+                ? `${pick.away_abbr || ''} @ ${pick.home_abbr || ''} · O/U ${fmtOne(pick.line)}`
+                : `${pick.team_label || (pick.lean === 'home' ? pick.home_abbr : pick.away_abbr) || 'Team'} ML ${pick.juice > 0 ? '+' : ''}${pick.juice}`}
+          </div>
+          <div style={{ fontSize: 10, color: T.text3 }}>
+            {typeLabel} · {pick.score_tier || 'LEAN'} · Win prob {((Number(pick.p_hit) || 0) * 100).toFixed(0)}%
+          </div>
+        </div>
+        {pick.result ? (
+          <span style={{ fontSize: 11, fontWeight: 800, color: pick.result === 'hit' ? T.green : pick.result === 'miss' ? T.red : T.yellow }}>
+            {pick.result === 'hit' ? 'HIT' : pick.result === 'miss' ? 'MISS' : 'PUSH'}
+          </span>
+        ) : (
+          <span style={{ color: T.text3, fontSize: 12 }}>{expanded ? '▲' : '▼'}</span>
+        )}
+      </div>
+
+      {expanded && (
+        <div style={{ borderTop: `1px solid ${T.border}`, padding: '12px 14px' }}>
+          {pick.reasoning && (
+            <div style={{ fontSize: 12, color: T.text2, lineHeight: 1.6, background: T.card2, borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontStyle: 'italic' }}>
+              "{pick.reasoning}"
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+            {ks.l5_avg != null && <div style={{ fontSize: 11, color: T.text3 }}>L5 <span style={{ color: T.text, fontWeight: 700 }}>{fmtOne(ks.l5_avg)}</span></div>}
+            {ks.season_avg != null && <div style={{ fontSize: 11, color: T.text3 }}>Season <span style={{ color: T.text, fontWeight: 700 }}>{fmtOne(ks.season_avg)}</span></div>}
+            {ks.projection != null && <div style={{ fontSize: 11, color: T.text3 }}>Proj <span style={{ color: T.text, fontWeight: 700 }}>{fmtOne(ks.projection)}</span></div>}
+            {ks.value_gap != null && <div style={{ fontSize: 11, color: T.text3 }}>Gap <span style={{ color: T.green, fontWeight: 700 }}>{fmtOne(ks.value_gap)}</span></div>}
+            {ks.edge != null && <div style={{ fontSize: 11, color: T.text3 }}>Edge <span style={{ color: T.green, fontWeight: 700 }}>{fmtOne(ks.edge)}</span></div>}
+          </div>
+
+          {(pick.risk_flags || []).length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+              {pick.risk_flags.map(flag => (
+                <span key={flag} style={{ fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 5, background: T.yellowDim, color: T.yellow, border: `1px solid ${T.yellow}` }}>
+                  {String(flag).replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, background: T.card3, borderRadius: 8, padding: '8px 12px', marginBottom: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: T.text2 }}>
+              Bet <strong style={{ color: T.text }}>${Number(pick.bet_amount || 0).toFixed(0)}</strong>
+              {' '}· Win <strong style={{ color: T.green }}>${Number(pick.to_win || 0).toFixed(2)}</strong>
+              {' '}· <strong style={{ color: T.text3 }}>{pick.juice}</strong>
+            </span>
+            {Number(pick.ev) > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: T.green, background: T.greenDim, borderRadius: 5, padding: '2px 6px' }}>
+                +EV {(Number(pick.ev) * 100).toFixed(1)}¢/$
+              </span>
+            )}
+          </div>
+
+          {!pick.result && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[['hit', 'Hit', T.green, T.greenDim], ['miss', 'Miss', T.red, T.redDim], ['push', 'Push', T.yellow, T.yellowDim]].map(([value, label, color, bg]) => (
+                <button key={value} onClick={() => onMark(value)} style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${color}`, background: bg, color, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScoutTab({ selectedDate }) {
+  const [session, setSession] = useState(null);
+  const [picks, setPicks] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [history, setHistory] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [bankroll, setBankroll] = useState('500');
+  const [dailyTarget, setDailyTarget] = useState('50');
+  const [riskLevel, setRiskLevel] = useState('moderate');
+  const [includeGameProps, setIncludeGameProps] = useState(true);
+
+  useEffect(() => {
+    setSession(null);
+    setPicks([]);
+    setError(null);
+  }, [selectedDate]);
+
+  async function buildSession() {
+    setLoading(true);
+    setError(null);
+    try {
+      if (IS_SANDBOX) {
+        const mockPick = {
+          id: 'mock-scout-1',
+          pick_type: 'player_prop',
+          players: { full_name: "A'ja Wilson" },
+          prop_type: 'pts',
+          line: 24.5,
+          lean: 'over',
+          bet_amount: 25,
+          to_win: 22.73,
+          juice: -110,
+          score_tier: 'HIGH',
+          p_hit: 0.64,
+          ev: 0.12,
+          key_stats: { l5_avg: 27.2, season_avg: 25.8, projection: 26.4, value_gap: 1.9 },
+          risk_flags: [],
+          reasoning: 'The number is a little light for her usage profile, and the recent scoring form supports the Over. Biggest risk is defensive attention forcing earlier kick-outs.',
+          sort_order: 0,
+        };
+        setSession({
+          id: 'mock-session',
+          bet_per_pick: 25,
+          n_picks: 1,
+          bets_needed: 1,
+          projected_profit: 12,
+          actual_hits: 0,
+          actual_misses: 0,
+          actual_pushes: 0,
+          actual_pnl: 0,
+        });
+        setPicks([mockPick]);
+        return;
+      }
+
+      const response = await fetch(`${API_BASE}/api/wnba/scout-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: selectedDate,
+          bankroll: parseFloat(bankroll) || 500,
+          daily_target: parseFloat(dailyTarget) || 50,
+          bet_style: 'flat',
+          risk_level: riskLevel,
+          include_game_props: includeGameProps,
+        }),
+      });
+      if (!response.ok) throw new Error((await response.json()).error || response.status);
+      const data = await response.json();
+      setSession(data.session);
+      setPicks(data.picks || []);
+    } catch (err) {
+      setError(err.message || 'Failed to build Scout card');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function markResult(pickId, result) {
+    setPicks(prev => {
+      const updated = prev.map(pick => pick.id === pickId
+        ? { ...pick, result, actual_pnl: result === 'hit' ? Number(pick.to_win || 0) : result === 'miss' ? -Number(pick.bet_amount || 0) : 0 }
+        : pick);
+      const hits = updated.filter(p => p.result === 'hit').length;
+      const misses = updated.filter(p => p.result === 'miss').length;
+      const pushes = updated.filter(p => p.result === 'push').length;
+      const pnl = updated.reduce((sum, pick) => sum + Number(pick.actual_pnl || 0), 0);
+      setSession(prevSession => prevSession ? { ...prevSession, actual_hits: hits, actual_misses: misses, actual_pushes: pushes, actual_pnl: pnl } : prevSession);
+      return updated;
+    });
+
+    if (!IS_SANDBOX) {
+      fetch(`${API_BASE}/api/wnba/scout-pick/${pickId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ result }),
+      }).catch(err => console.warn('[scout-mark]', err.message));
+    }
+  }
+
+  async function loadHistory() {
+    if (IS_SANDBOX) {
+      setHistory({ summary: { total_sessions: 0, total_hits: 0, total_misses: 0, total_pushes: 0, win_rate: null, total_pnl: 0 }, sessions: [] });
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/api/wnba/scout-history?days=30`);
+      if (!response.ok) return;
+      setHistory(await response.json());
+    } catch (_) { /* silent history load */ }
+  }
+
+  if (!session) {
+    return (
+      <div>
+        <div className="ps-daily-card">
+          <span>↯ SCOUT CARD</span>
+          <span style={{ color: T.text3 }}>{selectedDate}</span>
+        </div>
+        <div style={{ maxWidth: 520, margin: '0 auto', background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, padding: 24 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: T.text, marginBottom: 4 }}>Build Today's Card</div>
+          <div style={{ fontSize: 12, color: T.text3, marginBottom: 20 }}>Set bankroll and target, then Scout curates the straight-bet card.</div>
+
+          <label style={{ fontSize: 11, color: T.text2, fontWeight: 700, letterSpacing: '0.08em' }}>BANKROLL</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginBottom: 16 }}>
+            <span style={{ fontSize: 18, color: T.text3 }}>$</span>
+            <input type="number" min="50" value={bankroll} onChange={e => setBankroll(e.target.value)} style={{ flex: 1, background: T.card2, border: `1px solid ${T.border}`, borderRadius: 8, padding: '10px 12px', color: T.text, fontSize: 16, fontWeight: 700 }} />
+          </div>
+
+          <label style={{ fontSize: 11, color: T.text2, fontWeight: 700, letterSpacing: '0.08em' }}>DAILY PROFIT TARGET</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 18, color: T.text3 }}>$</span>
+            <input type="number" min="5" value={dailyTarget} onChange={e => setDailyTarget(e.target.value)} style={{ flex: 1, background: T.card2, border: `1px solid ${T.border}`, borderRadius: 8, padding: '10px 12px', color: T.text, fontSize: 16, fontWeight: 700 }} />
+          </div>
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 16 }}>
+            = {bankroll ? ((parseFloat(dailyTarget) / parseFloat(bankroll)) * 100).toFixed(1) : '—'}% of bankroll
+          </div>
+
+          <label style={{ fontSize: 11, color: T.text2, fontWeight: 700, letterSpacing: '0.08em' }}>RISK LEVEL</label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 6, marginBottom: 16 }}>
+            {['conservative', 'moderate', 'aggressive'].map(level => (
+              <button key={level} onClick={() => setRiskLevel(level)} style={{ flex: 1, padding: '8px 4px', borderRadius: 8, fontSize: 11, fontWeight: 700, background: riskLevel === level ? T.accent : T.card2, border: `1px solid ${riskLevel === level ? T.accent : T.border}`, color: riskLevel === level ? '#fff' : T.text2, cursor: 'pointer', textTransform: 'capitalize' }}>
+                {level}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+            <span style={{ fontSize: 12, color: T.text2 }}>Include game props</span>
+            <button onClick={() => setIncludeGameProps(v => !v)} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: includeGameProps ? T.green : T.border, position: 'relative', transition: 'background 0.2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: includeGameProps ? 22 : 2, width: 18, height: 18, borderRadius: 9, background: '#fff', transition: 'left 0.2s' }} />
+            </button>
+          </div>
+
+          {error && <div style={{ background: T.redDim, border: `1px solid ${T.red}`, borderRadius: 8, padding: '10px 12px', fontSize: 12, color: T.red, marginBottom: 12 }}>{error}</div>}
+
+          <button onClick={buildSession} disabled={loading} style={{ width: '100%', padding: '14px 0', borderRadius: 10, border: 'none', background: loading ? T.border : T.accent, color: '#fff', fontSize: 14, fontWeight: 800, cursor: loading ? 'default' : 'pointer', letterSpacing: '0.04em' }}>
+            {loading ? 'Building your card…' : 'Build My Card →'}
+          </button>
+
+          <button onClick={() => { setShowHistory(v => !v); if (!history) loadHistory(); }} style={{ width: '100%', marginTop: 12, padding: '8px 0', borderRadius: 8, background: 'transparent', border: `1px solid ${T.border}`, color: T.text3, fontSize: 12, cursor: 'pointer' }}>
+            {showHistory ? 'Hide History' : 'Past Sessions'}
+          </button>
+          {showHistory && history && <ScoutHistoryPanel history={history} />}
+        </div>
+      </div>
+    );
+  }
+
+  const markedCount = picks.filter(p => p.result).length;
+  const pnl = Number(session.actual_pnl || 0);
+  const pnlColor = pnl > 0 ? T.green : pnl < 0 ? T.red : T.text2;
+
+  return (
+    <div>
+      <div className="ps-daily-card">
+        <span>↯ SCOUT CARD</span>
+        <span style={{ color: T.text3 }}>{picks.length} PICKS</span>
+      </div>
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 800, color: T.text }}>
+              Today's Card · {picks.length} picks · ${Number(session.bet_per_pick || 0).toFixed(0)}/bet
+            </span>
+            <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>
+              Need {session.bets_needed}/{picks.length} · projected +${Number(session.projected_profit || 0).toFixed(0)}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: pnlColor }}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}</div>
+            <div style={{ fontSize: 11, color: T.text3 }}>
+              {session.actual_hits || 0}W-{session.actual_misses || 0}L-{session.actual_pushes || 0}P · {markedCount}/{picks.length} marked
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {[...picks].sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)).map(pick => (
+          <ScoutPickCard key={pick.id} pick={pick} onMark={result => markResult(pick.id, result)} />
+        ))}
+      </div>
+
+      <div style={{ marginTop: 20 }}>
+        <button onClick={() => { setShowHistory(v => !v); if (!history) loadHistory(); }} style={{ width: '100%', padding: '8px 0', borderRadius: 8, background: 'transparent', border: `1px solid ${T.border}`, color: T.text3, fontSize: 12, cursor: 'pointer' }}>
+          {showHistory ? 'Hide History' : 'Past Sessions'}
+        </button>
+        {showHistory && history && <ScoutHistoryPanel history={history} />}
       </div>
     </div>
   );
@@ -3252,9 +4030,7 @@ function AiPicksTab({ selectedDate }) {
     return () => { cancelled = true; };
   }, [selectedDate]);
 
-  const generatedTime = data?.generated_at
-    ? new Date(data.generated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
-    : null;
+  const generatedTime = data?.generated_at_display || null;
   const seasonRate = data?.hit_rates?.season || {};
   const l5Rate = data?.hit_rates?.l5 || {};
   const hasSeasonRecord = Number(seasonRate.total) > 0;
@@ -3658,7 +4434,7 @@ const COMBO_TABS = [
   { id: 'ast+reb', label: 'AST+REB' },
 ];
 
-function BoardPlayerCard({ pick, rank }) {
+function BoardPlayerCard({ pick, rank, slateDate }) {
   const player    = pick.players || {};
   const name      = playerName(player);
   const pos       = player.position || '—';
@@ -3692,6 +4468,7 @@ function BoardPlayerCard({ pick, rank }) {
       : `1px solid ${T.border}`;
 
   return (
+    <LoggablePickWrapper card={pickLogCardFromModelPick(pick, slateDate)}>
     <div style={{
       display: 'flex',
       alignItems: 'stretch',
@@ -3733,6 +4510,11 @@ function BoardPlayerCard({ pick, rank }) {
           {pick.game_status && (
             <span style={{ fontSize: 9, fontWeight: 700, color: finalGraded ? (result === 'hit' ? T.green : result === 'miss' ? T.red : T.text3) : T.text3, background: T.card3, padding: '1px 6px', borderRadius: 3, flexShrink: 0 }}>
               {String(pick.game_status).toUpperCase()}
+            </span>
+          )}
+          {pick.game_is_live && (
+            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.08em', background: T.red, color: '#fff', borderRadius: 4, padding: '2px 6px', animation: 'pulse 1.5s infinite', flexShrink: 0 }}>
+              LIVE
             </span>
           )}
         </div>
@@ -3827,6 +4609,7 @@ function BoardPlayerCard({ pick, rank }) {
         )}
       </div>
     </div>
+    </LoggablePickWrapper>
   );
 }
 
@@ -3876,6 +4659,19 @@ function GamesTab({ games, loading, error, selectedDate }) {
         const spreadMoved = openSpread != null && spread != null && Math.abs(openSpread - spread) > 0.04;
         const totalMoved  = openTotal  != null && total  != null && Math.abs(openTotal  - total)  > 0.04;
         const book = game.odds_sportsbook_short || game.odds_sportsbook || null;
+        const gameLogCard = total != null ? {
+          label: `${aw?.abbreviation || 'AW'} @ ${hw?.abbreviation || 'HM'} O/U ${fmtOne(total)}`,
+          line: total,
+          pick_type: 'game_total',
+          prop_type: 'total',
+          player_id: null,
+          game_id: game.id,
+          lean_default: pred?.total_recommendation ? String(pred.total_recommendation).toLowerCase() : null,
+          juice: -110,
+          sportsbook: book,
+          confidence_score: null,
+          slate_date: selectedDate,
+        } : null;
 
         // Result data for settled games
         const isFinal = isGameFinalStatus(game.status);
@@ -3923,7 +4719,8 @@ function GamesTab({ games, loading, error, selectedDate }) {
         }
 
         return (
-          <div key={game.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: 'hidden' }}>
+          <LoggablePickWrapper key={game.id} card={gameLogCard}>
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: 'hidden' }}>
             {/* Card header */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px 8px', borderBottom: `1px solid ${T.border}`, background: T.card2 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -4097,6 +4894,7 @@ function GamesTab({ games, loading, error, selectedDate }) {
               </div>
             )}
           </div>
+          </LoggablePickWrapper>
         );
       })}
     </div>
@@ -4386,7 +5184,7 @@ function BoardTab({ picks: todayPicks, loading: todayLoading, error: todayError,
           {!loading && !error && filtered.length > 0 && (
             <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'0 0 8px' }}>
               {filtered.map((pick, i) => (
-                <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} />
+                <BoardPlayerCard key={pick.id || i} pick={pick} rank={i + 1} slateDate={boardDate} />
               ))}
             </div>
           )}
@@ -4420,8 +5218,8 @@ function BoardTab({ picks: todayPicks, loading: todayLoading, error: todayError,
 // ============================================================
 // APP ROOT
 // ============================================================
-const NAV_TABS   = ['slate', 'games', 'picks', 'ai', 'fb', 'model'];
-const NAV_LABELS = { slate:'SLATE', games:'GAMES', picks:'PICKS', ai:'AI PICKS', fb:'1ST BSKT', model:'MODEL' };
+const NAV_TABS   = ['slate', 'games', 'picks', 'scout', 'ai', 'fb', 'model'];
+const NAV_LABELS = { slate:'SLATE', games:'GAMES', picks:'PICKS', scout:'SCOUT', ai:'AI PICKS', fb:'1ST BSKT', model:'MODEL' };
 
 export default function App() {
   const [activeNav, setActiveNav]           = useState('slate');
@@ -4630,6 +5428,13 @@ export default function App() {
       {activeNav === 'picks' && (
         <div className="ps-shell ps-page">
           <TopPicksTab picks={topPicks} loading={loadingPicks} error={picksError} selectedDate={selectedDate} />
+        </div>
+      )}
+
+      {/* ── SCOUT tab ── */}
+      {activeNav === 'scout' && (
+        <div className="ps-shell ps-page">
+          <ScoutTab selectedDate={selectedDate} />
         </div>
       )}
 

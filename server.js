@@ -36,6 +36,34 @@ function etDateMinusCalendarDays(daysAgo) {
   return new Date(shifted).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
+function formatET(isoString, opts = {}) {
+  if (!isoString) return null;
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+    ...opts,
+  });
+}
+
+function formatETDate(isoString) {
+  if (!isoString) return null;
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
@@ -1158,6 +1186,7 @@ app.get('/api/wnba/ai-picks', async (req, res) => {
     res.json({
       data: {
         ...data,
+        generated_at_display: formatET(data.generated_at),
         hit_rates: {
           season: {
             hits,
@@ -1374,95 +1403,89 @@ app.get('/api/wnba/game-predictions', async (req, res) => {
 
     const { data: games, error: gErr } = await supabase
       .from('games')
-      .select('id, home_team_id, visitor_team_id, season')
+      .select('id, home_team_id, visitor_team_id, season, status, game_date')
       .eq('game_date', date);
 
     if (gErr) throw gErr;
     if (!games?.length) return res.json({ data: [] });
 
-    const season   = games[0].season;
-    const teamIds  = [...new Set(games.flatMap(g => [g.home_team_id, g.visitor_team_id]))];
-    const gameIds  = games.map(g => g.id);
+    const gameIds = games.map(game => game.id);
+    const { data: cached, error: cacheErr } = await supabase
+      .from('game_predictions_cache')
+      .select('*')
+      .eq('slate_date', date)
+      .eq('source', 'wnba')
+      .in('game_id', gameIds.map(String));
 
-    const [{ data: paceRows, error: pErr }, { data: oppRows, error: oErr }, { data: oddsRows, error: oddsErr }] = await Promise.all([
-      supabase.from('team_pace_ratings').select('team_id, pace_rating').eq('season', season).in('team_id', teamIds).lte('as_of_date', date).order('as_of_date', { ascending: false }),
-      supabase.from('team_opponent_stats').select('team_id, off_rating, def_rating, net_rating').eq('season', season).in('team_id', teamIds).lte('as_of_date', date).order('as_of_date', { ascending: false }),
-      supabase.from('odds_snapshots').select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at').in('game_id', gameIds).is('player_id', null).in('prop_type', ['spread', 'total', 'moneyline']).order('snapshot_at', { ascending: false }),
-    ]);
+    if (cacheErr) throw cacheErr;
+
+    const cacheMap = new Map((cached || []).map(row => [String(row.game_id), row]));
+    const uncachedIds = gameIds.filter(id => !cacheMap.has(String(id)));
+    if (uncachedIds.length) {
+      try {
+        const { cacheGamePredictions } = require('./scripts/cache-game-predictions');
+        await cacheGamePredictions(date);
+        const { data: fresh } = await supabase
+          .from('game_predictions_cache')
+          .select('*')
+          .eq('slate_date', date)
+          .eq('source', 'wnba')
+          .in('game_id', uncachedIds.map(String));
+        for (const row of fresh || []) cacheMap.set(String(row.game_id), row);
+      } catch (error) {
+        console.warn('[game-predictions] Cache fill failed:', error.message);
+      }
+    }
+
+    const { data: oddsRows, error: oddsErr } = await supabase
+      .from('odds_snapshots')
+      .select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at')
+      .in('game_id', gameIds)
+      .is('player_id', null)
+      .in('prop_type', ['spread', 'total', 'moneyline'])
+      .order('snapshot_at', { ascending: false });
 
     if (oddsErr) throw oddsErr;
 
-    if (pErr) throw pErr;
-    if (oErr) throw oErr;
-
-    const paceMap = {};
-    for (const r of paceRows || []) if (!paceMap[r.team_id]) paceMap[r.team_id] = Number(r.pace_rating);
-
-    const oppMap = {};
-    for (const r of oppRows || []) if (!oppMap[r.team_id]) oppMap[r.team_id] = r;
-
-    // Build odds map: game_id → { total, spread }
     const oddsByGame = mergeSlateOddsByGame(oddsRows || []);
-
-    // League average defensive rating baseline — used when team data is missing
-    const defVals = Object.values(oppMap).map(r => r.def_rating).filter(v => v != null);
-    const LEAGUE_AVG_DEF = defVals.length ? defVals.reduce((a, b) => a + b, 0) / defVals.length : 105;
-    const HOME_COURT_ADV = 2.5; // pts
-
     const predictions = games.map(game => {
-      const homePace  = paceMap[game.home_team_id]  || 73;
-      const awayPace  = paceMap[game.visitor_team_id] || 73;
-      const homeStats = oppMap[game.home_team_id]   || {};
-      const awayStats = oppMap[game.visitor_team_id] || {};
+      const pred = cacheMap.get(String(game.id));
+      const status = String(game.status || '').toLowerCase();
+      const isLocked = ['in_progress', 'halftime', 'live', '1st_half', '2nd_half'].includes(status);
+      const isFinal = ['final', 'closed', 'complete'].includes(status);
+      const odds = buildOddsPayloadForGameBookMap(oddsByGame.get(game.id) || new Map());
 
-      const avgPace     = (homePace + awayPace) / 2;
-      const homeOffRtg  = homeStats.off_rating != null ? Number(homeStats.off_rating) : LEAGUE_AVG_DEF;
-      const awayOffRtg  = awayStats.off_rating != null ? Number(awayStats.off_rating) : LEAGUE_AVG_DEF;
-      const homeDefRtg  = homeStats.def_rating != null ? Number(homeStats.def_rating) : LEAGUE_AVG_DEF;
-      const awayDefRtg  = awayStats.def_rating != null ? Number(awayStats.def_rating) : LEAGUE_AVG_DEF;
-      const homeNetRtg  = homeStats.net_rating != null ? Number(homeStats.net_rating) : null;
-      const awayNetRtg  = awayStats.net_rating != null ? Number(awayStats.net_rating) : null;
-
-      // Projected scores
-      const homeProj = (homeOffRtg / 100) * avgPace * (LEAGUE_AVG_DEF / awayDefRtg);
-      const awayProj = (awayOffRtg / 100) * avgPace * (LEAGUE_AVG_DEF / homeDefRtg);
-      const projTotal = Math.round((homeProj + awayProj) * 10) / 10;
-
-      // Projected spread (home perspective, negative = home favored)
-      let projSpread = null;
-      if (homeNetRtg != null && awayNetRtg != null) {
-        projSpread = Math.round(((awayNetRtg - homeNetRtg) * 0.6 - HOME_COURT_ADV) * 10) / 10;
+      if (!pred) {
+        return { game_id: game.id, projected_total: null, projected_spread: null, projected_home_ml: null, projected_away_ml: null, projected_home_score: null, projected_away_score: null, total_gap: null, spread_gap: null, game_is_live: isLocked, game_is_final: isFinal };
       }
 
-      // Moneyline from spread using standard formula
-      function spreadToML(spread) {
-        if (spread == null) return null;
-        // Approximate conversion: every 3 pts ≈ 50-60 ML points
-        const pts = Math.abs(spread);
-        const raw = pts <= 1 ? 105 : Math.round(100 + (pts - 1) * 22);
-        return spread < 0 ? -raw : raw; // negative spread = favorite (negative ML)
-      }
-
-      const gameBookMap  = oddsByGame.get(game.id) || new Map();
-      const gameOdds     = buildOddsPayloadForGameBookMap(gameBookMap);
-      const postedTotal  = gameOdds.total  != null ? Number(gameOdds.total)  : null;
-      const postedSpread = gameOdds.spread != null ? Number(gameOdds.spread) : null;
-      const totalGap     = postedTotal  != null ? Math.round((projTotal - postedTotal) * 10) / 10 : null;
-      const spreadGap    = projSpread   != null && postedSpread != null
-        ? Math.round((projSpread - postedSpread) * 10) / 10 : null;
+      const projectedTotal = pred.projected_total != null ? Number(pred.projected_total) : null;
+      const projectedSpread = pred.projected_spread != null ? Number(pred.projected_spread) : null;
+      const postedTotal = odds.total != null ? Number(odds.total) : null;
+      const postedSpread = odds.spread != null ? Number(odds.spread) : null;
+      const totalGap = !isLocked && !isFinal && postedTotal != null && projectedTotal != null
+        ? Math.round((projectedTotal - postedTotal) * 10) / 10
+        : null;
+      const spreadGap = !isLocked && !isFinal && postedSpread != null && projectedSpread != null
+        ? Math.round((projectedSpread - postedSpread) * 10) / 10
+        : null;
 
       return {
-        game_id:                game.id,
-        projected_total:        projTotal,
-        projected_spread:       projSpread,         // home perspective: negative = home favored
-        projected_home_ml:      spreadToML(projSpread),
-        projected_away_ml:      projSpread != null ? spreadToML(-projSpread) : null,
-        projected_home_score:   Math.round(homeProj * 10) / 10,
-        projected_away_score:   Math.round(awayProj * 10) / 10,
-        total_recommendation:   totalGap  != null ? (totalGap  > 0.5 ? 'OVER' : totalGap  < -0.5 ? 'UNDER' : null) : null,
-        spread_recommendation:  spreadGap != null ? (spreadGap < -0.5 ? 'HOME' : spreadGap > 0.5 ? 'AWAY' : null) : null,
-        total_gap:              totalGap,
-        spread_gap:             spreadGap,
+        game_id: game.id,
+        projected_total: projectedTotal,
+        projected_spread: projectedSpread,
+        projected_home_ml: pred.projected_home_ml,
+        projected_away_ml: pred.projected_away_ml,
+        projected_home_score: pred.projected_home_score != null ? Number(pred.projected_home_score) : null,
+        projected_away_score: pred.projected_away_score != null ? Number(pred.projected_away_score) : null,
+        total_recommendation: totalGap != null ? (totalGap > 0.5 ? 'OVER' : totalGap < -0.5 ? 'UNDER' : null) : null,
+        spread_recommendation: spreadGap != null ? (spreadGap < -0.5 ? 'HOME' : spreadGap > 0.5 ? 'AWAY' : null) : null,
+        total_gap: totalGap,
+        spread_gap: spreadGap,
+        game_is_live: isLocked,
+        game_is_final: isFinal,
+        cached_at: pred.computed_at,
+        cached_at_display: formatET(pred.computed_at),
       };
     });
 
@@ -1502,12 +1525,12 @@ app.get('/api/wnba/top-picks', async (req, res) => {
         id, game_id, player_id, prop_type, line, sportsbook, recommendation,
         confidence_score, projection, l5_avg, l10_avg, season_avg, value_gap,
         home_away_avg,
-        hit_rate_over_season, hit_rate_over_l5,
+        hit_rate_over_season, hit_rate_over_l5, p_hit, ev, kelly_fraction,
         key_factors, risk_flags, correlated_opportunity, correlated_props,
         score_referee, score_projection_edge, score_hit_rate, score_matchup,
         score_recent_form, score_minutes_stability, score_pace, score_rest_context,
         score_injury_impact, score_odds_movement, score_streak, score_team_context,
-        market_notes, summary,
+        locked_at, locked_line, locked_juice, market_notes, summary,
         players(id, full_name, first_name, last_name, position, team_id)
       `)
       .in('game_id', gameIds)
@@ -1555,8 +1578,13 @@ app.get('/api/wnba/top-picks', async (req, res) => {
       const visitorTeam = game ? teamsById.get(game.visitor_team_id) : null;
       const log        = logsByPlayerGame.get(`${pick.player_id}:${pick.game_id}`);
       const grade      = gradePropPick(pick, log, game);
+      const gameStatus = String(game?.status || '').toLowerCase();
+      const gameIsLive = ['in_progress', 'halftime', 'live', '1st_half', '2nd_half'].includes(gameStatus);
+      const gameIsFinal = ['final', 'closed', 'complete'].includes(gameStatus);
+      const displayLine = gameIsLive && pick.locked_line != null ? Number(pick.locked_line) : pick.line;
       const cardPayload = buildCardPayload({
         ...pick,
+        line: displayLine,
         ...grade,
         line_sportsbook_short: sportsbookShortLabel(pick.sportsbook),
         game_date:    game?.game_date  ?? date,
@@ -1565,25 +1593,826 @@ app.get('/api/wnba/top-picks', async (req, res) => {
         visitor_team: visitorTeam ? formatTeam(visitorTeam) : null,
       });
 
-      const pHit = estimateProbability(
-        pick.confidence_score,
-        pick.hit_rate_over_season,
-        pick.hit_rate_over_l5
-      );
-      const ev = calcEV(pHit);
-      const kellyFraction = calcKelly(pHit);
+      let pHit;
+      let ev;
+      let kellyFraction;
+      if (pick.p_hit != null && pick.ev != null && pick.kelly_fraction != null) {
+        pHit = Number(pick.p_hit);
+        ev = Number(pick.ev);
+        kellyFraction = Number(pick.kelly_fraction);
+      } else {
+        pHit = estimateProbability(pick.confidence_score, pick.hit_rate_over_season, pick.hit_rate_over_l5);
+        const juiceRaw = pick.market_notes?.juice ?? pick.market_notes?.over_juice ?? -110;
+        const juice = Number.isFinite(Number(juiceRaw)) ? Number(juiceRaw) : -110;
+        ev = calcEV(pHit, juice);
+        kellyFraction = calcKelly(pHit, juice);
+      }
 
       return {
         ...cardPayload,
-        p_hit: Math.round(pHit * 1000) / 1000,
-        ev: Math.round(ev * 10000) / 10000,
-        kelly_fraction: Math.round(kellyFraction * 10000) / 10000,
+        p_hit: Math.round(pHit * 10000) / 10000,
+        ev: Math.round(ev * 100000) / 100000,
+        kelly_fraction: Math.round(kellyFraction * 100000) / 100000,
+        game_is_live: gameIsLive,
+        game_is_final: gameIsFinal,
+        locked_at: pick.locked_at ?? null,
+        locked_at_display: formatET(pick.locked_at),
       };
     });
 
     res.json({ data });
   } catch (e) {
     handleError(res, e);
+  }
+});
+
+function scoutTierFromScore(score) {
+  const n = Number(score) || 0;
+  if (n >= 70) return 'HIGH';
+  if (n >= 58) return 'SOLID';
+  return 'LEAN';
+}
+
+function normalizeScoutLean(row) {
+  const rec = String(row.recommendation || row.lean || '').toLowerCase();
+  return rec === 'over' || rec === 'under' ? rec : null;
+}
+
+function scoutPayoutForBet(amount, juice) {
+  const stake = Number(amount) || 0;
+  const odds = Number(juice) || -110;
+  const payout = odds < 0 ? stake * 100 / Math.abs(odds) : stake * odds / 100;
+  return Math.round(payout * 100) / 100;
+}
+
+async function attachScoutPlayers(picks) {
+  const playerIds = [...new Set((picks || []).map(p => p.player_id).filter(Boolean))];
+  if (!playerIds.length) return picks || [];
+
+  const { data: players } = await supabase
+    .from('players')
+    .select('id, full_name, position')
+    .in('id', playerIds);
+
+  const byId = new Map((players || []).map(player => [player.id, player]));
+  return (picks || []).map(pick => ({
+    ...pick,
+    players: pick.player_id ? byId.get(Number(pick.player_id)) || null : null,
+  }));
+}
+
+async function buildScoutReasoning(pick) {
+  const ks = pick.key_stats || {};
+  const fallback = pick.pick_type === 'player_prop'
+    ? `${pick.player_name || 'This player'} has a clean ${String(pick.lean).toUpperCase()} look with a ${(pick.p_hit * 100).toFixed(0)}% hit estimate. Projection sits ${ks.value_gap != null ? `${Number(ks.value_gap).toFixed(1)} above the line` : 'ahead of the market'}, with recent form and price both supporting the play.`
+    : `This market shows a positive edge with a ${(pick.p_hit * 100).toFixed(0)}% hit estimate and plus-EV pricing. The number is playable at the current line, though late movement still matters.`;
+
+  if (!process.env.OPENAI_API_KEY) return fallback;
+
+  try {
+    const OpenAI = require('openai');
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = pick.pick_type === 'player_prop'
+      ? [
+        'Write exactly 2 bettor-voice sentences for this WNBA player prop.',
+        'Be specific and concise. Do not mention algorithms or confidence scores.',
+        `Pick: ${pick.player_name} ${String(pick.lean).toUpperCase()} ${pick.line} ${String(pick.prop_type || '').toUpperCase()}`,
+        `Game: ${pick.away_abbr || '?'} @ ${pick.home_abbr || '?'}`,
+        `Win probability: ${(pick.p_hit * 100).toFixed(0)}%`,
+        `EV: +${(pick.ev * 100).toFixed(1)}c per $1`,
+        `Projection: ${ks.projection ?? 'N/A'}, L5: ${ks.l5_avg ?? 'N/A'}, Season: ${ks.season_avg ?? 'N/A'}, Gap: ${ks.value_gap ?? 'N/A'}`,
+        `Key factors: ${(pick.key_factors || []).join('; ') || 'none'}`,
+        `Risk flags: ${(pick.risk_flags || []).join(', ') || 'none'}`,
+      ].join('\n')
+      : [
+        'Write exactly 2 bettor-voice sentences for this WNBA game bet.',
+        `Pick: ${pick.prop_type} ${pick.lean} ${pick.line ?? ''}`,
+        `Win probability: ${(pick.p_hit * 100).toFixed(0)}%`,
+        `EV: +${(pick.ev * 100).toFixed(1)}c per $1`,
+        `Key factors: ${(pick.key_factors || []).join('; ') || 'none'}`,
+      ].join('\n');
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      max_tokens: 160,
+      temperature: 0.6,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return completion.choices[0]?.message?.content?.trim() || fallback;
+  } catch (error) {
+    console.warn('[scout-session] OpenAI reasoning failed:', error.message);
+    return fallback;
+  }
+}
+
+async function loadScoutPlayerPropCandidates(date, riskLevel) {
+  const floors = { conservative: 65, moderate: 55, aggressive: 45 };
+  const floor = floors[riskLevel] ?? 55;
+
+  const { data: games, error: gameError } = await supabase
+    .from('games')
+    .select('id, game_date, home_team_id, visitor_team_id, status')
+    .eq('game_date', date)
+    .not('status', 'in', '("final","closed","complete")');
+
+  if (gameError) throw gameError;
+  if (!games?.length) return [];
+
+  const gameIds = games.map(game => game.id);
+  const gamesById = new Map(games.map(game => [game.id, game]));
+  const teamsById = await getTeamsById();
+
+  const { data: rawProps, error } = await supabase
+    .from('prop_analysis_results')
+    .select(`
+      id, game_id, player_id, prop_type, line, recommendation,
+      confidence_score, market_notes,
+      hit_rate_over_season, hit_rate_over_l5,
+      projection, l5_avg, season_avg, value_gap,
+      key_factors, risk_flags, sportsbook,
+      players(id, full_name, position, team_id)
+    `)
+    .in('game_id', gameIds)
+    .not('confidence_score', 'is', null)
+    .in('recommendation', ['OVER', 'UNDER'])
+    .order('confidence_score', { ascending: false })
+    .limit(50);
+
+  if (error) throw error;
+
+  return (rawProps || [])
+    .filter(pick => Number(pick.confidence_score || 0) >= floor)
+    .filter(pick => {
+      const flags = pick.risk_flags || [];
+      return !flags.includes('dnp') && !flags.includes('injury_risk_high');
+    })
+    .map(pick => {
+      const lean = normalizeScoutLean(pick);
+      if (!lean) return null;
+      const pHit = estimateProbability(pick.confidence_score, pick.hit_rate_over_season, pick.hit_rate_over_l5);
+      const juice = pick.market_notes?.juice ?? -110;
+      const ev = calcEV(pHit, juice);
+      const kelly = calcKelly(pHit, juice);
+      if (ev <= 0 || kelly === 0) return null;
+
+      const game = gamesById.get(pick.game_id);
+      const homeTeam = game ? teamsById.get(game.home_team_id) : null;
+      const awayTeam = game ? teamsById.get(game.visitor_team_id) : null;
+      const keyStats = {
+        l5_avg: pick.l5_avg,
+        season_avg: pick.season_avg,
+        projection: pick.projection,
+        value_gap: pick.value_gap,
+        line_move: pick.market_notes?.opening_line != null
+          ? Math.round((Number(pick.line) - Number(pick.market_notes.opening_line)) * 10) / 10
+          : null,
+      };
+
+      return {
+        pick_type: 'player_prop',
+        player_id: pick.player_id,
+        game_id: String(pick.game_id),
+        prop_type: pick.prop_type,
+        line: pick.line,
+        lean,
+        confidence_score: Math.round(Number(pick.confidence_score) || 0),
+        score_tier: scoutTierFromScore(pick.confidence_score),
+        p_hit: Math.round(pHit * 10000) / 10000,
+        ev: Math.round(ev * 100000) / 100000,
+        kelly_fraction: Math.round(kelly * 100000) / 100000,
+        juice,
+        player_name: pick.players?.full_name || null,
+        home_abbr: homeTeam?.abbreviation || null,
+        away_abbr: awayTeam?.abbreviation || null,
+        key_factors: pick.key_factors || [],
+        risk_flags: pick.risk_flags || [],
+        key_stats: keyStats,
+      };
+    })
+    .filter(Boolean);
+}
+
+function selectScoutCandidates(candidates) {
+  const sorted = [...candidates].sort((a, b) => Number(b.p_hit || 0) - Number(a.p_hit || 0));
+  const countsByGame = new Map();
+  const selected = [];
+
+  for (const pick of sorted) {
+    const gameId = pick.game_id || '_';
+    const count = countsByGame.get(gameId) || 0;
+    if (count >= 2) continue;
+    selected.push(pick);
+    countsByGame.set(gameId, count + 1);
+    if (selected.length >= 12) break;
+  }
+
+  return selected;
+}
+
+async function loadScoutGameProps(date) {
+  const { data: games, error: gErr } = await supabase
+    .from('games')
+    .select('id, home_team_id, visitor_team_id, season, game_date')
+    .eq('game_date', date)
+    .not('status', 'in', '("final","closed","complete")');
+
+  if (gErr) throw gErr;
+  if (!games?.length) return [];
+
+  const season   = games[0].season;
+  const gameIds  = games.map(g => g.id);
+  const teamIds  = [...new Set(games.flatMap(g => [g.home_team_id, g.visitor_team_id]))];
+  const teamsById = await getTeamsById();
+
+  const [{ data: paceRows }, { data: oppRows }, { data: oddsRows }] = await Promise.all([
+    supabase.from('team_pace_ratings').select('team_id, pace_rating').eq('season', season).in('team_id', teamIds).lte('as_of_date', date).order('as_of_date', { ascending: false }),
+    supabase.from('team_opponent_stats').select('team_id, off_rating, def_rating, net_rating').eq('season', season).in('team_id', teamIds).lte('as_of_date', date).order('as_of_date', { ascending: false }),
+    supabase.from('odds_snapshots').select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at').in('game_id', gameIds).is('player_id', null).in('prop_type', ['total', 'moneyline']).order('snapshot_at', { ascending: false }),
+  ]);
+
+  const paceMap = {};
+  for (const r of paceRows || []) if (!paceMap[r.team_id]) paceMap[r.team_id] = Number(r.pace_rating);
+  const oppMap = {};
+  for (const r of oppRows  || []) if (!oppMap[r.team_id])  oppMap[r.team_id]  = r;
+
+  const defVals      = Object.values(oppMap).map(r => r.def_rating).filter(v => v != null);
+  const LEAGUE_AVG   = defVals.length ? defVals.reduce((a, b) => a + b, 0) / defVals.length : 105;
+  const HOME_ADV     = 2.5;
+  const oddsByGame   = mergeSlateOddsByGame(oddsRows || []);
+  const candidates   = [];
+
+  for (const game of games) {
+    const homePace  = paceMap[game.home_team_id]   || 73;
+    const awayPace  = paceMap[game.visitor_team_id] || 73;
+    const homeStats = oppMap[game.home_team_id]    || {};
+    const awayStats = oppMap[game.visitor_team_id] || {};
+    const avgPace   = (homePace + awayPace) / 2;
+
+    const homeOffRtg = homeStats.off_rating != null ? Number(homeStats.off_rating) : LEAGUE_AVG;
+    const awayOffRtg = awayStats.off_rating != null ? Number(awayStats.off_rating) : LEAGUE_AVG;
+    const homeDefRtg = homeStats.def_rating != null ? Number(homeStats.def_rating) : LEAGUE_AVG;
+    const awayDefRtg = awayStats.def_rating != null ? Number(awayStats.def_rating) : LEAGUE_AVG;
+    const homeNetRtg = homeStats.net_rating != null ? Number(homeStats.net_rating) : null;
+    const awayNetRtg = awayStats.net_rating != null ? Number(awayStats.net_rating) : null;
+
+    const homeProj   = (homeOffRtg / 100) * avgPace * (LEAGUE_AVG / awayDefRtg);
+    const awayProj   = (awayOffRtg / 100) * avgPace * (LEAGUE_AVG / homeDefRtg);
+    const projTotal  = Math.round((homeProj + awayProj) * 10) / 10;
+
+    const bookMap   = oddsByGame.get(game.id) || new Map();
+    const odds      = buildOddsPayloadForGameBookMap(bookMap);
+    const homeTeam  = teamsById.get(game.home_team_id);
+    const awayTeam  = teamsById.get(game.visitor_team_id);
+    const homeAbbr  = homeTeam?.abbreviation || 'HM';
+    const awayAbbr  = awayTeam?.abbreviation || 'AW';
+
+    // ── Game Total ──────────────────────────────────────────────
+    if (odds.total != null) {
+      const edge = Math.round((projTotal - Number(odds.total)) * 10) / 10;
+      if (Math.abs(edge) >= 3) {
+        const lean      = edge > 0 ? 'over' : 'under';
+        const totalJuice = -110;  // odds_snapshots total line does not carry juice per side; default
+        const pHit      = Math.abs(edge) >= 5 ? 0.64 : 0.60;
+        const ev        = calcEV(pHit, totalJuice);
+        const tier      = Math.abs(edge) >= 5 ? 'HIGH' : 'SOLID';
+        if (ev > 0) {
+          candidates.push({
+            pick_type:        'game_total',
+            player_id:        null,
+            game_id:          String(game.id),
+            prop_type:        lean,
+            line:             Number(odds.total),
+            lean,
+            team_label:       null,
+            home_abbr:        homeAbbr,
+            away_abbr:        awayAbbr,
+            confidence_score: tier === 'HIGH' ? 72 : 60,
+            score_tier:       tier,
+            p_hit:            pHit,
+            ev:               Math.round(ev * 100000) / 100000,
+            kelly_fraction:   Math.round(calcKelly(pHit, totalJuice) * 100000) / 100000,
+            juice:            totalJuice,
+            key_factors:      [`Projected total ${projTotal} vs posted ${odds.total} (edge ${edge > 0 ? '+' : ''}${edge})`],
+            risk_flags:       [],
+            key_stats: {
+              projected_total: projTotal,
+              posted_line:     Number(odds.total),
+              edge,
+            },
+          });
+        }
+      }
+    }
+
+    // ── Moneyline ───────────────────────────────────────────────
+    if (homeNetRtg != null && awayNetRtg != null) {
+      const projSpread    = Math.round(((awayNetRtg - homeNetRtg) * 0.6 - HOME_ADV) * 10) / 10;
+      // Convert spread to win probability (logistic approximation: every 4 pts ≈ +10% win prob)
+      const homeWinProb   = Math.max(0.20, Math.min(0.80, 0.5 - projSpread / 40));
+      const awayWinProb   = 1 - homeWinProb;
+
+      const mlCandidates = [
+        { lean: 'home', prob: homeWinProb, ml: odds.home_ml, label: homeAbbr },
+        { lean: 'away', prob: awayWinProb, ml: odds.away_ml, label: awayAbbr },
+      ];
+
+      for (const { lean: mlLean, prob, ml, label } of mlCandidates) {
+        if (prob == null || ml == null) continue;
+        if (ml < -220) continue;  // juice trap
+
+        const impliedProb = ml < 0
+          ? Math.abs(ml) / (Math.abs(ml) + 100)
+          : 100 / (ml + 100);
+
+        const edge = Math.round((prob - impliedProb) * 1000) / 1000;
+        if (edge < 0.05) continue;  // require 5% edge minimum
+
+        const tier = edge >= 0.08 ? 'HIGH' : 'SOLID';
+        const ev   = calcEV(prob, ml);
+        if (ev <= 0) continue;
+
+        candidates.push({
+          pick_type:        'moneyline',
+          player_id:        null,
+          game_id:          String(game.id),
+          prop_type:        `${mlLean}_ml`,
+          line:             null,
+          lean:             mlLean,
+          team_label:       label,
+          home_abbr:        homeAbbr,
+          away_abbr:        awayAbbr,
+          confidence_score: tier === 'HIGH' ? 70 : 58,
+          score_tier:       tier,
+          p_hit:            Math.round(prob * 10000) / 10000,
+          ev:               Math.round(ev * 100000) / 100000,
+          kelly_fraction:   Math.round(calcKelly(prob, ml) * 100000) / 100000,
+          juice:            ml,
+          key_factors: [
+            `Model win prob ${(prob * 100).toFixed(1)}% vs implied ${(impliedProb * 100).toFixed(1)}% (edge +${(edge * 100).toFixed(1)}pp)`,
+          ],
+          risk_flags: [],
+          key_stats: {
+            model_win_prob:  Math.round(prob * 1000) / 1000,
+            implied_prob:    Math.round(impliedProb * 1000) / 1000,
+            edge,
+            ml_odds:         ml,
+          },
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+/**
+ * POST /api/wnba/scout-session
+ * Builds or returns the daily Scout betting card.
+ */
+app.post('/api/wnba/scout-session', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const {
+      date,
+      bankroll = 500,
+      daily_target = 50,
+      bet_style = 'flat',
+      risk_level = 'moderate',
+      include_game_props = true,
+    } = req.body || {};
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from('scout_sessions')
+      .select('*, scout_picks(*)')
+      .eq('session_date', date)
+      .eq('source', 'wnba')
+      .maybeSingle();
+
+    if (existingError && existingError.code !== 'PGRST116') throw existingError;
+    if (existing?.scout_picks?.length > 0) {
+      const picksWithPlayers = await attachScoutPlayers(existing.scout_picks);
+      return res.json({
+        session: {
+          ...existing,
+          created_at_display: formatETDate(existing.created_at),
+          updated_at_display: formatETDate(existing.updated_at),
+        },
+        picks: picksWithPlayers,
+      });
+    }
+
+    const playerProps = await loadScoutPlayerPropCandidates(date, risk_level);
+    const gameProps   = include_game_props ? await loadScoutGameProps(date) : [];
+    const allCandidates = [...playerProps, ...gameProps];
+    const selected = selectScoutCandidates(allCandidates);
+    const n = selected.length;
+    const assumedWinRate = 0.60;
+    const payoutAtMinus110 = 100 / 110;
+    const factor = assumedWinRate * payoutAtMinus110 - (1 - assumedWinRate);
+    const bankrollNum = Number(bankroll) || 500;
+    const targetNum = Number(daily_target) || 50;
+    const maxBet = Math.floor(bankrollNum * 0.05);
+    let betPerPick = n > 0 && factor > 0 ? Math.round(targetNum / (n * factor)) : 0;
+    betPerPick = n > 0 ? Math.max(5, Math.min(betPerPick, maxBet)) : 0;
+
+    const betsNeeded = n > 0 ? Math.ceil(targetNum / (betPerPick * payoutAtMinus110)) : 0;
+    const avgPHit = n > 0 ? selected.reduce((sum, pick) => sum + Number(pick.p_hit || 0), 0) / n : 0;
+    const projectedProfit = n > 0
+      ? Math.round(n * betPerPick * (avgPHit * payoutAtMinus110 - (1 - avgPHit)) * 100) / 100
+      : 0;
+
+    for (const pick of selected) {
+      pick.reasoning = await buildScoutReasoning(pick);
+    }
+
+    const { data: sessionRow, error: sessionError } = await supabase
+      .from('scout_sessions')
+      .upsert({
+        session_date: date,
+        bankroll: bankrollNum,
+        daily_target: targetNum,
+        bet_style,
+        risk_level,
+        include_game_props,
+        bet_per_pick: betPerPick,
+        n_picks: n,
+        bets_needed: betsNeeded,
+        projected_win_rate: Math.round(avgPHit * 10000) / 10000,
+        projected_profit: projectedProfit,
+        status: 'active',
+        source: 'wnba',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'session_date,source' })
+      .select()
+      .single();
+
+    if (sessionError) throw sessionError;
+
+    if (!selected.length) {
+      return res.json({ session: sessionRow, picks: [] });
+    }
+
+    const pickRows = selected.map((pick, index) => ({
+      session_id: sessionRow.id,
+      session_date: date,
+      pick_type: pick.pick_type,
+      player_id: pick.player_id ?? null,
+      game_id: pick.game_id ?? null,
+      prop_type: pick.prop_type,
+      line: pick.line,
+      lean: pick.lean,
+      team_label: pick.team_label ?? null,
+      bet_amount: betPerPick,
+      to_win: scoutPayoutForBet(betPerPick, pick.juice),
+      juice: pick.juice,
+      confidence_score: pick.confidence_score,
+      score_tier: pick.score_tier,
+      p_hit: pick.p_hit,
+      ev: pick.ev,
+      kelly_fraction: pick.kelly_fraction,
+      reasoning: pick.reasoning,
+      key_stats: pick.key_stats,
+      risk_flags: pick.risk_flags,
+      source: 'wnba',
+      sort_order: index,
+    }));
+
+    const { data: insertedPicks, error: picksError } = await supabase
+      .from('scout_picks')
+      .insert(pickRows)
+      .select();
+
+    if (picksError) throw picksError;
+
+    res.json({
+      session: {
+        ...sessionRow,
+        created_at_display: formatETDate(sessionRow.created_at),
+        updated_at_display: formatETDate(sessionRow.updated_at),
+      },
+      picks: await attachScoutPlayers(insertedPicks || []),
+    });
+  } catch (error) {
+    console.error('[scout-session]', error.message);
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.patch('/api/wnba/scout-pick/:id', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const pickId = parseInt(req.params.id, 10);
+    if (!pickId) return res.status(400).json({ error: 'Invalid pick id' });
+
+    const { result } = req.body || {};
+    if (!['hit', 'miss', 'push'].includes(result)) {
+      return res.status(400).json({ error: 'result must be hit | miss | push' });
+    }
+
+    const { data: pick, error: fetchError } = await supabase
+      .from('scout_picks')
+      .select('session_id, bet_amount, to_win')
+      .eq('id', pickId)
+      .single();
+
+    if (fetchError || !pick) return res.status(404).json({ error: 'Pick not found' });
+
+    const actualPnl = result === 'hit'
+      ? Number(pick.to_win || 0)
+      : result === 'miss'
+        ? -Number(pick.bet_amount || 0)
+        : 0;
+
+    const { error: updateError } = await supabase
+      .from('scout_picks')
+      .update({
+        result,
+        actual_pnl: actualPnl,
+        resolved_at: new Date().toISOString(),
+        resolved_by: 'manual',
+      })
+      .eq('id', pickId);
+
+    if (updateError) throw updateError;
+
+    const { data: allPicks, error: allError } = await supabase
+      .from('scout_picks')
+      .select('result, actual_pnl')
+      .eq('session_id', pick.session_id);
+
+    if (allError) throw allError;
+
+    const hits = (allPicks || []).filter(row => row.result === 'hit').length;
+    const misses = (allPicks || []).filter(row => row.result === 'miss').length;
+    const pushes = (allPicks || []).filter(row => row.result === 'push').length;
+    const totalPnl = (allPicks || []).reduce((sum, row) => sum + Number(row.actual_pnl || 0), 0);
+    const resolved = hits + misses + pushes;
+    const total = (allPicks || []).length;
+
+    const { error: sessionError } = await supabase
+      .from('scout_sessions')
+      .update({
+        actual_hits: hits,
+        actual_misses: misses,
+        actual_pushes: pushes,
+        actual_pnl: Math.round(totalPnl * 100) / 100,
+        status: resolved >= total ? 'complete' : 'active',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', pick.session_id);
+
+    if (sessionError) throw sessionError;
+
+    res.json({ ok: true, pickId, result, actual_pnl: actualPnl });
+  } catch (error) {
+    console.error('[scout-pick-update]', error.message);
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.get('/api/wnba/scout-history', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days ?? '30', 10)));
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceStr = since.toISOString().slice(0, 10);
+
+    const { data: sessions, error } = await supabase
+      .from('scout_sessions')
+      .select('*')
+      .eq('source', 'wnba')
+      .gte('session_date', sinceStr)
+      .order('session_date', { ascending: false });
+
+    if (error) throw error;
+
+    const totalHits = (sessions || []).reduce((sum, row) => sum + Number(row.actual_hits || 0), 0);
+    const totalMisses = (sessions || []).reduce((sum, row) => sum + Number(row.actual_misses || 0), 0);
+    const totalPushes = (sessions || []).reduce((sum, row) => sum + Number(row.actual_pushes || 0), 0);
+    const totalPnl = (sessions || []).reduce((sum, row) => sum + Number(row.actual_pnl || 0), 0);
+    const totalBets = totalHits + totalMisses + totalPushes;
+    const winRate = totalBets > 0 ? totalHits / totalBets : null;
+
+    const sessionsWithDisplay = (sessions || []).map(session => ({
+      ...session,
+      session_date_display: formatETDate(session.created_at),
+      created_at_display: formatETDate(session.created_at),
+      updated_at_display: formatETDate(session.updated_at),
+    }));
+
+    res.json({
+      days,
+      sessions: sessionsWithDisplay,
+      summary: {
+        total_sessions: sessionsWithDisplay.length,
+        total_hits: totalHits,
+        total_misses: totalMisses,
+        total_pushes: totalPushes,
+        win_rate: winRate != null ? Math.round(winRate * 1000) / 1000 : null,
+        total_pnl: Math.round(totalPnl * 100) / 100,
+      },
+    });
+  } catch (error) {
+    console.error('[scout-history]', error.message);
+    res.status(502).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/wnba/pick-log
+ * User-created manual pick log entry.
+ */
+app.post('/api/wnba/pick-log', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const {
+      slate_date,
+      pick_type,
+      player_id,
+      game_id,
+      prop_type,
+      line,
+      lean,
+      juice,
+      sportsbook,
+      confidence_score,
+      bet_amount,
+    } = req.body || {};
+
+    if (!slate_date || !pick_type || !lean) {
+      return res.status(400).json({ error: 'slate_date, pick_type, and lean are required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(slate_date))) {
+      return res.status(400).json({ error: 'slate_date must be YYYY-MM-DD' });
+    }
+    if (!['player_prop', 'game_total', 'moneyline'].includes(String(pick_type))) {
+      return res.status(400).json({ error: 'pick_type must be player_prop | game_total | moneyline' });
+    }
+    if (!['over', 'under', 'home', 'away'].includes(String(lean))) {
+      return res.status(400).json({ error: 'lean must be over | under | home | away' });
+    }
+    if (String(pick_type) === 'player_prop' && (!player_id || !game_id || !prop_type)) {
+      return res.status(400).json({ error: 'player_prop logs require player_id, game_id, and prop_type' });
+    }
+    if (['game_total', 'moneyline'].includes(String(pick_type)) && !game_id) {
+      return res.status(400).json({ error: 'game logs require game_id' });
+    }
+
+    const row = {
+      slate_date,
+      pick_type,
+      player_id: player_id ?? null,
+      game_id: game_id ?? null,
+      prop_type: prop_type ?? null,
+      line: line != null && line !== '' ? Number(line) : null,
+      lean,
+      juice: juice != null && juice !== '' ? Math.round(Number(juice)) : null,
+      sportsbook: sportsbook ?? null,
+      confidence_score: confidence_score != null && confidence_score !== '' ? Number(confidence_score) : null,
+      bet_amount: bet_amount != null && bet_amount !== '' ? Number(bet_amount) : null,
+      logged_at: new Date().toISOString(),
+      source: 'wnba',
+    };
+
+    let write;
+    if (row.player_id == null) {
+      const { data: existing, error: existingError } = await supabase
+        .from('user_pick_log')
+        .select('id')
+        .eq('slate_date', row.slate_date)
+        .eq('game_id', row.game_id)
+        .eq('prop_type', row.prop_type)
+        .eq('lean', row.lean)
+        .eq('source', row.source)
+        .is('player_id', null)
+        .maybeSingle();
+
+      if (existingError && existingError.code !== 'PGRST116') throw existingError;
+      write = existing?.id
+        ? await supabase.from('user_pick_log').update(row).eq('id', existing.id).select().single()
+        : await supabase.from('user_pick_log').insert(row).select().single();
+    } else {
+      write = await supabase
+        .from('user_pick_log')
+        .upsert(row, { onConflict: 'slate_date,player_id,game_id,prop_type,lean,source' })
+        .select()
+        .single();
+    }
+
+    if (write.error) throw write.error;
+    res.json({ ok: true, pick: write.data });
+  } catch (error) {
+    console.error('[pick-log-add]', error.message);
+    res.status(502).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/wnba/pick-log?date=YYYY-MM-DD&days=30
+ * Returns manual logged picks plus W-L-P and P&L summary.
+ */
+app.get('/api/wnba/pick-log', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const date = req.query.date || null;
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days ?? '30', 10) || 30));
+
+    let query = supabase
+      .from('user_pick_log')
+      .select(`
+        *,
+        players (id, full_name, team_id),
+        games (
+          id, game_date, home_team_id, visitor_team_id, status,
+          home_team:teams!games_home_team_id_fkey(abbreviation),
+          visitor_team:teams!games_visitor_team_id_fkey(abbreviation)
+        )
+      `)
+      .eq('source', 'wnba')
+      .order('logged_at', { ascending: false });
+
+    if (date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+        return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+      }
+      query = query.eq('slate_date', date);
+    } else {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      query = query.gte('slate_date', since.toISOString().slice(0, 10));
+    }
+
+    const { data: picks, error } = await query;
+    if (error) throw error;
+
+    const rows = picks || [];
+    const settled = rows.filter(row => row.result !== null && row.result !== 'push');
+    const hits = settled.filter(row => row.hit === true).length;
+    const misses = settled.filter(row => row.hit === false).length;
+    const pushes = rows.filter(row => row.result === 'push').length;
+    const total = hits + misses;
+    const pnl = rows.reduce((sum, row) => {
+      const stake = Number(row.bet_amount);
+      const odds = Number(row.juice);
+      if (!Number.isFinite(stake) || stake <= 0) return sum;
+      if (row.result === 'hit' && Number.isFinite(odds) && odds !== 0) {
+        const payout = odds > 0 ? stake * (odds / 100) : stake * (100 / Math.abs(odds));
+        return sum + payout;
+      }
+      if (row.result === 'miss') return sum - stake;
+      return sum;
+    }, 0);
+
+    res.json({
+      picks: rows.map(row => ({
+        ...row,
+        logged_at_display: formatET(row.logged_at),
+        resolved_at_display: row.resolved_at ? formatET(row.resolved_at) : null,
+      })),
+      summary: {
+        hits,
+        misses,
+        pushes,
+        total,
+        win_rate: total > 0 ? Math.round((hits / total) * 1000) / 1000 : null,
+        pnl: Math.round(pnl * 100) / 100,
+      },
+    });
+  } catch (error) {
+    console.error('[pick-log-get]', error.message);
+    res.status(502).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/wnba/pick-log/:id
+ * Remove a logged pick by id.
+ */
+app.delete('/api/wnba/pick-log/:id', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
+    const { error } = await supabase
+      .from('user_pick_log')
+      .delete()
+      .eq('id', id)
+      .eq('source', 'wnba');
+    if (error) throw error;
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error('[pick-log-delete]', error.message);
+    res.status(502).json({ error: error.message });
   }
 });
 
@@ -1729,6 +2558,7 @@ app.get('/health', async (_req, res) => {
     return res.status(503).json({
       ...base,
       status: 'degraded',
+      checked_at_display: formatET(new Date().toISOString()),
       error: 'Supabase client not initialized',
       today: { games: null, props: null, odds: null },
       slate: null,
@@ -1747,6 +2577,7 @@ app.get('/health', async (_req, res) => {
     ]);
     return res.json({
       ...base,
+      checked_at_display: formatET(new Date().toISOString()),
       today: counts,
       slate,
       freshness,
@@ -1756,6 +2587,7 @@ app.get('/health', async (_req, res) => {
     return res.status(503).json({
       ...base,
       status: 'degraded',
+      checked_at_display: formatET(new Date().toISOString()),
       error: e.message,
       today: { games: null, props: null, odds: null },
       slate: null,

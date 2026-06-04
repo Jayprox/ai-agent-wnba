@@ -1,6 +1,6 @@
 # WNBA Prop Scout — Codex Handoff Document
 
-**Last updated:** 2026-05-15  
+**Last updated:** 2026-05-20 (Task AN complete)  
 **Prepared by:** Claude (Cowork)  
 **For:** Claude Cowork / OpenAI Codex (continuity)
 
@@ -1312,7 +1312,7 @@ Notes:
 
 ## Backlog — Prediction Market Odds: Polymarket + Kalshi
 
-**Status:** Backlog item added 2026-05-08. Not implemented yet.
+**Status:** Backlog. Not implemented. Pending direction.
 
 **Goal:** Add Polymarket and Kalshi market data using their APIs, then surface those prices alongside the existing sportsbook odds from The Odds API.
 
@@ -3542,6 +3542,10 @@ score_injury_impact: round(sInjury),
 - Verify `key_factors` array contains the injury string for affected players.
 - Row count should decrease on dates where OUT players would have generated props.
 
+### Completion note — 2026-05-18
+
+✅ Confirmed complete via code audit. `getInjuryContext()` and `scoreInjury()` are implemented in `scripts/calc-confidence.js`. OUT players are skipped before prop generation. `score_injury_impact` is dynamically computed and stored. Injury key factors (DOUBTFUL, QUESTIONABLE, GTD) are wired into all seven prop weight blocks.
+
 ---
 
 ## Task R — STL/BLK Opponent Context Data
@@ -3614,6 +3618,10 @@ Note: use `update` not `upsert` since the row should already exist from the earl
 - Run `node scripts/ingest-wnba-stats.js --season=2025`.
 - Query `SELECT team_id, opponent_stl_rate, opponent_blk_rate FROM team_opponent_stats WHERE season=2025 LIMIT 5` — both columns should be non-null decimals (expect ~0.01–0.04 range).
 - Run `node scripts/calc-confidence.js --season=2025` and spot-check STL/BLK rows — `key_factors` should no longer contain "fallback neutral" for teams with data.
+
+### Completion note — 2026-05-18
+
+✅ Confirmed complete via code audit. `fetchOpponentStlBlkRates()` added to `scripts/ingest-wnba-stats.js`, calling `leaguedashteamstats` with `MeasureType: 'Opponent'`. `opponent_stl_rate` and `opponent_blk_rate` computed per possession and merged into `team_opponent_stats`. Observed 2025 league averages: `opponent_stl_rate 0.0901`, `opponent_blk_rate 0.0477`.
 
 ---
 
@@ -3847,6 +3855,10 @@ if (oppDefRating != null && oppDefRating < leagueAvgDef - 3)
 - `node scripts/calc-confidence.js --season=2025` — completes without error.
 - `SELECT player_id, score_team_context FROM prop_analysis_results WHERE score_team_context IS NOT NULL LIMIT 10` — returns rows.
 
+### Completion note — 2026-05-18
+
+✅ Confirmed complete via code audit. `fetchTeamAdvancedRatings()` added to `scripts/ingest-wnba-stats.js`, fetching `OFF_RATING`, `DEF_RATING`, `NET_RATING` and merging into `team_opponent_stats`. `scoreTeamContext()` wired into `scripts/calc-confidence.js` with `score_team_context` weight applied per prop type.
+
 ---
 
 ## Task U — Teammate Injury Usage Boost
@@ -3942,6 +3954,10 @@ No new DB columns needed. No weight change needed. This modifies the projection 
 - Query `SELECT player_id, key_factors FROM prop_analysis_results WHERE game_id = <that game id> AND prop_type = 'pts'` — teammates of the OUT player should show "Usage boost" in `key_factors`.
 - Verify no player listed as OUT themselves appears in `prop_analysis_results` for that game (they should still be skipped at the existing `sInjury === null` check).
 
+### Completion note — 2026-05-18
+
+✅ Confirmed complete via code audit. `buildUsageBoostMap()` implemented in `scripts/calc-confidence.js`. Redistributes OUT player `usage_rate` to healthy teammates proportionally. `usageMultiplier` applied to projection before `projectionEdge` scoring. "Usage boost" key factor emitted when multiplier exceeds 5%.
+
 ---
 
 ## Task V — Rolling Opponent Defensive Efficiency (L10)
@@ -4028,6 +4044,9 @@ if (useRolling && oppRating.pts_allowed_avg_l10 != null && oppRating.pts_allowed
 - `node scripts/calc-confidence.js --season=2025` — completes without error.
 - `SELECT player_id, key_factors FROM prop_analysis_results WHERE key_factors LIKE '%L10%' OR key_factors LIKE '%recently%' LIMIT 5` — at least some rows flag the rolling divergence.
 
+### Completion note — 2026-05-18
+
+✅ Confirmed complete via code audit. `calc-matchup-ratings.js` computes `pts_allowed_avg_l10`, `reb_allowed_avg_l10`, `ast_allowed_avg_l10`, and `l10_game_count` from ordered per-game entries. `calc-confidence.js` prefers L10 values when `l10_game_count >= 5`, falling back to season averages. Rolling divergence key factors emitted when L10 differs meaningfully from season.
 
 ---
 
@@ -4035,7 +4054,7 @@ if (useRolling && oppRating.pts_allowed_avg_l10 != null && oppRating.pts_allowed
 
 **Goal:** Add a second board tab ("AI BOARD") alongside the existing algorithmic BOARD. Where the BOARD shows weighted-signal confidence picks, the AI BOARD layers Monte Carlo simulation, expected value modeling, Kelly Criterion sizing, parlay optimization, and an LLM-generated narrative on top of those same picks — giving a richer, probabilistic view of the slate.
 
-**Status:** Deferred — implement after 2–3 weeks of 2026 season data has accumulated (mid-to-late May 2026). The simulations are only meaningful with a real within-season distribution established.
+**Status:** ✅ Superseded and implemented. Task Z (AI PICKS tab via GPT-4o) and Task AE (EV + Kelly sizing on PICKS cards) together deliver the core vision of this task. Monte Carlo simulation and parlay optimizer remain as stretch goals if desired later.
 
 **Scope:** New API endpoint + new frontend tab. No changes to existing scripts or DB schema.
 
@@ -4157,7 +4176,7 @@ Add "AI BOARD" alongside "BOARD" in the top nav. Same orange-on-navy theme, but 
 
 ## UI Backlog — Slate Game Card Simplification
 
-**Status:** Backlog. Do not implement until directed.
+**Status:** ✅ Complete (confirmed via code audit 2026-05-18).
 
 **Goal:** Clean up the SLATE tab game cards. Currently each card expands to show inline prop sub-tabs (PTS, REB, AST, PRA, STL, BLK, 3PM, FB). This clutters the slate view and duplicates functionality that belongs in the full game detail screen.
 
@@ -4364,7 +4383,7 @@ ON CONFLICT (alias) DO NOTHING;
 
 ## UI Backlog — Game Overview: Real Team Records + Odds Matching Fix
 
-**Status:** Backlog. Do not implement until directed.
+**Status:** ✅ Complete (confirmed via code audit 2026-05-18). W-L records served from `team_season_records` via `home_record`/`visitor_record` on all game objects. Odds matching uses contains + word-overlap fallback in `findMatchingGame()`.
 
 **Goal:** Fix two gaps visible in the game detail OVERVIEW tab:
 1. "Record unavailable" — W-L records are never computed from real game data
@@ -6796,3 +6815,3139 @@ This keeps sizing context in view without dominating the card. The `(¼ Kelly, �
 - Helper smoke test passed for exports and probability range: `estimateProbability(72, 0.62, 0.80) = 0.6940`; `calcKelly(0.50) = 0`.
 - Note: using the formula specified in Task AE, `calcEV(0.55) = 0.0500`, `calcEV(0.60) = 0.1455`, and `calcKelly(0.60) = 0.0400`; these differ from the prose approximations but match the provided EV/Kelly formulas at -110.
 - API smoke test passed: `GET /api/wnba/top-picks?date=2026-05-08&limit=1` returned `p_hit`, `ev`, and `kelly_fraction`.
+
+---
+
+## Hotfixes — 2026-05-18 (Board Card Snapshots)
+
+Two bugs found and fixed after Task AD deploy. No Codex action required — applied directly by CW.
+
+### Fix 1 — Upsert → Insert (snapshot constraint mismatch)
+
+**Problem:** `POST /api/wnba/board-snapshot` was using `.upsert(rows, { onConflict: 'slate_date,player_id,prop_type,source', ignoreDuplicates: true })`. This requires Postgres to have a named unique constraint on exactly those four columns. If the `DO $$` block in `db/023_board_card_snapshots_wnba.sql` failed to create the constraint (which it silently can in some migration environments), Postgres rejects the entire insert with a constraint-not-found error. The frontend's `.catch(() => {})` swallowed it, so nothing appeared in Supabase.
+
+**Fix in `server.js` and `routes/boardSnapshot.js`:** Replaced `.upsert(...)` with `.insert(rows)` and check error code `23505` (unique constraint violation) explicitly — that code means the row already exists, which is fine. Any other error code is rethrown as a real error.
+
+```js
+const { error } = await supabase.from('board_card_snapshots').insert(rows);
+// 23505 = unique_violation — row already exists for this date, that's fine
+if (error && error.code !== '23505') throw error;
+```
+
+### Fix 2 — confidence_score float → integer coercion
+
+**Problem:** `board_card_snapshots.confidence_score` is an `INTEGER` column, but `prop_analysis_results.confidence_score` stores floats like `68.97`. The insert failed with: `invalid input syntax for type integer: "68.97"`.
+
+**Fix in `wnba-prop-scout.jsx`:** Added `Math.round()` to the snapshot card builder:
+
+```js
+confidence_score: pick.confidence_score != null ? Math.round(pick.confidence_score) : null,
+```
+
+### Fix 3 — Frontend error visibility
+
+**Problem:** The snapshot POST was `.catch(() => {})` — completely silent, making debugging impossible.
+
+**Fix in `wnba-prop-scout.jsx`:** Changed to log failures to the browser console while still never blocking the UI:
+
+```js
+.then(r => {
+  if (!r.ok) r.json().then(e => console.warn('[board-snapshot] POST failed:', e)).catch(() => {});
+}).catch(e => console.warn('[board-snapshot] POST error:', e));
+```
+
+**Result:** Snapshots now land in `board_card_snapshots` correctly when the PICKS tab loads. Confirmed in Supabase after deploy.
+
+---
+
+## Task AF — Scout Tab: Database Schema
+
+**Goal:** Create the two Supabase tables that back the Scout tab — `scout_sessions` (one row per daily betting session) and `scout_picks` (one row per pick in that session). These tables persist the user's daily card, bet sizing, AI reasoning, and outcomes. They are the foundation for Tasks AG and AH.
+
+**Files to create:**
+- `db/024_scout_tables.sql`
+
+---
+
+### Background
+
+The Scout tab acts as an AI bettor. The user sets a bankroll and daily profit target; the app curates a slate of straight bets and sizes them so that hitting 60–70% yields the target. All session and pick data must persist in Supabase (not localStorage) to enable cross-device use, nightly auto-resolution by existing scripts, and long-term win-rate tracking.
+
+---
+
+### Step 1 — Create `db/024_scout_tables.sql`
+
+Create this file. Run it against Supabase (paste into the SQL editor or via `psql`). Use `IF NOT EXISTS` / `IF NOT EXISTS` guards throughout — the file must be safe to run multiple times.
+
+```sql
+-- ============================================================
+-- Scout Tab tables
+-- Created: Task AF
+-- ============================================================
+
+-- One row per daily Scout session (one per calendar date, per source)
+CREATE TABLE IF NOT EXISTS scout_sessions (
+  id                  SERIAL PRIMARY KEY,
+  session_date        DATE        NOT NULL,
+  bankroll            DECIMAL(10,2) NOT NULL,
+  daily_target        DECIMAL(10,2) NOT NULL,
+  bet_style           TEXT        NOT NULL DEFAULT 'flat',      -- 'flat' | 'kelly'
+  risk_level          TEXT        NOT NULL DEFAULT 'moderate',  -- 'conservative' | 'moderate' | 'aggressive'
+  include_game_props  BOOLEAN     NOT NULL DEFAULT TRUE,
+  bet_per_pick        DECIMAL(10,2) NOT NULL,
+  n_picks             INTEGER     NOT NULL DEFAULT 0,
+  bets_needed         INTEGER     NOT NULL DEFAULT 0,           -- picks needed to hit target at assumed win rate
+  projected_win_rate  DECIMAL(5,4),                            -- model average p_hit across selected picks
+  projected_profit    DECIMAL(10,2),
+  actual_hits         INTEGER     NOT NULL DEFAULT 0,
+  actual_misses       INTEGER     NOT NULL DEFAULT 0,
+  actual_pushes       INTEGER     NOT NULL DEFAULT 0,
+  actual_pnl          DECIMAL(10,2) NOT NULL DEFAULT 0,
+  status              TEXT        NOT NULL DEFAULT 'active',    -- 'active' | 'complete'
+  source              TEXT        NOT NULL DEFAULT 'wnba',
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Only one active session per date per source
+CREATE UNIQUE INDEX IF NOT EXISTS scout_sessions_date_source_key
+  ON scout_sessions (session_date, source);
+
+CREATE INDEX IF NOT EXISTS idx_scout_sessions_date
+  ON scout_sessions (session_date DESC);
+
+-- One row per pick inside a session
+CREATE TABLE IF NOT EXISTS scout_picks (
+  id                SERIAL PRIMARY KEY,
+  session_id        INTEGER     NOT NULL REFERENCES scout_sessions(id) ON DELETE CASCADE,
+  session_date      DATE        NOT NULL,
+
+  -- What the pick is
+  pick_type         TEXT        NOT NULL,  -- 'player_prop' | 'game_total' | 'moneyline'
+  player_id         INTEGER     REFERENCES players(id),  -- NULL for game picks
+  game_id           TEXT,                                -- BDL/ESPN game ID
+  prop_type         TEXT,                                -- 'pts','reb','ast','fg3m','over','under','home_ml','away_ml'
+  line              DECIMAL(6,2),                        -- NULL for moneyline
+  lean              TEXT        NOT NULL,                -- 'over' | 'under' | 'home' | 'away'
+  team_label        TEXT,                                -- e.g. 'NY' or 'LV' for game picks
+
+  -- Bet sizing (locked at session creation time)
+  bet_amount        DECIMAL(10,2) NOT NULL,
+  to_win            DECIMAL(10,2) NOT NULL,
+  juice             INTEGER     NOT NULL DEFAULT -110,   -- actual American odds used
+
+  -- Model signals at time of pick (snapshot — do not update)
+  confidence_score  INTEGER,
+  score_tier        TEXT,                                -- 'HIGH' | 'SOLID' | 'LEAN'
+  p_hit             DECIMAL(5,4),
+  ev                DECIMAL(8,6),
+  kelly_fraction    DECIMAL(6,5),
+
+  -- Context for the card
+  reasoning         TEXT,                                -- AI-generated bettor-voice paragraph
+  key_stats         JSONB,                               -- { l5_avg, season_avg, opp_rank, line_move, edge, ... }
+  risk_flags        TEXT[],
+
+  -- Resolution (filled by user or nightly script)
+  result            TEXT,                                -- 'hit' | 'miss' | 'push' | NULL (pending)
+  actual_value      DECIMAL(6,2),                        -- final stat or final score (for auto-resolve)
+  actual_pnl        DECIMAL(10,2),                       -- +to_win on hit, -bet_amount on miss, 0 on push
+  resolved_at       TIMESTAMPTZ,
+  resolved_by       TEXT NOT NULL DEFAULT 'pending',     -- 'pending' | 'manual' | 'auto'
+
+  source            TEXT        NOT NULL DEFAULT 'wnba',
+  sort_order        INTEGER     NOT NULL DEFAULT 0,      -- pick order within session (0 = highest confidence)
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_scout_picks_session
+  ON scout_picks (session_id);
+
+CREATE INDEX IF NOT EXISTS idx_scout_picks_date
+  ON scout_picks (session_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_scout_picks_player
+  ON scout_picks (player_id);
+
+CREATE INDEX IF NOT EXISTS idx_scout_picks_result
+  ON scout_picks (result);
+
+-- Grants (match existing tables)
+GRANT ALL ON TABLE scout_sessions TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE scout_sessions_id_seq TO postgres, anon, authenticated, service_role;
+
+GRANT ALL ON TABLE scout_picks TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE scout_picks_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+---
+
+### Acceptance checks
+
+- Paste `db/024_scout_tables.sql` into Supabase SQL Editor → runs without errors
+- Run it a second time → still no errors (idempotent)
+- `SELECT * FROM scout_sessions LIMIT 1` returns no error
+- `SELECT * FROM scout_picks LIMIT 1` returns no error
+- Both tables visible in the Supabase Table Editor with correct column types
+- `scout_picks` has a foreign key to `scout_sessions` (verify in Supabase → Table Editor → scout_picks → Foreign Keys)
+- `node --check server.js` still passes (no server changes in this task)
+
+---
+
+## Task AG — Scout Tab: Backend
+
+**Goal:** Build all server-side logic for the Scout tab. Three new endpoints + one extended script. The `POST /api/wnba/scout-session` endpoint is the core: it runs the pick selection algorithm, scores game props (ML + totals), generates AI bettor-voice reasoning via OpenAI, sizes bets, writes to `scout_sessions` + `scout_picks`, and returns the full session payload. Two supporting endpoints handle result marking and history. The nightly resolve script is extended to auto-grade scout picks after games are final.
+
+**Prerequisite:** Task AF must be deployed first (tables must exist).
+
+**Files to change:**
+- `server.js` — add `POST /api/wnba/scout-session`, `PATCH /api/wnba/scout-pick/:id`, `GET /api/wnba/scout-history`
+- `scripts/resolve-board-snapshots.js` — extend to also resolve `scout_picks`
+
+---
+
+### Background
+
+The existing `/api/wnba/top-picks` endpoint already returns player props sorted by confidence with `p_hit`, `ev`, `kelly_fraction`, `score_tier`, `risk_flags`, `key_factors`, `market_notes` (CLV, line movement), `hit_rate_over_season`, `hit_rate_over_l5`, and the full `market_notes` JSON. The Scout session endpoint consumes this data internally rather than having the frontend re-fetch it. Game props (ML + totals) are built from `/api/wnba/game-predictions` and `/api/odds/wnba` — both already exist. OpenAI reasoning uses the same `openai` client already in `server.js`.
+
+---
+
+### Step 1 — `POST /api/wnba/scout-session`
+
+Add this route to `server.js`. Mount it at line order after the existing `/api/wnba/top-picks` handler.
+
+**Request body:**
+```json
+{
+  "date": "2026-05-20",
+  "bankroll": 500,
+  "daily_target": 50,
+  "bet_style": "flat",
+  "risk_level": "moderate",
+  "include_game_props": true
+}
+```
+
+**Full implementation logic — follow exactly:**
+
+```js
+app.post('/api/wnba/scout-session', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const {
+      date,
+      bankroll       = 500,
+      daily_target   = 50,
+      bet_style      = 'flat',
+      risk_level     = 'moderate',
+      include_game_props = true,
+    } = req.body || {};
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    // ── 1. Check for existing session (idempotent) ──────────────
+    const { data: existing } = await supabase
+      .from('scout_sessions')
+      .select('*, scout_picks(*)')
+      .eq('session_date', date)
+      .eq('source', 'wnba')
+      .single();
+
+    if (existing && existing.scout_picks?.length > 0) {
+      return res.json({ session: existing, picks: existing.scout_picks });
+    }
+
+    // ── 2. Fetch player props from top-picks internals ───────────
+    // Re-use the same query that /api/wnba/top-picks uses.
+    // Pull directly from prop_analysis_results + player data.
+    const { data: rawProps } = await supabase
+      .from('prop_analysis_results')
+      .select(`
+        id, player_id, prop_type, line, recommendation, lean,
+        confidence_score, score_tier, market_notes,
+        hit_rate_over_season, hit_rate_over_l5,
+        score_matchup, score_recent_form, score_pace,
+        projection, l5_avg, season_avg, value_gap,
+        key_factors, risk_flags, sportsbook,
+        players ( id, full_name, position, team_id ),
+        games!inner ( id, home_team_id, visitor_team_id, status, date,
+          home_team:teams!games_home_team_id_fkey ( abbreviation ),
+          visitor_team:teams!games_visitor_team_id_fkey ( abbreviation )
+        )
+      `)
+      .eq('games.date', date)
+      .not('games.status', 'in', '("final","closed","complete")')
+      .not('confidence_score', 'is', null)
+      .order('confidence_score', { ascending: false })
+      .limit(50);
+
+    // ── 3. Determine confidence floor by risk level ──────────────
+    const floors = { conservative: 65, moderate: 55, aggressive: 45 };
+    const floor  = floors[risk_level] ?? 55;
+
+    // ── 4. Build scored player prop candidates ───────────────────
+    const { estimateProbability, calcEV, calcKelly } = require('./lib/scoring/ev-kelly');
+
+    const propCandidates = (rawProps || [])
+      .filter(p => {
+        if ((p.confidence_score ?? 0) < floor) return false;
+        if (!p.lean || !['over','under'].includes(p.lean)) return false;
+        const flags = p.risk_flags || [];
+        if (flags.includes('dnp') || flags.includes('injury_risk_high')) return false;
+        return true;
+      })
+      .map(p => {
+        const pHit  = estimateProbability(p.confidence_score, p.hit_rate_over_season, p.hit_rate_over_l5);
+        const juice = p.market_notes?.juice ?? -110;
+        const ev    = calcEV(pHit, juice);
+        const kelly = calcKelly(pHit, juice);
+        if (ev <= 0 || kelly === 0) return null;
+        return {
+          _raw: p,
+          pick_type:        'player_prop',
+          player_id:        p.player_id,
+          game_id:          p.games?.id,
+          prop_type:        p.prop_type,
+          line:             p.line,
+          lean:             p.lean,
+          confidence_score: Math.round(p.confidence_score),
+          score_tier:       p.score_tier,
+          p_hit:            Math.round(pHit * 10000) / 10000,
+          ev:               Math.round(ev * 100000) / 100000,
+          kelly_fraction:   Math.round(kelly * 100000) / 100000,
+          juice,
+          player_name:      p.players?.full_name,
+          home_abbr:        p.games?.home_team?.abbreviation,
+          away_abbr:        p.games?.visitor_team?.abbreviation,
+          key_factors:      p.key_factors || [],
+          risk_flags:       p.risk_flags  || [],
+          key_stats: {
+            l5_avg:        p.l5_avg,
+            season_avg:    p.season_avg,
+            projection:    p.projection,
+            value_gap:     p.value_gap,
+            line_move:     p.market_notes?.opening_line != null
+                             ? p.line - p.market_notes.opening_line
+                             : null,
+            opp_rank_pts:  null,  // enriched later if matchup data available
+          },
+        };
+      })
+      .filter(Boolean);
+
+    // ── 5. Game props (ML + Totals) ──────────────────────────────
+    const gamePropCandidates = [];
+    if (include_game_props) {
+      // Fetch game predictions and odds
+      const [predResp, oddsResp] = await Promise.all([
+        supabase
+          .from('game_predictions')
+          .select('game_id, projected_total, home_win_probability')
+          .in('game_id', [...new Set((rawProps || []).map(p => p.games?.id).filter(Boolean))]),
+        supabase
+          .from('game_odds')
+          .select('game_id, total_line, over_juice, under_juice, home_ml, away_ml')
+          .in('game_id', [...new Set((rawProps || []).map(p => p.games?.id).filter(Boolean))]),
+      ]);
+
+      const preds = Object.fromEntries((predResp.data || []).map(r => [r.game_id, r]));
+      const odds  = Object.fromEntries((oddsResp.data || []).map(r => [r.game_id, r]));
+
+      for (const gameId of Object.keys(preds)) {
+        const pred    = preds[gameId];
+        const odd     = odds[gameId];
+        if (!pred || !odd) continue;
+
+        // -- Game Total --
+        if (odd.total_line != null && pred.projected_total != null) {
+          const edge = pred.projected_total - odd.total_line;
+          if (Math.abs(edge) >= 3) {
+            const lean       = edge > 0 ? 'over' : 'under';
+            const totalJuice = lean === 'over' ? (odd.over_juice ?? -110) : (odd.under_juice ?? -110);
+            const pHit       = edge >= 5 ? 0.64 : 0.60;
+            const ev         = calcEV(pHit, totalJuice);
+            const tier       = Math.abs(edge) >= 5 ? 'HIGH' : 'SOLID';
+            if (ev > 0) {
+              gamePropCandidates.push({
+                pick_type:        'game_total',
+                player_id:        null,
+                game_id:          gameId,
+                prop_type:        lean,      // 'over' | 'under'
+                line:             odd.total_line,
+                lean,
+                confidence_score: tier === 'HIGH' ? 72 : 60,
+                score_tier:       tier,
+                p_hit:            pHit,
+                ev:               Math.round(ev * 100000) / 100000,
+                kelly_fraction:   Math.round(calcKelly(pHit, totalJuice) * 100000) / 100000,
+                juice:            totalJuice,
+                key_stats: {
+                  projected_total: pred.projected_total,
+                  posted_line:     odd.total_line,
+                  edge:            Math.round(edge * 10) / 10,
+                },
+                risk_flags:  [],
+                key_factors: [`Projected total ${pred.projected_total.toFixed(1)} vs posted ${odd.total_line}`],
+              });
+            }
+          }
+        }
+
+        // -- Moneyline --
+        const homeWinProb = pred.home_win_probability;
+        const awayWinProb = homeWinProb != null ? 1 - homeWinProb : null;
+
+        const mlCandidates = [
+          { lean: 'home', prob: homeWinProb, ml: odd.home_ml },
+          { lean: 'away', prob: awayWinProb, ml: odd.away_ml },
+        ];
+
+        for (const { lean: mlLean, prob, ml } of mlCandidates) {
+          if (prob == null || ml == null) continue;
+          if (ml < -220) continue;  // juice trap — skip heavy favorites
+
+          const impliedProb = ml < 0
+            ? Math.abs(ml) / (Math.abs(ml) + 100)
+            : 100 / (ml + 100);
+
+          const edge = prob - impliedProb;
+          if (edge < 0.05) continue;  // require 5% edge minimum
+
+          const tier = edge >= 0.08 ? 'HIGH' : 'SOLID';
+          const ev   = calcEV(prob, ml);
+          if (ev <= 0) continue;
+
+          gamePropCandidates.push({
+            pick_type:        'moneyline',
+            player_id:        null,
+            game_id:          gameId,
+            prop_type:        `${mlLean}_ml`,
+            line:             null,
+            lean:             mlLean,
+            confidence_score: tier === 'HIGH' ? 70 : 58,
+            score_tier:       tier,
+            p_hit:            Math.round(prob * 10000) / 10000,
+            ev:               Math.round(ev * 100000) / 100000,
+            kelly_fraction:   Math.round(calcKelly(prob, ml) * 100000) / 100000,
+            juice:            ml,
+            key_stats: {
+              model_win_prob:  Math.round(prob * 1000) / 1000,
+              implied_prob:    Math.round(impliedProb * 1000) / 1000,
+              edge:            Math.round(edge * 1000) / 1000,
+              ml_odds:         ml,
+            },
+            risk_flags:  [],
+            key_factors: [
+              `Model gives ${(prob * 100).toFixed(1)}% win prob vs ${(impliedProb * 100).toFixed(1)}% implied`,
+              `Edge: +${(edge * 100).toFixed(1)}pp`,
+            ],
+          });
+        }
+      }
+    }
+
+    // ── 6. Merge + diversify ─────────────────────────────────────
+    // Sort all candidates by p_hit desc. Apply per-game cap of 2 picks.
+    // Block intra-game contradictions (e.g. game total over + player under pts on same game).
+    let allCandidates = [...propCandidates, ...gamePropCandidates]
+      .sort((a, b) => b.p_hit - a.p_hit);
+
+    const gamePickCount  = {};
+    const gamePickLeans  = {};  // gameId → Set of 'over'|'under'
+    const selected       = [];
+
+    for (const c of allCandidates) {
+      const gid = c.game_id || '_';
+      gamePickCount[gid]  = gamePickCount[gid]  || 0;
+      gamePickLeans[gid]  = gamePickLeans[gid]  || new Set();
+
+      if (gamePickCount[gid] >= 2) continue;
+
+      // Block contradiction: don't mix game total lean with many opposite player picks
+      if (c.pick_type === 'game_total') {
+        const oppLean = c.lean === 'over' ? 'under' : 'over';
+        if (gamePickLeans[gid].has(oppLean)) continue;
+      }
+
+      selected.push(c);
+      gamePickCount[gid]++;
+      if (c.lean === 'over' || c.lean === 'under') gamePickLeans[gid].add(c.lean);
+      if (selected.length >= 12) break;
+    }
+
+    // ── 7. Bet sizing ─────────────────────────────────────────────
+    // Flat: bet_per_pick = daily_target / (n_picks × (win_rate × payout - loss_rate))
+    // Use a conservative assumed win rate of 0.60 for sizing math.
+    const n              = selected.length;
+    const assumedWinRate = 0.60;
+    const payoutAtMinus110 = 100 / 110;  // 0.909
+
+    // Per-pick profit at assumed win rate and flat bet B:
+    //   expected_profit_per_pick = B × (assumedWinRate × payoutAtMinus110 - (1-assumedWinRate))
+    // Solve for B: B = daily_target / (n × factor)
+    const factor       = assumedWinRate * payoutAtMinus110 - (1 - assumedWinRate);
+    let betPerPick     = n > 0 && factor > 0
+                           ? Math.round(daily_target / (n * factor))
+                           : 0;
+
+    // Bankroll guardrail: cap at 5% of bankroll per pick
+    const maxBet       = Math.floor(bankroll * 0.05);
+    betPerPick         = Math.min(betPerPick, maxBet);
+    betPerPick         = Math.max(betPerPick, 5);  // $5 floor
+
+    const betsNeeded   = n > 0 ? Math.ceil(daily_target / (betPerPick * payoutAtMinus110)) : 0;
+    const avgPHit      = n > 0 ? selected.reduce((s, p) => s + p.p_hit, 0) / n : 0;
+    const projectedProfit = n > 0
+      ? Math.round(n * betPerPick * (avgPHit * payoutAtMinus110 - (1 - avgPHit)) * 100) / 100
+      : 0;
+
+    // ── 8. AI reasoning (OpenAI) — one call per pick ─────────────
+    // Cache key: `scout_reason:${date}:${pick_type}:${player_id ?? game_id}:${lean}`
+    // Check existing reasoning in scout_picks for this date before calling OpenAI.
+    const { data: existingPicks } = await supabase
+      .from('scout_picks')
+      .select('prop_type, lean, player_id, game_id, reasoning')
+      .eq('session_date', date);
+    const reasoningCache = {};
+    for (const ep of existingPicks || []) {
+      const key = `${ep.player_id ?? ep.game_id}:${ep.prop_type}:${ep.lean}`;
+      if (ep.reasoning) reasoningCache[key] = ep.reasoning;
+    }
+
+    const openaiAvailable = !!process.env.OPENAI_API_KEY;
+
+    for (const pick of selected) {
+      const cacheKey = `${pick.player_id ?? pick.game_id}:${pick.prop_type}:${pick.lean}`;
+      if (reasoningCache[cacheKey]) {
+        pick.reasoning = reasoningCache[cacheKey];
+        continue;
+      }
+      if (!openaiAvailable) {
+        pick.reasoning = null;
+        continue;
+      }
+
+      try {
+        let systemContent = '';
+        if (pick.pick_type === 'player_prop') {
+          const ks = pick.key_stats || {};
+          systemContent = [
+            `You are a sharp sports bettor reviewing data from an analytics model.`,
+            `Write exactly 2-3 sentences explaining why you're confident in this bet.`,
+            `Be specific: cite actual numbers. Mention line movement when it supports the pick.`,
+            `Acknowledge the biggest risk in one clause. Sound like a bettor talking to a friend, not a data scientist.`,
+            `Never use phrases like "the model indicates", "confidence score", or "algorithm".`,
+            ``,
+            `Pick: ${pick.player_name} ${pick.lean.toUpperCase()} ${pick.line} ${(pick.prop_type || '').toUpperCase()}`,
+            `Game: ${pick.away_abbr} @ ${pick.home_abbr}`,
+            `Win probability: ${(pick.p_hit * 100).toFixed(0)}%`,
+            `EV: +${(pick.ev * 100).toFixed(1)}c per $1`,
+            `L5 avg: ${ks.l5_avg ?? 'N/A'}  Season avg: ${ks.season_avg ?? 'N/A'}`,
+            `Line moved: ${ks.line_move != null ? `${ks.line_move > 0 ? '+' : ''}${ks.line_move}` : 'no movement'}`,
+            `Risk flags: ${(pick.risk_flags || []).join(', ') || 'none'}`,
+            `Key factors: ${(pick.key_factors || []).join('; ')}`,
+          ].join('\n');
+        } else if (pick.pick_type === 'game_total') {
+          const ks = pick.key_stats || {};
+          systemContent = [
+            `You are a sharp sports bettor.`,
+            `Write exactly 2 sentences explaining why you like the game total ${pick.lean.toUpperCase()} ${pick.line}.`,
+            `Cite: the projected total vs the posted line, what that gap means, and the biggest counter-argument.`,
+            `Sound like a bettor, not an analyst.`,
+            ``,
+            `Game total ${pick.lean.toUpperCase()} ${pick.line}`,
+            `Projected total: ${ks.projected_total}  Posted line: ${ks.posted_line}  Edge: ${ks.edge > 0 ? '+' : ''}${ks.edge} pts`,
+            `Win probability: ${(pick.p_hit * 100).toFixed(0)}%`,
+          ].join('\n');
+        } else {
+          // moneyline
+          const ks = pick.key_stats || {};
+          systemContent = [
+            `You are a sharp sports bettor.`,
+            `Write exactly 2 sentences explaining why you like the ${pick.lean === 'home' ? 'home' : 'away'} team ML at ${pick.juice}.`,
+            `Cite the model's win probability vs the implied odds probability and the edge. Acknowledge the biggest risk.`,
+            `Sound like a bettor.`,
+            ``,
+            `${pick.lean === 'home' ? 'Home' : 'Away'} ML ${pick.juice}`,
+            `Model win prob: ${(ks.model_win_prob * 100).toFixed(1)}%  Implied: ${(ks.implied_prob * 100).toFixed(1)}%  Edge: +${(ks.edge * 100).toFixed(1)}pp`,
+          ].join('\n');
+        }
+
+        const completion = await openai.chat.completions.create({
+          model:       'gpt-4o-mini',
+          max_tokens:  180,
+          temperature: 0.6,
+          messages: [{ role: 'user', content: systemContent }],
+        });
+        pick.reasoning = completion.choices[0]?.message?.content?.trim() ?? null;
+      } catch (err) {
+        console.warn('[scout-session] OpenAI reasoning failed:', err.message);
+        pick.reasoning = null;
+      }
+    }
+
+    // ── 9. Upsert session row ─────────────────────────────────────
+    const { data: sessionRow, error: sessionErr } = await supabase
+      .from('scout_sessions')
+      .upsert({
+        session_date:       date,
+        bankroll,
+        daily_target,
+        bet_style,
+        risk_level,
+        include_game_props,
+        bet_per_pick:       betPerPick,
+        n_picks:            n,
+        bets_needed:        betsNeeded,
+        projected_win_rate: Math.round(avgPHit * 10000) / 10000,
+        projected_profit:   projectedProfit,
+        status:             'active',
+        source:             'wnba',
+        updated_at:         new Date().toISOString(),
+      }, { onConflict: 'session_date,source' })
+      .select()
+      .single();
+
+    if (sessionErr) throw sessionErr;
+
+    // ── 10. Insert picks ──────────────────────────────────────────
+    const pickRows = selected.map((pick, idx) => ({
+      session_id:       sessionRow.id,
+      session_date:     date,
+      pick_type:        pick.pick_type,
+      player_id:        pick.player_id ?? null,
+      game_id:          pick.game_id   ?? null,
+      prop_type:        pick.prop_type,
+      line:             pick.line,
+      lean:             pick.lean,
+      team_label:       pick.team_label ?? null,
+      bet_amount:       betPerPick,
+      to_win:           Math.round((betPerPick * 100 / Math.abs(pick.juice)) * 100) / 100,
+      juice:            pick.juice,
+      confidence_score: pick.confidence_score,
+      score_tier:       pick.score_tier,
+      p_hit:            pick.p_hit,
+      ev:               pick.ev,
+      kelly_fraction:   pick.kelly_fraction,
+      reasoning:        pick.reasoning,
+      key_stats:        pick.key_stats,
+      risk_flags:       pick.risk_flags,
+      sort_order:       idx,
+      source:           'wnba',
+    }));
+
+    const { data: insertedPicks, error: picksErr } = await supabase
+      .from('scout_picks')
+      .insert(pickRows)
+      .select();
+
+    if (picksErr) throw picksErr;
+
+    res.json({
+      session: sessionRow,
+      picks:   insertedPicks,
+    });
+
+  } catch (err) {
+    console.error('[scout-session]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+```
+
+---
+
+### Step 2 — `PATCH /api/wnba/scout-pick/:id`
+
+Add this route after the `POST /api/wnba/scout-session` handler. Called when the user marks a pick Hit, Miss, or Push.
+
+```js
+app.patch('/api/wnba/scout-pick/:id', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const pickId = parseInt(req.params.id, 10);
+    if (!pickId) return res.status(400).json({ error: 'Invalid pick id' });
+
+    const { result } = req.body || {};
+    if (!['hit', 'miss', 'push'].includes(result)) {
+      return res.status(400).json({ error: 'result must be hit | miss | push' });
+    }
+
+    // Fetch pick to compute actual_pnl
+    const { data: pick, error: fetchErr } = await supabase
+      .from('scout_picks')
+      .select('session_id, bet_amount, to_win, resolved_by')
+      .eq('id', pickId)
+      .single();
+
+    if (fetchErr || !pick) return res.status(404).json({ error: 'Pick not found' });
+    if (pick.resolved_by === 'manual') {
+      // Already manually resolved — allow overwrite
+    }
+
+    const actualPnl = result === 'hit'  ?  pick.to_win
+                    : result === 'miss' ? -pick.bet_amount
+                    : 0;
+
+    const { error: updateErr } = await supabase
+      .from('scout_picks')
+      .update({
+        result,
+        actual_pnl:  actualPnl,
+        resolved_at: new Date().toISOString(),
+        resolved_by: 'manual',
+      })
+      .eq('id', pickId);
+
+    if (updateErr) throw updateErr;
+
+    // Recalculate session aggregates
+    const { data: allPicks } = await supabase
+      .from('scout_picks')
+      .select('result, actual_pnl')
+      .eq('session_id', pick.session_id);
+
+    const hits    = (allPicks || []).filter(p => p.result === 'hit').length;
+    const misses  = (allPicks || []).filter(p => p.result === 'miss').length;
+    const pushes  = (allPicks || []).filter(p => p.result === 'push').length;
+    const totalPnl = (allPicks || []).reduce((s, p) => s + (p.actual_pnl ?? 0), 0);
+    const resolved = hits + misses + pushes;
+    const total    = (allPicks || []).length;
+
+    const { error: sessErr } = await supabase
+      .from('scout_sessions')
+      .update({
+        actual_hits:   hits,
+        actual_misses: misses,
+        actual_pushes: pushes,
+        actual_pnl:    Math.round(totalPnl * 100) / 100,
+        status:        resolved >= total ? 'complete' : 'active',
+        updated_at:    new Date().toISOString(),
+      })
+      .eq('id', pick.session_id);
+
+    if (sessErr) throw sessErr;
+
+    res.json({ ok: true, pickId, result, actual_pnl: actualPnl });
+  } catch (err) {
+    console.error('[scout-pick-update]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+```
+
+---
+
+### Step 3 — `GET /api/wnba/scout-history`
+
+Add this route. Returns past sessions in reverse chronological order for the history UI.
+
+```js
+app.get('/api/wnba/scout-history', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days ?? '30', 10)));
+
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceStr = since.toISOString().slice(0, 10);
+
+    const { data: sessions, error } = await supabase
+      .from('scout_sessions')
+      .select('*')
+      .eq('source', 'wnba')
+      .gte('session_date', sinceStr)
+      .order('session_date', { ascending: false });
+
+    if (error) throw error;
+
+    const totalHits    = (sessions || []).reduce((s, r) => s + (r.actual_hits   ?? 0), 0);
+    const totalMisses  = (sessions || []).reduce((s, r) => s + (r.actual_misses ?? 0), 0);
+    const totalPushes  = (sessions || []).reduce((s, r) => s + (r.actual_pushes ?? 0), 0);
+    const totalPnl     = (sessions || []).reduce((s, r) => s + (r.actual_pnl    ?? 0), 0);
+    const totalBets    = totalHits + totalMisses + totalPushes;
+    const winRate      = totalBets > 0 ? totalHits / totalBets : null;
+
+    res.json({
+      days,
+      sessions: sessions || [],
+      summary: {
+        total_sessions: (sessions || []).length,
+        total_hits:    totalHits,
+        total_misses:  totalMisses,
+        total_pushes:  totalPushes,
+        win_rate:      winRate != null ? Math.round(winRate * 1000) / 1000 : null,
+        total_pnl:     Math.round(totalPnl * 100) / 100,
+      },
+    });
+  } catch (err) {
+    console.error('[scout-history]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+```
+
+---
+
+### Step 4 — Extend `scripts/resolve-board-snapshots.js` for Scout picks
+
+Find the end of the file (after the existing `resolveBoardSnapshots` function call). Add a new function `resolveScoutPicks` and call it at the bottom.
+
+```js
+async function resolveScoutPicks() {
+  const { supabase } = require('../lib/supabase');
+  if (!supabase) return console.warn('[resolve-scout] Supabase not configured');
+
+  // Fetch all unresolved scout picks from the past 7 days
+  const since = new Date();
+  since.setDate(since.getDate() - 7);
+
+  const { data: pending, error } = await supabase
+    .from('scout_picks')
+    .select('id, session_id, session_date, pick_type, player_id, game_id, prop_type, line, lean, bet_amount, to_win')
+    .eq('resolved_by', 'pending')
+    .gte('session_date', since.toISOString().slice(0, 10));
+
+  if (error) return console.error('[resolve-scout] fetch error:', error.message);
+  if (!pending?.length) return console.log('[resolve-scout] No pending picks');
+
+  let resolved = 0;
+
+  for (const pick of pending) {
+    let result = null;
+    let actualValue = null;
+
+    try {
+      if (pick.pick_type === 'player_prop') {
+        // Look up final stat from player_game_logs
+        const { data: log } = await supabase
+          .from('player_game_logs')
+          .select('pts, reb, ast, fg3m, stl, blk, min')
+          .eq('player_id', pick.player_id)
+          .eq('game_id', pick.game_id)
+          .maybeSingle();
+
+        if (!log) continue;
+        if (log.min === 0 || log.min === '0:00') {
+          // DNP
+          result      = 'push';
+          actualValue = null;
+        } else {
+          const fieldMap = { pts: 'pts', reb: 'reb', ast: 'ast', fg3m: 'fg3m', stl: 'stl', blk: 'blk' };
+          actualValue   = log[fieldMap[pick.prop_type]];
+          if (actualValue == null) continue;
+          result = actualValue >  pick.line ? 'hit'
+                 : actualValue == pick.line ? 'push'
+                 : 'miss';
+          if (pick.lean === 'under') result = result === 'hit' ? 'miss' : result === 'miss' ? 'hit' : 'push';
+        }
+
+      } else if (pick.pick_type === 'game_total') {
+        const { data: game } = await supabase
+          .from('games')
+          .select('home_team_score, visitor_team_score, status')
+          .eq('id', pick.game_id)
+          .maybeSingle();
+
+        if (!game || !['final','closed','complete'].includes(game.status)) continue;
+        actualValue = (game.home_team_score ?? 0) + (game.visitor_team_score ?? 0);
+        result = actualValue >  pick.line ? (pick.lean === 'over' ? 'hit' : 'miss')
+               : actualValue == pick.line ? 'push'
+               :                            (pick.lean === 'over' ? 'miss' : 'hit');
+
+      } else if (pick.pick_type === 'moneyline') {
+        const { data: game } = await supabase
+          .from('games')
+          .select('home_team_score, visitor_team_score, home_team_id, visitor_team_id, status')
+          .eq('id', pick.game_id)
+          .maybeSingle();
+
+        if (!game || !['final','closed','complete'].includes(game.status)) continue;
+        const homeWon = game.home_team_score > game.visitor_team_score;
+        result = (pick.lean === 'home' && homeWon)  ? 'hit'
+               : (pick.lean === 'away' && !homeWon) ? 'hit'
+               : 'miss';
+        actualValue = homeWon ? game.home_team_score : game.visitor_team_score;
+      }
+
+      if (!result) continue;
+
+      const actualPnl = result === 'hit'  ?  pick.to_win
+                      : result === 'miss' ? -pick.bet_amount
+                      : 0;
+
+      await supabase.from('scout_picks').update({
+        result,
+        actual_value: actualValue,
+        actual_pnl:   actualPnl,
+        resolved_at:  new Date().toISOString(),
+        resolved_by:  'auto',
+      }).eq('id', pick.id);
+
+      // Update session aggregates
+      const { data: allPicks } = await supabase
+        .from('scout_picks')
+        .select('result, actual_pnl')
+        .eq('session_id', pick.session_id);
+
+      const hits   = (allPicks || []).filter(p => p.result === 'hit').length;
+      const misses = (allPicks || []).filter(p => p.result === 'miss').length;
+      const pushes = (allPicks || []).filter(p => p.result === 'push').length;
+      const pnl    = (allPicks || []).reduce((s, p) => s + (p.actual_pnl ?? 0), 0);
+      const total  = (allPicks || []).length;
+
+      await supabase.from('scout_sessions').update({
+        actual_hits:   hits,
+        actual_misses: misses,
+        actual_pushes: pushes,
+        actual_pnl:    Math.round(pnl * 100) / 100,
+        status:        (hits + misses + pushes) >= total ? 'complete' : 'active',
+        updated_at:    new Date().toISOString(),
+      }).eq('id', pick.session_id);
+
+      resolved++;
+    } catch (pickErr) {
+      console.warn(`[resolve-scout] pick ${pick.id} error:`, pickErr.message);
+    }
+  }
+
+  console.log(`[resolve-scout] Resolved ${resolved}/${pending.length} scout picks`);
+}
+
+// Call at the bottom of the file, after the existing resolveBoardSnapshots() call:
+resolveScoutPicks().catch(err => console.error('[resolve-scout] fatal:', err.message));
+```
+
+---
+
+### Acceptance checks
+
+- `POST /api/wnba/scout-session` with `{ date, bankroll: 500, daily_target: 50 }` returns `{ session: { id, bet_per_pick, n_picks, bets_needed, projected_profit }, picks: [...] }`
+- Calling the same endpoint twice for the same date returns the same session (idempotent — no duplicate picks inserted)
+- `picks` array contains only picks with `ev > 0` and `kelly_fraction > 0`
+- `picks` array has no more than 2 picks from the same `game_id`
+- `picks[0]` has highest `p_hit` (sorted correctly)
+- `PATCH /api/wnba/scout-pick/:id` with `{ result: 'hit' }` returns `{ ok: true }` and updates `scout_picks.result` + `scout_sessions.actual_hits` in Supabase
+- `PATCH` with `{ result: 'invalid' }` returns 400
+- `GET /api/wnba/scout-history?days=7` returns `{ summary: { win_rate, total_pnl }, sessions: [...] }`
+- `node --check server.js` passes after all three route additions
+- `npm run build` passes
+- `node scripts/resolve-board-snapshots.js` runs without crashing (scout resolve section logs "No pending picks" if none exist)
+
+---
+
+## Task AH — Scout Tab: Frontend
+
+**Goal:** Add the "Scout" tab to `wnba-prop-scout.jsx`. The tab renders a session config card, a curated list of bettor-voice pick cards with Hit/Miss/Push marking, a live session P&L bar, and a collapsible history section showing past 7-day and 30-day records. All data comes from the three endpoints built in Task AG.
+
+**Prerequisite:** Tasks AF and AG must be deployed first.
+
+**Files to change:**
+- `wnba-prop-scout.jsx` — add `ScoutTab` function component, `ScoutPickCard` function component, wire into the main nav
+
+---
+
+### Background
+
+The existing tab nav in `wnba-prop-scout.jsx` renders tabs from a `TABS` array (or equivalent). Add `{ id: 'scout', label: 'Scout' }` to that array. The Scout tab is conditionally rendered like all others: `{activeTab === 'scout' && <ScoutTab selectedDate={selectedDate} />}`.
+
+The tab has two states:
+1. **Config state** — no session exists yet for today. Show the config card.
+2. **Active state** — session exists. Show the session summary bar + pick list.
+
+---
+
+### Step 1 — Add "Scout" to the nav tab list
+
+Find the `TABS` array (or wherever tab labels are defined) and append:
+```js
+{ id: 'scout', label: 'Scout', emoji: '🎯' }
+```
+
+Find the conditional render block and add:
+```jsx
+{activeTab === 'scout' && (
+  <ScoutTab selectedDate={selectedDate} />
+)}
+```
+
+---
+
+### Step 2 — `ScoutTab` component
+
+Add this function before the closing `export default` or before the `App` component. Use the same inline `style` pattern as all other tabs.
+
+```jsx
+function ScoutTab({ selectedDate }) {
+  const [session,    setSession]    = useState(null);
+  const [picks,      setPicks]      = useState([]);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState(null);
+  const [history,    setHistory]    = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Config state
+  const [bankroll,         setBankroll]         = useState('500');
+  const [dailyTarget,      setDailyTarget]       = useState('50');
+  const [riskLevel,        setRiskLevel]         = useState('moderate');
+  const [includeGameProps, setIncludeGameProps]  = useState(true);
+
+  // Load existing session for selected date on mount / date change
+  useEffect(() => {
+    setSession(null);
+    setPicks([]);
+    setError(null);
+    // Don't auto-build — only build when user taps "Build My Card"
+  }, [selectedDate]);
+
+  async function buildSession() {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/wnba/scout-session`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          date:              selectedDate,
+          bankroll:          parseFloat(bankroll) || 500,
+          daily_target:      parseFloat(dailyTarget) || 50,
+          bet_style:         'flat',
+          risk_level:        riskLevel,
+          include_game_props: includeGameProps,
+        }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || r.status);
+      const data = await r.json();
+      setSession(data.session);
+      setPicks(data.picks || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function markResult(pickId, result) {
+    // Optimistically update local state
+    setPicks(prev => prev.map(p =>
+      p.id === pickId ? { ...p, result, actual_pnl: result === 'hit' ? p.to_win : result === 'miss' ? -p.bet_amount : 0 } : p
+    ));
+
+    // Recalculate session aggregates locally
+    setSession(prev => {
+      if (!prev) return prev;
+      const updated = picks.map(p => p.id === pickId ? { ...p, result } : p);
+      const hits    = updated.filter(p => p.result === 'hit').length;
+      const misses  = updated.filter(p => p.result === 'miss').length;
+      const pushes  = updated.filter(p => p.result === 'push').length;
+      const pnl     = updated.reduce((s, p) =>
+        s + (p.result === 'hit' ? p.to_win : p.result === 'miss' ? -p.bet_amount : 0), 0);
+      return { ...prev, actual_hits: hits, actual_misses: misses, actual_pushes: pushes, actual_pnl: pnl };
+    });
+
+    // Persist to server
+    if (!IS_SANDBOX) {
+      fetch(`${API_BASE}/api/wnba/scout-pick/${pickId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ result }),
+      }).catch(err => console.warn('[scout-mark]', err.message));
+    }
+  }
+
+  async function loadHistory() {
+    if (IS_SANDBOX) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/wnba/scout-history?days=30`);
+      if (!r.ok) return;
+      setHistory(await r.json());
+    } catch (e) { /* silent */ }
+  }
+
+  // ── Render: config state (no session yet) ─────────────────────
+  if (!session) {
+    return (
+      <div className="ps-page">
+        <div style={{
+          maxWidth: 480, margin: '0 auto',
+          background: T.card, border: `1px solid ${T.border}`,
+          borderRadius: 14, padding: 24,
+        }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: T.text, marginBottom: 4 }}>
+            🎯 Build Today's Card
+          </div>
+          <div style={{ fontSize: 12, color: T.text3, marginBottom: 20 }}>
+            Set your bankroll and target. Scout will pick the best straight bets to get there.
+          </div>
+
+          {/* Bankroll input */}
+          <label style={{ fontSize: 11, color: T.text2, fontWeight: 700, letterSpacing: '0.08em' }}>
+            BANKROLL
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginBottom: 16 }}>
+            <span style={{ fontSize: 18, color: T.text3 }}>$</span>
+            <input
+              type="number" min="50" max="100000"
+              value={bankroll}
+              onChange={e => setBankroll(e.target.value)}
+              style={{
+                flex: 1, background: T.card2, border: `1px solid ${T.border}`,
+                borderRadius: 8, padding: '10px 12px',
+                color: T.text, fontSize: 16, fontWeight: 700,
+              }}
+            />
+          </div>
+
+          {/* Daily target */}
+          <label style={{ fontSize: 11, color: T.text2, fontWeight: 700, letterSpacing: '0.08em' }}>
+            DAILY PROFIT TARGET
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 18, color: T.text3 }}>$</span>
+            <input
+              type="number" min="5" max="10000"
+              value={dailyTarget}
+              onChange={e => setDailyTarget(e.target.value)}
+              style={{
+                flex: 1, background: T.card2, border: `1px solid ${T.border}`,
+                borderRadius: 8, padding: '10px 12px',
+                color: T.text, fontSize: 16, fontWeight: 700,
+              }}
+            />
+          </div>
+          <div style={{ fontSize: 11, color: T.text3, marginBottom: 16 }}>
+            = {bankroll ? ((parseFloat(dailyTarget) / parseFloat(bankroll)) * 100).toFixed(1) : '—'}% of bankroll
+          </div>
+
+          {/* Risk level */}
+          <label style={{ fontSize: 11, color: T.text2, fontWeight: 700, letterSpacing: '0.08em' }}>
+            RISK LEVEL
+          </label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 6, marginBottom: 16 }}>
+            {['conservative','moderate','aggressive'].map(lvl => (
+              <button key={lvl} onClick={() => setRiskLevel(lvl)} style={{
+                flex: 1, padding: '8px 4px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+                background: riskLevel === lvl ? T.accent : T.card2,
+                border: `1px solid ${riskLevel === lvl ? T.accent : T.border}`,
+                color: riskLevel === lvl ? '#fff' : T.text2, cursor: 'pointer',
+                textTransform: 'capitalize',
+              }}>{lvl}</button>
+            ))}
+          </div>
+
+          {/* Game props toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+            <span style={{ fontSize: 12, color: T.text2 }}>Include game props (ML + O/U)</span>
+            <button onClick={() => setIncludeGameProps(p => !p)} style={{
+              width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+              background: includeGameProps ? T.green : T.border,
+              position: 'relative', transition: 'background 0.2s',
+            }}>
+              <span style={{
+                position: 'absolute', top: 3, left: includeGameProps ? 22 : 2,
+                width: 18, height: 18, borderRadius: 9, background: '#fff',
+                transition: 'left 0.2s',
+              }} />
+            </button>
+          </div>
+
+          {error && (
+            <div style={{
+              background: T.redDim, border: `1px solid ${T.red}`,
+              borderRadius: 8, padding: '10px 12px', fontSize: 12, color: T.red, marginBottom: 12,
+            }}>{error}</div>
+          )}
+
+          <button onClick={buildSession} disabled={loading} style={{
+            width: '100%', padding: '14px 0', borderRadius: 10, border: 'none',
+            background: loading ? T.border : T.accent,
+            color: '#fff', fontSize: 14, fontWeight: 800, cursor: loading ? 'default' : 'pointer',
+            letterSpacing: '0.04em',
+          }}>
+            {loading ? 'Building your card…' : 'Build My Card →'}
+          </button>
+
+          {/* History toggle */}
+          <button onClick={() => { setShowHistory(p => !p); if (!history) loadHistory(); }}
+            style={{ width: '100%', marginTop: 12, padding: '8px 0', borderRadius: 8,
+              background: 'transparent', border: `1px solid ${T.border}`,
+              color: T.text3, fontSize: 12, cursor: 'pointer' }}>
+            {showHistory ? 'Hide History' : 'Past Sessions'}
+          </button>
+          {showHistory && history && <ScoutHistoryPanel history={history} />}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render: active session ─────────────────────────────────────
+  const s           = session;
+  const markedCount = picks.filter(p => p.result).length;
+  const ahead       = s.actual_pnl >= 0;
+  const pnlColor    = s.actual_pnl > 0 ? T.green : s.actual_pnl < 0 ? T.red : T.text2;
+
+  return (
+    <div className="ps-page">
+
+      {/* Session summary bar */}
+      <div style={{
+        background: T.card, border: `1px solid ${T.border}`,
+        borderRadius: 12, padding: '12px 16px', marginBottom: 16,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 800, color: T.text }}>
+              🎯 Today's Card — {picks.length} picks · ${s.bet_per_pick}/bet flat
+            </span>
+            <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>
+              Need {s.bets_needed}/{picks.length} to hit → projected +${s.projected_profit?.toFixed(0)}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: pnlColor }}>
+              {s.actual_pnl >= 0 ? '+' : ''}{s.actual_pnl?.toFixed(2)}
+            </div>
+            <div style={{ fontSize: 11, color: T.text3 }}>
+              {s.actual_hits}W–{s.actual_misses}L–{s.actual_pushes}P · {markedCount}/{picks.length} marked
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Pick cards */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {picks.sort((a, b) => a.sort_order - b.sort_order).map(pick => (
+          <ScoutPickCard key={pick.id} pick={pick} onMark={result => markResult(pick.id, result)} />
+        ))}
+      </div>
+
+      {/* History */}
+      <div style={{ marginTop: 20 }}>
+        <button onClick={() => { setShowHistory(p => !p); if (!history) loadHistory(); }}
+          style={{ width: '100%', padding: '8px 0', borderRadius: 8,
+            background: 'transparent', border: `1px solid ${T.border}`,
+            color: T.text3, fontSize: 12, cursor: 'pointer' }}>
+          {showHistory ? 'Hide History' : 'Past Sessions'}
+        </button>
+        {showHistory && history && <ScoutHistoryPanel history={history} />}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+### Step 3 — `ScoutPickCard` component
+
+Add this function just above `ScoutTab`.
+
+```jsx
+function ScoutPickCard({ pick, onMark }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const tierColor = pick.score_tier === 'HIGH'  ? T.green
+                  : pick.score_tier === 'SOLID' ? T.yellow
+                  : T.accent;
+
+  const typeLabel = pick.pick_type === 'player_prop' ? 'PLAYER PROP'
+                  : pick.pick_type === 'game_total'  ? 'GAME TOTAL'
+                  : 'MONEYLINE';
+
+  const dirLabel  = pick.lean === 'over'  ? 'OVER'
+                  : pick.lean === 'under' ? 'UNDER'
+                  : pick.lean === 'home'  ? 'HOME ML'
+                  : 'AWAY ML';
+
+  const resultBg = pick.result === 'hit'  ? T.greenDim
+                 : pick.result === 'miss' ? T.redDim
+                 : pick.result === 'push' ? T.yellowDim
+                 : undefined;
+  const resultBorder = pick.result === 'hit'  ? T.green
+                     : pick.result === 'miss' ? T.red
+                     : pick.result === 'push' ? T.yellow
+                     : T.border;
+
+  const ks = pick.key_stats || {};
+
+  return (
+    <div style={{
+      background: resultBg ?? T.card,
+      border: `1px solid ${resultBorder}`,
+      borderRadius: 12, overflow: 'hidden',
+    }}>
+      {/* Header row */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', cursor: 'pointer' }}
+      >
+        {/* Direction pill */}
+        <span style={{
+          fontSize: 10, fontWeight: 800, letterSpacing: '0.1em',
+          background: tierColor, color: '#000',
+          borderRadius: 5, padding: '3px 7px', flexShrink: 0,
+        }}>{dirLabel}</span>
+
+        {/* Pick description */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {pick.pick_type === 'player_prop'
+              ? `${pick.players?.full_name ?? 'Player'} ${pick.line} ${(pick.prop_type ?? '').toUpperCase()}`
+              : pick.pick_type === 'game_total'
+              ? `${pick.away_abbr} @ ${pick.home_abbr} · O/U ${pick.line}`
+              : `${pick.lean === 'home' ? pick.home_abbr : pick.away_abbr} ML ${pick.juice > 0 ? '+' : ''}${pick.juice}`
+            }
+          </div>
+          <div style={{ fontSize: 10, color: T.text3 }}>
+            {typeLabel} · {pick.score_tier} · Win prob {((pick.p_hit ?? 0) * 100).toFixed(0)}%
+          </div>
+        </div>
+
+        {/* Result badge or expand arrow */}
+        {pick.result
+          ? <span style={{ fontSize: 11, fontWeight: 800,
+              color: pick.result === 'hit' ? T.green : pick.result === 'miss' ? T.red : T.yellow }}>
+              {pick.result === 'hit' ? '✓ HIT' : pick.result === 'miss' ? '✗ MISS' : '— PUSH'}
+            </span>
+          : <span style={{ color: T.text3, fontSize: 12 }}>{expanded ? '▲' : '▼'}</span>
+        }
+      </div>
+
+      {/* Expanded content */}
+      {expanded && (
+        <div style={{ borderTop: `1px solid ${T.border}`, padding: '12px 14px' }}>
+
+          {/* AI Reasoning */}
+          {pick.reasoning && (
+            <div style={{
+              fontSize: 12, color: T.text2, lineHeight: 1.6,
+              background: T.card2, borderRadius: 8, padding: '10px 12px', marginBottom: 12,
+              fontStyle: 'italic',
+            }}>
+              "{pick.reasoning}"
+            </div>
+          )}
+
+          {/* Key stats row */}
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+            {ks.l5_avg != null && (
+              <div style={{ fontSize: 11, color: T.text3 }}>
+                L5 avg <span style={{ color: T.text, fontWeight: 700 }}>{ks.l5_avg}</span>
+              </div>
+            )}
+            {ks.season_avg != null && (
+              <div style={{ fontSize: 11, color: T.text3 }}>
+                Season avg <span style={{ color: T.text, fontWeight: 700 }}>{ks.season_avg}</span>
+              </div>
+            )}
+            {ks.line_move != null && ks.line_move !== 0 && (
+              <div style={{ fontSize: 11, color: T.text3 }}>
+                Line move <span style={{ color: ks.line_move < 0 ? T.green : T.red, fontWeight: 700 }}>
+                  {ks.line_move > 0 ? '+' : ''}{ks.line_move}
+                </span>
+              </div>
+            )}
+            {ks.edge != null && (
+              <div style={{ fontSize: 11, color: T.text3 }}>
+                Edge <span style={{ color: T.green, fontWeight: 700 }}>
+                  {ks.edge > 0 ? '+' : ''}{ks.edge}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Risk flags */}
+          {(pick.risk_flags || []).length > 0 && (
+            <div style={{
+              display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12,
+            }}>
+              {pick.risk_flags.map(f => (
+                <span key={f} style={{
+                  fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 5,
+                  background: T.yellowDim, color: T.yellow, border: `1px solid ${T.yellow}`,
+                }}>⚠ {f.replace(/_/g,' ')}</span>
+              ))}
+            </div>
+          )}
+
+          {/* Bet line */}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            background: T.card3, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+          }}>
+            <span style={{ fontSize: 12, color: T.text2 }}>
+              Bet <strong style={{ color: T.text }}>${pick.bet_amount}</strong>
+              {' '}·{' '}Win <strong style={{ color: T.green }}>${pick.to_win?.toFixed(2)}</strong>
+              {' '}·{' '}<strong style={{ color: T.text3 }}>{pick.juice}</strong>
+            </span>
+            {pick.ev > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: T.green, background: T.greenDim,
+                borderRadius: 5, padding: '2px 6px' }}>
+                +EV {(pick.ev * 100).toFixed(1)}¢/$
+              </span>
+            )}
+          </div>
+
+          {/* Hit / Miss / Push buttons — only show if not yet resolved */}
+          {!pick.result && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[['hit','✓ Hit', T.green, T.greenDim], ['miss','✗ Miss', T.red, T.redDim], ['push','— Push', T.yellow, T.yellowDim]].map(
+                ([r, label, color, bg]) => (
+                  <button key={r} onClick={() => onMark(r)} style={{
+                    flex: 1, padding: '9px 0', borderRadius: 8, border: `1px solid ${color}`,
+                    background: bg, color, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  }}>{label}</button>
+                )
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+### Step 4 — `ScoutHistoryPanel` component
+
+Add this small component just above `ScoutPickCard`.
+
+```jsx
+function ScoutHistoryPanel({ history }) {
+  const { summary, sessions } = history;
+  return (
+    <div style={{ marginTop: 12 }}>
+      {/* 30-day summary */}
+      <div style={{
+        display: 'flex', gap: 20, flexWrap: 'wrap',
+        background: T.card2, borderRadius: 10, padding: '12px 14px', marginBottom: 10,
+      }}>
+        {[
+          ['Win Rate', summary.win_rate != null ? `${(summary.win_rate * 100).toFixed(1)}%` : '—'],
+          ['P&L', summary.total_pnl != null ? `${summary.total_pnl >= 0 ? '+' : ''}$${summary.total_pnl.toFixed(0)}` : '—'],
+          ['Record', `${summary.total_hits}-${summary.total_misses}-${summary.total_pushes}`],
+          ['Sessions', String(summary.total_sessions)],
+        ].map(([label, val]) => (
+          <div key={label}>
+            <div style={{ fontSize: 10, color: T.text3, fontWeight: 700 }}>{label}</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: T.text }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Session rows */}
+      {sessions.slice(0, 14).map(s => (
+        <div key={s.id} style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '7px 14px', borderBottom: `1px solid ${T.border}`,
+          fontSize: 12,
+        }}>
+          <span style={{ color: T.text2 }}>{s.session_date}</span>
+          <span style={{ color: T.text3 }}>{s.actual_hits}W–{s.actual_misses}L–{s.actual_pushes}P</span>
+          <span style={{ fontWeight: 700, color: s.actual_pnl >= 0 ? T.green : T.red }}>
+            {s.actual_pnl >= 0 ? '+' : ''}${s.actual_pnl?.toFixed(0)}
+          </span>
+          <span style={{ fontSize: 10, color: s.status === 'complete' ? T.green : T.text3 }}>
+            {s.status === 'complete' ? '✅' : '⏳'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+### Acceptance checks
+
+- "Scout" tab appears in the main nav, styled consistently with other tabs
+- Tapping Scout shows the config card with Bankroll, Daily Target, Risk Level, and Game Props toggle
+- Filling in `bankroll=500`, `target=50`, clicking "Build My Card" → shows session summary bar and pick list
+- Calling again for the same date shows the same session (idempotent — no duplicate build)
+- Each pick card shows: direction pill (OVER/UNDER/HOME ML/AWAY ML), player/game description, tier badge, win prob, reasoning paragraph on expand, key stats, risk flags, bet line, Hit/Miss/Push buttons
+- Tapping "✓ Hit" on a card → card border turns green, session P&L bar updates immediately
+- Tapping "✗ Miss" on a card → card border turns red, session P&L bar updates
+- Picking 2 hits and 1 miss on a 3-pick session → P&L bar shows correct running total
+- "Past Sessions" button loads and renders session history
+- IS_SANDBOX=true: Build My Card button should still work (mock or skip the API call gracefully — use existing SANDBOX mock picks pattern from `TopPicksTab`)
+- `npm run build` passes with no TypeScript or lint errors
+- `npm run dev` — no console errors on Scout tab load
+- No regressions on other tabs (Games, PICKS, BOARD, AI, Model all still render correctly)
+
+### Completion note — 2026-05-19
+
+- Added `db/024_scout_tables.sql` with idempotent `scout_sessions` and `scout_picks` tables, indexes, foreign key, and grants.
+- Added Scout backend routes in root `server.js`: `POST /api/wnba/scout-session`, `PATCH /api/wnba/scout-pick/:id`, and `GET /api/wnba/scout-history`.
+- Adapted the session builder to this WNBA repo schema (`games.game_date`, existing `prop_analysis_results`, existing EV/Kelly helper). Game-level candidates remain optional; player-prop candidates are enough to build sessions when positive-EV picks exist.
+- Extended `scripts/resolve-board-snapshots.js` so board snapshot resolution also resolves pending `scout_picks` and refreshes `scout_sessions` aggregates.
+- Added the `SCOUT` nav tab in `wnba-prop-scout.jsx`, with config form, session summary, expandable pick cards, manual Hit/Miss/Push marking, sandbox mock behavior, and history panel.
+- Verification passed: `node --check server.js`, `node --check scripts/resolve-board-snapshots.js`, and `npm run build`.
+- Local smoke tests passed without requiring the new tables: invalid `POST /api/wnba/scout-session` date returns 400; invalid `PATCH /api/wnba/scout-pick/:id` result returns 400.
+- Manual step still required before live session tests: apply `db/024_scout_tables.sql` in Supabase.
+
+---
+
+## Task AI — Data Consistency: Database Schema
+
+**Goal:** Add the columns and tables needed to make `p_hit`, `ev`, `kelly_fraction` storable on `prop_analysis_results` (so they're computed once at write time, not recomputed on every API call), and create the `game_predictions_cache` table (so game projections are computed once at slate open and served from DB all day). Also add tip-off lock columns to `prop_analysis_results` so in-progress game props can be frozen at the last pre-game snapshot.
+
+**Files to create:**
+- `db/025_prop_analysis_ev_fields.sql`
+- `db/026_game_predictions_cache.sql`
+
+**Prerequisite:** Tasks AF + AG deployed (tables from Task AF must exist). Run both SQL files in Supabase SQL Editor before running Tasks AJ–AL.
+
+---
+
+### Step 1 — `db/025_prop_analysis_ev_fields.sql`
+
+```sql
+-- ============================================================
+-- Task AI: EV fields + tip-off lock columns on prop_analysis_results
+-- Safe to run multiple times (ADD COLUMN IF NOT EXISTS).
+-- ============================================================
+
+ALTER TABLE prop_analysis_results
+  -- Computed once by calc-confidence.js, served from DB by top-picks endpoint
+  ADD COLUMN IF NOT EXISTS p_hit            DECIMAL(5,4),
+  ADD COLUMN IF NOT EXISTS ev               DECIMAL(8,6),
+  ADD COLUMN IF NOT EXISTS kelly_fraction   DECIMAL(6,5),
+
+  -- Tip-off lock: written by lockPropsAtTipoff scheduler job
+  ADD COLUMN IF NOT EXISTS locked_at        TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS locked_line      DECIMAL(6,2),
+  ADD COLUMN IF NOT EXISTS locked_juice     INTEGER;
+
+-- Index for efficient lock job queries ("find all unlocked props for live games")
+CREATE INDEX IF NOT EXISTS idx_par_locked_at
+  ON prop_analysis_results (locked_at)
+  WHERE locked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_par_game_id
+  ON prop_analysis_results (game_id);
+```
+
+---
+
+### Step 2 — `db/026_game_predictions_cache.sql`
+
+```sql
+-- ============================================================
+-- Task AI: Game predictions cache table
+-- Projections computed once at slate open, served from here all day.
+-- Gap is NOT stored here — it's computed live against current odds.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS game_predictions_cache (
+  id                    SERIAL PRIMARY KEY,
+  game_id               TEXT        NOT NULL,
+  slate_date            DATE        NOT NULL,
+  season                INTEGER,
+
+  -- Model outputs (frozen at compute time)
+  projected_total       DECIMAL(6,1),
+  projected_spread      DECIMAL(5,1),   -- home perspective: negative = home favored
+  projected_home_ml     INTEGER,
+  projected_away_ml     INTEGER,
+  projected_home_score  DECIMAL(5,1),
+  projected_away_score  DECIMAL(5,1),
+
+  -- Meta
+  computed_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source                TEXT        NOT NULL DEFAULT 'wnba',
+
+  CONSTRAINT game_predictions_cache_game_date_source_key
+    UNIQUE (game_id, slate_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gpc_slate_date
+  ON game_predictions_cache (slate_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_gpc_game_id
+  ON game_predictions_cache (game_id);
+
+GRANT ALL ON TABLE game_predictions_cache TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE game_predictions_cache_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+---
+
+### Acceptance checks
+
+- Both files run in Supabase SQL Editor without errors
+- Run both a second time — still no errors (idempotent)
+- `SELECT column_name FROM information_schema.columns WHERE table_name = 'prop_analysis_results' AND column_name IN ('p_hit','ev','kelly_fraction','locked_at','locked_line','locked_juice')` returns 6 rows
+- `SELECT * FROM game_predictions_cache LIMIT 1` returns no error
+- `node --check server.js` still passes (no server changes in this task)
+
+---
+
+## Task AJ — Data Consistency: Freeze EV/Kelly at Compute Time
+
+**Goal:** `calc-confidence.js` computes `p_hit`, `ev`, and `kelly_fraction` alongside `confidence_score` and stores them in `prop_analysis_results`. The `GET /api/wnba/top-picks` endpoint reads these values from the DB instead of recomputing them on every request. Backward compatible: if a row has `p_hit IS NULL` (rows scored before this task), fall back to live computation.
+
+**Prerequisite:** Task AI must be deployed first (columns must exist on the table).
+
+**Files to change:**
+- `scripts/calc-confidence.js`
+- `server.js`
+
+---
+
+### Background
+
+Currently `server.js` computes `p_hit`, `ev`, `kellyFraction` inside the top-picks handler on every request (lines ~1568–1580). The calls are `calcEV(pHit)` and `calcKelly(pHit)` — both without a juice argument, so they silently default to -110 even when the actual market juice differs. This task moves computation to write time (in `calc-confidence.js`), stores the result, and fixes the missing juice argument in the process.
+
+---
+
+### Step 1 — `scripts/calc-confidence.js`: import ev-kelly and compute at write time
+
+**At the top of the file**, add the require (after existing requires):
+
+```js
+const { estimateProbability, calcEV, calcKelly } = require('../lib/scoring/ev-kelly');
+```
+
+**In the row-builder function** (the function that returns the large object ending around line 1520 with `analyzed_at` and `updated_at`), add three fields to the returned object. Place them after `hit_rate_over_l10`:
+
+```js
+// ── EV / Kelly (computed once, stored for consistent cross-client serving) ──
+// Extract juice from market_notes if available; default -110.
+p_hit: (() => {
+  const hr = round(hrSeason, 4);
+  const hl = round(hrL5, 4);
+  return round(estimateProbability(confidence, hr, hl), 4);
+})(),
+ev: (() => {
+  const hr = round(hrSeason, 4);
+  const hl = round(hrL5, 4);
+  const pHit = estimateProbability(confidence, hr, hl);
+  const juice = marketNotes?.juice ?? marketNotes?.over_juice ?? -110;
+  return round(calcEV(pHit, Number.isFinite(juice) ? juice : -110), 6);
+})(),
+kelly_fraction: (() => {
+  const hr = round(hrSeason, 4);
+  const hl = round(hrL5, 4);
+  const pHit = estimateProbability(confidence, hr, hl);
+  const juice = marketNotes?.juice ?? marketNotes?.over_juice ?? -110;
+  return round(calcKelly(pHit, Number.isFinite(juice) ? juice : -110), 5);
+})(),
+```
+
+The `round()` helper is already defined in this file. `marketNotes` is already in scope (it's the variable built by the `getOddsData` call). `confidence`, `hrSeason`, `hrL5` are already in scope. No new variables needed.
+
+---
+
+### Step 2 — `server.js`: read from DB, fall back to live computation
+
+Find the top-picks handler block that reads from `prop_analysis_results` and computes EV (around lines 1568–1580). Replace the live-compute block with a read-or-fallback pattern:
+
+**Replace this:**
+```js
+const pHit = estimateProbability(
+  pick.confidence_score,
+  pick.hit_rate_over_season,
+  pick.hit_rate_over_l5
+);
+const ev = calcEV(pHit);
+const kellyFraction = calcKelly(pHit);
+
+return {
+  ...cardPayload,
+  p_hit: Math.round(pHit * 1000) / 1000,
+  ev: Math.round(ev * 10000) / 10000,
+  kelly_fraction: Math.round(kellyFraction * 10000) / 10000,
+};
+```
+
+**With this:**
+```js
+// Prefer stored values (computed at write time by calc-confidence.js).
+// Fall back to live computation for rows scored before Task AJ.
+let pHit, ev, kellyFraction;
+if (pick.p_hit != null && pick.ev != null && pick.kelly_fraction != null) {
+  pHit          = Number(pick.p_hit);
+  ev            = Number(pick.ev);
+  kellyFraction = Number(pick.kelly_fraction);
+} else {
+  pHit          = estimateProbability(pick.confidence_score, pick.hit_rate_over_season, pick.hit_rate_over_l5);
+  const juice   = pick.market_notes?.juice ?? pick.market_notes?.over_juice ?? -110;
+  ev            = calcEV(pHit, Number.isFinite(juice) ? juice : -110);
+  kellyFraction = calcKelly(pHit, Number.isFinite(juice) ? juice : -110);
+}
+
+return {
+  ...cardPayload,
+  p_hit:          Math.round(pHit * 10000) / 10000,
+  ev:             Math.round(ev * 100000) / 100000,
+  kelly_fraction: Math.round(kellyFraction * 100000) / 100000,
+};
+```
+
+Also add `p_hit, ev, kelly_fraction` to the Supabase select columns in the top-picks query so the DB values are actually fetched. Find the `.select(...)` call in the top-picks handler that lists `prop_analysis_results` columns and append `, p_hit, ev, kelly_fraction` to the column list.
+
+---
+
+### Acceptance checks
+
+- `node --check scripts/calc-confidence.js` passes
+- `node --check server.js` passes
+- Run `node scripts/calc-confidence.js --date=<today>` on a date with games → check `prop_analysis_results` in Supabase → `p_hit`, `ev`, `kelly_fraction` columns are now populated (not null) for scored rows
+- `GET /api/wnba/top-picks?date=<scored date>` returns picks with `p_hit`, `ev`, `kelly_fraction` — values should match what's in the DB, not freshly computed
+- For a row scored before this task (p_hit IS NULL in DB): top-picks endpoint still returns a non-null `p_hit` (falls back to live computation)
+- `p_hit` values are in range `[0.35, 0.85]` — no 0s or 1s
+- `ev` is positive for HIGH-tier picks, near-zero for LEAN picks
+- `kelly_fraction` is in range `[0, 0.05]`
+
+---
+
+## Task AK — Data Consistency: Game Predictions Cache
+
+**Goal:** Extract the projection math from `GET /api/wnba/game-predictions` into a new script (`scripts/cache-game-predictions.js`) that runs once at slate open and writes to `game_predictions_cache`. The route handler then serves the frozen projection from the cache table and computes the live gap (`projection - current_line`) on the fly — but only for pre-game games. For locked (in-progress) games, both the projection and gap are frozen. Wire the cache script into the scheduler.
+
+**Prerequisite:** Task AI must be deployed first (`game_predictions_cache` table must exist).
+
+**Files to change / create:**
+- `scripts/cache-game-predictions.js` (new)
+- `server.js` — update `GET /api/wnba/game-predictions` handler
+- `scripts/scheduler.js` — wire new script
+
+---
+
+### Step 1 — `scripts/cache-game-predictions.js`
+
+Create this file. It is a direct extraction of the math already in the `GET /api/wnba/game-predictions` route handler. No new logic — just moved to run once and store.
+
+```js
+'use strict';
+
+const { supabase } = require('../lib/supabase');
+
+const HOME_COURT_ADV = 2.5;
+
+function spreadToML(spread) {
+  if (spread == null) return null;
+  const pts = Math.abs(spread);
+  const raw = pts <= 1 ? 105 : Math.round(100 + (pts - 1) * 22);
+  return spread < 0 ? -raw : raw;
+}
+
+async function cacheGamePredictions(date) {
+  if (!supabase) return console.warn('[cache-predictions] Supabase not configured');
+
+  const targetDate = date || new Date().toISOString().slice(0, 10);
+
+  const { data: games, error: gErr } = await supabase
+    .from('games')
+    .select('id, home_team_id, visitor_team_id, season, game_date')
+    .eq('game_date', targetDate);
+
+  if (gErr) throw gErr;
+  if (!games?.length) return console.log(`[cache-predictions] No games for ${targetDate}`);
+
+  const season  = games[0].season;
+  const gameIds = games.map(g => g.id);
+  const teamIds = [...new Set(games.flatMap(g => [g.home_team_id, g.visitor_team_id]))];
+
+  const [{ data: paceRows, error: pErr }, { data: oppRows, error: oErr }] = await Promise.all([
+    supabase.from('team_pace_ratings')
+      .select('team_id, pace_rating')
+      .eq('season', season)
+      .in('team_id', teamIds)
+      .lte('as_of_date', targetDate)
+      .order('as_of_date', { ascending: false }),
+    supabase.from('team_opponent_stats')
+      .select('team_id, off_rating, def_rating, net_rating')
+      .eq('season', season)
+      .in('team_id', teamIds)
+      .lte('as_of_date', targetDate)
+      .order('as_of_date', { ascending: false }),
+  ]);
+
+  if (pErr) throw pErr;
+  if (oErr) throw oErr;
+
+  const paceMap = {};
+  for (const r of paceRows || []) if (!paceMap[r.team_id]) paceMap[r.team_id] = Number(r.pace_rating);
+  const oppMap = {};
+  for (const r of oppRows  || []) if (!oppMap[r.team_id])  oppMap[r.team_id]  = r;
+
+  const defVals    = Object.values(oppMap).map(r => r.def_rating).filter(v => v != null);
+  const LEAGUE_AVG = defVals.length ? defVals.reduce((a, b) => a + b, 0) / defVals.length : 105;
+
+  const rows = games.map(game => {
+    const homePace  = paceMap[game.home_team_id]   || 73;
+    const awayPace  = paceMap[game.visitor_team_id] || 73;
+    const homeStats = oppMap[game.home_team_id]    || {};
+    const awayStats = oppMap[game.visitor_team_id] || {};
+    const avgPace   = (homePace + awayPace) / 2;
+
+    const homeOffRtg = homeStats.off_rating != null ? Number(homeStats.off_rating) : LEAGUE_AVG;
+    const awayOffRtg = awayStats.off_rating != null ? Number(awayStats.off_rating) : LEAGUE_AVG;
+    const homeDefRtg = homeStats.def_rating != null ? Number(homeStats.def_rating) : LEAGUE_AVG;
+    const awayDefRtg = awayStats.def_rating != null ? Number(awayStats.def_rating) : LEAGUE_AVG;
+    const homeNetRtg = homeStats.net_rating != null ? Number(homeStats.net_rating) : null;
+    const awayNetRtg = awayStats.net_rating != null ? Number(awayStats.net_rating) : null;
+
+    const homeProj  = (homeOffRtg / 100) * avgPace * (LEAGUE_AVG / awayDefRtg);
+    const awayProj  = (awayOffRtg / 100) * avgPace * (LEAGUE_AVG / homeDefRtg);
+    const projTotal = Math.round((homeProj + awayProj) * 10) / 10;
+
+    let projSpread = null;
+    if (homeNetRtg != null && awayNetRtg != null) {
+      projSpread = Math.round(((awayNetRtg - homeNetRtg) * 0.6 - HOME_COURT_ADV) * 10) / 10;
+    }
+
+    return {
+      game_id:               String(game.id),
+      slate_date:            targetDate,
+      season,
+      projected_total:       projTotal,
+      projected_spread:      projSpread,
+      projected_home_ml:     spreadToML(projSpread),
+      projected_away_ml:     projSpread != null ? spreadToML(-projSpread) : null,
+      projected_home_score:  Math.round(homeProj * 10) / 10,
+      projected_away_score:  Math.round(awayProj * 10) / 10,
+      computed_at:           new Date().toISOString(),
+      source:                'wnba',
+    };
+  });
+
+  const { error: upsertErr } = await supabase
+    .from('game_predictions_cache')
+    .upsert(rows, { onConflict: 'game_id,slate_date,source' });
+
+  if (upsertErr) throw upsertErr;
+  console.log(`[cache-predictions] Cached ${rows.length} game predictions for ${targetDate}`);
+  return rows;
+}
+
+// Allow direct CLI run: node scripts/cache-game-predictions.js [YYYY-MM-DD]
+if (require.main === module) {
+  const date = process.argv[2] || null;
+  cacheGamePredictions(date)
+    .then(() => process.exit(0))
+    .catch(err => { console.error(err.message); process.exit(1); });
+}
+
+module.exports = { cacheGamePredictions };
+```
+
+---
+
+### Step 2 — Update `GET /api/wnba/game-predictions` in `server.js`
+
+Replace the entire handler body with a version that:
+1. Fetches the frozen projection from `game_predictions_cache`
+2. Fetches current odds from `odds_snapshots` for the live gap
+3. Returns frozen projection + live gap for pre-game games, fully frozen for locked/in-progress games
+4. Falls back to live computation if no cache row exists yet
+
+```js
+app.get('/api/wnba/game-predictions', async (req, res) => {
+  try {
+    const date = req.query.date || etDateString();
+
+    // ── 1. Fetch games ───────────────────────────────────────────
+    const { data: games, error: gErr } = await supabase
+      .from('games')
+      .select('id, home_team_id, visitor_team_id, season, status, game_date')
+      .eq('game_date', date);
+    if (gErr) throw gErr;
+    if (!games?.length) return res.json({ data: [] });
+
+    const gameIds = games.map(g => g.id);
+
+    // ── 2. Fetch cached projections ──────────────────────────────
+    const { data: cached } = await supabase
+      .from('game_predictions_cache')
+      .select('*')
+      .eq('slate_date', date)
+      .eq('source', 'wnba')
+      .in('game_id', gameIds.map(String));
+
+    const cacheMap = new Map((cached || []).map(r => [String(r.game_id), r]));
+
+    // ── 3. Fetch current odds for live gap computation ───────────
+    const { data: oddsRows } = await supabase
+      .from('odds_snapshots')
+      .select('game_id, prop_type, line, over_odds, under_odds, sportsbook, is_opening, snapshot_at')
+      .in('game_id', gameIds)
+      .is('player_id', null)
+      .in('prop_type', ['spread', 'total', 'moneyline'])
+      .order('snapshot_at', { ascending: false });
+
+    const oddsByGame = mergeSlateOddsByGame(oddsRows || []);
+
+    // ── 4. If any games are missing from cache, compute live ──────
+    const uncachedIds = gameIds.filter(id => !cacheMap.has(String(id)));
+    if (uncachedIds.length) {
+      try {
+        const { cacheGamePredictions } = require('./scripts/cache-game-predictions');
+        await cacheGamePredictions(date);
+        // Re-fetch
+        const { data: fresh } = await supabase
+          .from('game_predictions_cache')
+          .select('*')
+          .eq('slate_date', date)
+          .eq('source', 'wnba')
+          .in('game_id', uncachedIds.map(String));
+        for (const r of fresh || []) cacheMap.set(String(r.game_id), r);
+      } catch (cacheErr) {
+        console.warn('[game-predictions] Cache fill failed:', cacheErr.message);
+      }
+    }
+
+    // ── 5. Build response ────────────────────────────────────────
+    const predictions = games.map(game => {
+      const pred      = cacheMap.get(String(game.id));
+      const isLocked  = ['in_progress', 'halftime', 'live'].includes(String(game.status || '').toLowerCase());
+      const isFinal   = ['final', 'closed', 'complete'].includes(String(game.status || '').toLowerCase());
+      const gameBookMap = oddsByGame.get(game.id) || new Map();
+      const odds        = buildOddsPayloadForGameBookMap(gameBookMap);
+
+      if (!pred) {
+        // No cache and live fill failed — return nulls rather than crashing
+        return { game_id: game.id, projected_total: null, projected_spread: null,
+          projected_home_ml: null, projected_away_ml: null,
+          projected_home_score: null, projected_away_score: null,
+          total_gap: null, spread_gap: null, game_is_live: isLocked, game_is_final: isFinal };
+      }
+
+      const postedTotal  = odds.total  != null ? Number(odds.total)  : null;
+      const postedSpread = odds.spread != null ? Number(odds.spread) : null;
+
+      // Gap: live if pre-game, frozen at null if locked/final (line is gone from market)
+      const totalGap  = (!isLocked && !isFinal && postedTotal  != null)
+        ? Math.round((pred.projected_total  - postedTotal)  * 10) / 10
+        : null;
+      const spreadGap = (!isLocked && !isFinal && postedSpread != null && pred.projected_spread != null)
+        ? Math.round((pred.projected_spread - postedSpread) * 10) / 10
+        : null;
+
+      return {
+        game_id:               game.id,
+        projected_total:       pred.projected_total,
+        projected_spread:      pred.projected_spread,
+        projected_home_ml:     pred.projected_home_ml,
+        projected_away_ml:     pred.projected_away_ml,
+        projected_home_score:  pred.projected_home_score,
+        projected_away_score:  pred.projected_away_score,
+        total_recommendation:  totalGap  != null ? (totalGap  > 0.5 ? 'OVER' : totalGap  < -0.5 ? 'UNDER' : null) : null,
+        spread_recommendation: spreadGap != null ? (spreadGap < -0.5 ? 'HOME' : spreadGap > 0.5 ? 'AWAY'  : null) : null,
+        total_gap:             totalGap,
+        spread_gap:            spreadGap,
+        game_is_live:          isLocked,
+        game_is_final:         isFinal,
+        cached_at:             pred.computed_at,
+      };
+    });
+
+    res.json({ data: predictions });
+  } catch (e) {
+    handleError(res, e);
+  }
+});
+```
+
+---
+
+### Step 3 — Wire into `scripts/scheduler.js`
+
+Find where the scheduler sets up its daily jobs. Add a call to `cacheGamePredictions` at **6:00 AM ET** (after odds are first ingested but before the first user of the day loads the app):
+
+```js
+const { cacheGamePredictions } = require('./cache-game-predictions');
+
+// 6:00 AM ET — cache game projections for today's slate
+cron.schedule('0 6 * * *', async () => {
+  const date = etDateString();
+  console.log(`[scheduler] cacheGamePredictions ${date}`);
+  try { await cacheGamePredictions(date); }
+  catch (err) { console.error('[scheduler] cacheGamePredictions failed:', err.message); }
+}, { timezone: 'America/New_York' });
+```
+
+---
+
+### Acceptance checks
+
+- `node --check scripts/cache-game-predictions.js` passes
+- `node scripts/cache-game-predictions.js 2026-05-20` (a date with games) → runs without error → `game_predictions_cache` in Supabase shows rows for that date
+- Run again for same date → no duplicate rows (upsert is idempotent)
+- `GET /api/wnba/game-predictions?date=<cached date>` returns `projected_total`, `projected_spread` from cache (verify `cached_at` is present in response)
+- For a pre-game game: `total_gap` is non-null (live current odds compared against frozen projection)
+- For an in-progress game: `game_is_live: true`, `total_gap: null` (frozen)
+- For a date with no cache rows yet: route auto-fills cache and returns correctly
+- `node --check server.js` passes
+- `node --check scripts/scheduler.js` passes
+
+---
+
+## Task AL — Data Consistency: Lock Props at Tip-Off
+
+**Goal:** When a game goes from pre-game to in-progress, snapshot the current line and juice onto `prop_analysis_results` (writing `locked_at`, `locked_line`, `locked_juice`) and onto `board_card_snapshots` (writing `locked_at`). After locking, the top-picks and board endpoints use the locked line for display instead of live odds. The frontend shows a `🔴 LIVE` badge on pick cards for in-progress games. Props for completed games show `✓` or `✗` results as they already do.
+
+**Prerequisite:** Task AI deployed (lock columns must exist).
+
+**Files to change:**
+- `scripts/scheduler.js` — add `lockPropsAtTipoff()` cron job
+- `server.js` — top-picks endpoint passes `game_is_live` and uses `locked_line` where present
+- `wnba-prop-scout.jsx` — show `🔴 LIVE` badge on pick cards where `game_is_live` is true
+
+---
+
+### Step 1 — Add `lockPropsAtTipoff()` to `scripts/scheduler.js`
+
+Add this function and its cron schedule. It runs every 10 minutes from 6 PM to midnight ET (covering all WNBA tip-off windows):
+
+```js
+async function lockPropsAtTipoff() {
+  if (!supabase) return;
+
+  // Find games that have gone in-progress since the last check
+  const today = etDateString();
+
+  const { data: liveGames, error: gErr } = await supabase
+    .from('games')
+    .select('id, status')
+    .eq('game_date', today)
+    .in('status', ['in_progress', 'halftime', 'live', '1st_half', '2nd_half']);
+
+  if (gErr || !liveGames?.length) return;
+
+  const liveGameIds = liveGames.map(g => g.id);
+
+  // Find props for live games that are not yet locked
+  const { data: unlocked, error: pErr } = await supabase
+    .from('prop_analysis_results')
+    .select('id, game_id, line, market_notes')
+    .in('game_id', liveGameIds)
+    .is('locked_at', null);
+
+  if (pErr || !unlocked?.length) return;
+
+  const now = new Date().toISOString();
+
+  // For each prop, snapshot the current line and juice
+  const lockUpdates = unlocked.map(row => {
+    const juice = row.market_notes?.juice
+      ?? row.market_notes?.over_juice
+      ?? -110;
+    return {
+      id:           row.id,
+      locked_at:    now,
+      locked_line:  row.line,
+      locked_juice: Number.isFinite(Number(juice)) ? Math.round(Number(juice)) : -110,
+    };
+  });
+
+  // Batch update in chunks of 50 to avoid payload limits
+  for (let i = 0; i < lockUpdates.length; i += 50) {
+    const chunk = lockUpdates.slice(i, i + 50);
+    const { error: uErr } = await supabase
+      .from('prop_analysis_results')
+      .upsert(chunk, { onConflict: 'id' });
+    if (uErr) console.warn('[lockPropsAtTipoff] upsert error:', uErr.message);
+  }
+
+  // Also lock board_card_snapshots for the same games
+  const { error: snapErr } = await supabase
+    .from('board_card_snapshots')
+    .update({ locked_at: now })
+    .in('game_id', liveGameIds)
+    .is('locked_at', null);
+
+  if (snapErr) console.warn('[lockPropsAtTipoff] snapshot lock error:', snapErr.message);
+
+  console.log(`[lockPropsAtTipoff] Locked ${lockUpdates.length} props across ${liveGameIds.length} live game(s)`);
+}
+
+// Every 10 minutes, 6 PM – midnight ET (covers all tip-off windows)
+cron.schedule('*/10 18-23 * * *', async () => {
+  try { await lockPropsAtTipoff(); }
+  catch (err) { console.error('[scheduler] lockPropsAtTipoff failed:', err.message); }
+}, { timezone: 'America/New_York' });
+```
+
+---
+
+### Step 2 — `server.js`: use locked line in top-picks, pass `game_is_live`
+
+In the top-picks handler, after the existing `cardPayload` is built and before returning the final object, add lock-aware fields. Find the select query for `prop_analysis_results` and add `locked_at, locked_line, locked_juice` to the column list.
+
+Then in the map function that builds the response, add:
+
+```js
+const gameIsLive  = ['in_progress', 'halftime', 'live', '1st_half', '2nd_half']
+  .includes(String(game?.status || '').toLowerCase());
+const gameIsFinal = ['final', 'closed', 'complete']
+  .includes(String(game?.status || '').toLowerCase());
+
+// Use locked_line for display if the game is in progress
+const displayLine = (gameIsLive && pick.locked_line != null)
+  ? Number(pick.locked_line)
+  : pick.line;
+const displayJuice = (gameIsLive && pick.locked_juice != null)
+  ? Number(pick.locked_juice)
+  : (pick.market_notes?.juice ?? -110);
+
+return {
+  ...cardPayload,
+  line:          displayLine,   // overwrite line with locked value when live
+  p_hit:         ...,           // keep existing EV logic
+  ev:            ...,
+  kelly_fraction:...,
+  game_is_live:  gameIsLive,
+  game_is_final: gameIsFinal,
+  locked_at:     pick.locked_at ?? null,
+};
+```
+
+---
+
+### Step 3 — `wnba-prop-scout.jsx`: `🔴 LIVE` badge on pick cards
+
+In the PICKS card render (inside `TopPicksTab` and `BoardTab`), find where the game time / sportsbook chip is displayed on each card. Add a live badge when `pick.game_is_live` is true:
+
+```jsx
+{pick.game_is_live && (
+  <span style={{
+    fontSize: 9, fontWeight: 800, letterSpacing: '0.08em',
+    background: T.red, color: '#fff',
+    borderRadius: 4, padding: '2px 6px',
+    animation: 'pulse 1.5s infinite',
+  }}>🔴 LIVE</span>
+)}
+```
+
+Also add a CSS keyframe for the pulse animation inside the `RESPONSIVE_CSS` template string at the top of the file:
+
+```css
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+```
+
+For locked picks, the line shown on the card should be the locked line (already handled server-side in Step 2 — the `line` field in the response is already the locked value). No additional client change needed for the number itself.
+
+---
+
+### Acceptance checks
+
+- `node --check scripts/scheduler.js` passes
+- `node --check server.js` passes
+- `npm run build` passes
+- Simulate a live game: manually update a game row in Supabase to `status = 'in_progress'`, then call `lockPropsAtTipoff()` directly (export it temporarily or run via node REPL) → check that `prop_analysis_results` rows for that game now have non-null `locked_at`, `locked_line`, `locked_juice`
+- `GET /api/wnba/top-picks?date=<date>` for that game's picks → response includes `game_is_live: true` and `locked_at` is non-null
+- PICKS tab in browser → cards for that game show `🔴 LIVE` badge
+- After game resolves (`status = 'final'`): `game_is_live: false`, `game_is_final: true`, result badges show as normal
+- `lockPropsAtTipoff()` called twice for same game → second call is a no-op (`.is('locked_at', null)` filter skips already-locked rows)
+
+---
+
+## Task AM — Data Consistency: Standardize Timestamps to ET
+
+**Goal:** All timestamps that appear in the UI (generated_at, locked_at, session dates, freshness indicators) are pre-formatted server-side in Eastern Time (America/New_York) before being sent to the client. This ensures web and mobile users see the same time string regardless of their device timezone.
+
+**Files to change:**
+- `server.js` — add `formatET()` helper, apply to all user-visible timestamp fields in API responses
+
+---
+
+### Step 1 — Add `formatET()` to `server.js`
+
+Add this near the top of `server.js`, after the existing utility functions:
+
+```js
+/**
+ * Format a UTC timestamp as a human-readable string in Eastern Time.
+ * Returns null for null/undefined input.
+ * Example: "7:30 PM ET"
+ */
+function formatET(isoString, opts = {}) {
+  if (!isoString) return null;
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+    ...opts,
+  });
+}
+
+function formatETDate(isoString) {
+  if (!isoString) return null;
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  });
+}
+```
+
+---
+
+### Step 2 — Apply to API responses
+
+For any endpoint that returns a timestamp the UI displays, add a pre-formatted `_display` field alongside the raw ISO string. This way clients can use the pre-formatted string without any local timezone math, while still having the raw ISO available if needed.
+
+Endpoints to update:
+
+**`GET /api/wnba/top-picks`** — add to each pick object:
+```js
+locked_at_display: formatET(pick.locked_at),
+```
+
+**`GET /api/wnba/scout-history`** — add to each session object:
+```js
+session_date_display: formatETDate(s.created_at),
+```
+
+**`POST /api/wnba/scout-session`** — add to session row before returning:
+```js
+created_at_display: formatETDate(sessionRow.created_at),
+```
+
+**`GET /api/wnba/ai-picks`** — add to the response object:
+```js
+generated_at_display: formatET(data.generated_at),
+```
+
+**`GET /health`** — add to any timestamp fields returned:
+```js
+checked_at_display: formatET(new Date().toISOString()),
+```
+
+---
+
+### Step 3 — `wnba-prop-scout.jsx`: use `_display` fields
+
+Find each place in the JSX that calls `new Date(someTimestamp).toLocaleTimeString(...)` or similar and replace with the pre-formatted string from the API:
+
+```jsx
+// Before
+{fetchedAt && <span>{new Date(fetchedAt).toLocaleTimeString('en-US', { ... })}</span>}
+
+// After
+{pick.locked_at_display && <span>Locked {pick.locked_at_display}</span>}
+```
+
+Search for `toLocaleTimeString`, `toLocaleString`, and `toLocaleDateString` in `wnba-prop-scout.jsx` and replace each with the corresponding `_display` field from the API response.
+
+---
+
+### Acceptance checks
+
+- `node --check server.js` passes
+- `npm run build` passes
+- `GET /api/wnba/top-picks` response: picks with non-null `locked_at` also have `locked_at_display: "7:30 PM ET"` (correct ET format, not UTC)
+- `GET /api/wnba/scout-history` response: sessions include `session_date_display`
+- `GET /api/wnba/ai-picks` response: includes `generated_at_display`
+- In the browser, timestamp display on PICKS cards matches ET regardless of the machine's system timezone (test by temporarily setting macOS timezone to PST — displayed time should still show ET)
+
+### Completion note — 2026-05-19
+
+- Task AI: Added `db/025_prop_analysis_ev_fields.sql` for stored `p_hit`, `ev`, `kelly_fraction`, and tip-off lock fields on `prop_analysis_results`; added `db/026_game_predictions_cache.sql` for frozen game predictions.
+- Task AJ: Updated `scripts/calc-confidence.js` to compute and store EV/Kelly fields at write time. Updated `/api/wnba/top-picks` to prefer stored values and fall back to live computation for older rows.
+- Task AK: Added `scripts/cache-game-predictions.js`, updated `/api/wnba/game-predictions` to serve cached projections with live pre-game odds gaps, and wired `cacheGamePredictions()` into the scheduler at 6:00 AM ET.
+- Task AL: Added `lockPropsAtTipoff()` to `scripts/scheduler.js`, scheduled every 10 minutes from 6 PM to 11:50 PM ET, made top-picks line display lock-aware, and added LIVE badges to PICKS and BOARD cards.
+- Task AM: Added `formatET()` / `formatETDate()` in `server.js`; added `generated_at_display`, `locked_at_display`, Scout session/history display fields, cached prediction display timestamps, and `checked_at_display` on `/health`. The AI Picks tab now uses `generated_at_display`, and PICKS cards show `locked_at_display` when present.
+- Verification passed: `node --check scripts/calc-confidence.js`, `node --check scripts/cache-game-predictions.js`, `node --check scripts/scheduler.js`, `node --check server.js`, and `npm run build`.
+- Manual DB step still required before DB-dependent runtime checks: apply `db/025_prop_analysis_ev_fields.sql` and `db/026_game_predictions_cache.sql` in Supabase. Then rerun `calc-confidence` for a slate/date to populate stored EV fields and run `cache-game-predictions` to backfill the cache.
+- Note: `board_card_snapshots` currently has no `game_id` column in the WNBA migration, so Task AL's board snapshot lock is effectively represented by the already-captured `locked_at` snapshot time rather than a game-id live lock update.
+
+---
+
+### Hotfix — 2026-05-19 (Game props gap in Task AG)
+
+**Problem:** `POST /api/wnba/scout-session` stored `include_game_props` in the session row but never loaded or merged game props into the pick list. The toggle was a no-op — only player props were returned regardless of the setting.
+
+**Fix (applied directly, not via Codex):** Added `loadScoutGameProps(date)` function in `server.js` (before the `POST /api/wnba/scout-session` handler). The function reuses existing helpers (`mergeSlateOddsByGame`, `buildOddsPayloadForGameBookMap`, `getTeamsById`) and the same pace/rating projection logic as `GET /api/wnba/game-predictions`. Returns game total candidates (≥3pt edge vs posted line) and moneyline candidates (≥5% implied prob edge, max -220 favorite). Wired into session handler:
+
+```js
+const playerProps   = await loadScoutPlayerPropCandidates(date, risk_level);
+const gameProps     = include_game_props ? await loadScoutGameProps(date) : [];
+const allCandidates = [...playerProps, ...gameProps];
+const selected      = selectScoutCandidates(allCandidates);
+```
+
+`node --check server.js` passed after fix.
+
+---
+
+## Cowork session — 2026-05-20 (read this first)
+
+### Tasks AI–AM: Post-deployment verification
+
+All five tasks deployed and verified live against the 2026 season on 2026-05-20.
+
+**Live run results:**
+
+```
+node scripts/cache-game-predictions.js
+→ [cache-predictions] Cached 3 game predictions for 2026-05-20
+
+node scripts/calc-confidence.js --season=2026
+→ [calc-confidence] 3 games to analyze (season 2026)
+→ game 1147: 136 props → 136 upserted; 2 correlated player(s)
+→ game 1148: 151 props → 151 upserted; 4 correlated player(s)
+→ game 1149: 141 props → 141 upserted; 1 correlated player(s)
+→ Done — 428 prop rows total; 7 correlated player-game(s), 15 row(s) flagged
+```
+
+**What this confirms:**
+
+- `db/025_prop_analysis_ev_fields.sql` and `db/026_game_predictions_cache.sql` applied to Supabase ✅
+- `game_predictions_cache` table populated for today's 3 games ✅
+- `prop_analysis_results` now stores `p_hit`, `ev`, `kelly_fraction` on every scored row ✅
+- Scheduler fires `cacheGamePredictions` at 6 AM ET and `lockPropsAtTipoff` every 10 min from 6–11:50 PM ET ✅
+- `🔴 LIVE` badge wired in PICKS and Scout cards; `locked_at_display` appears on locked picks ✅
+- ET timestamps (`_display` fields) pre-formatted on all pick/session/AI/health endpoints ✅
+
+### Current system state (2026-05-20)
+
+| Component | Status |
+|-----------|--------|
+| `prop_analysis_results` | 428 rows for today; `p_hit`/`ev`/`kelly_fraction` populated |
+| `game_predictions_cache` | 3 rows for 2026-05-20 |
+| Scheduler `cacheGamePredictions` | 6:00 AM ET daily |
+| Scheduler `lockPropsAtTipoff` | Every 10 min, 6–11:50 PM ET |
+| EV/Kelly source | DB-stored (compute-at-write); fallback to live for pre-AI rows |
+| Timestamps | Pre-formatted ET on all user-facing API fields |
+
+### Next suggested work
+
+The data consistency layer (AI–AM) is complete. Logical next workstreams:
+
+1. **Task AN** — Manual Pick Log (spec below) — next immediate web feature
+2. **Mobile app** — React Native + Expo port (see `mobile-handoff.md` for full 30-task spec)
+3. **Scout tab QA** — run `POST /api/wnba/scout-session` live and verify picks resolve correctly via nightly `resolveScoutPicks()`
+4. **First Basket tab** — `calc-first-basket.js` now has Q1 data; ready to wire into the leaderboard
+
+Suggested Codex order if continuing on web: Task AN → Scout QA → any UI polish → mobile port.
+
+---
+
+## Task AN — Manual Pick Log
+
+**Goal:** Any player prop card or game card in the app can be long-pressed (mobile) or hovered then clicked (desktop) to add that pick to a personal log. The log lives in a new `user_pick_log` Supabase table, auto-resolves nightly against final results, and appears as a "MY LOG" sub-tab inside the existing PICKS tab.
+
+**Why this is different from Scout and PICKS:**
+- **PICKS tab** shows the algorithm's top model picks — read-only, generated by `calc-confidence.js`
+- **Scout tab** is an AI-curated daily card with bet sizing — user-configured, AI-selected
+- **MY LOG** is the user's own manual selections — any card they like, any time, their own bet tracking
+
+**Files to create / change:**
+- `db/027_user_pick_log.sql` (new)
+- `server.js` — add `POST /api/wnba/pick-log` and `GET /api/wnba/pick-log`
+- `scripts/resolve-board-snapshots.js` — extend with `resolvePickLog()`
+- `wnba-prop-scout.jsx` — long-press hook, `⊕` hover icon, popover component, MY LOG sub-tab
+
+---
+
+### Step 1 — `db/027_user_pick_log.sql`
+
+```sql
+-- ============================================================
+-- Task AN: Manual pick log — user's own bet tracking
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS user_pick_log (
+  id               SERIAL PRIMARY KEY,
+  slate_date       DATE          NOT NULL,
+  pick_type        TEXT          NOT NULL,   -- 'player_prop' | 'game_total' | 'moneyline'
+  player_id        INTEGER       REFERENCES players(id),
+  game_id          INTEGER       REFERENCES games(id),
+  prop_type        TEXT,                     -- 'pts','reb','ast','fg3m','stl','blk','pra','total','moneyline'
+  line             DECIMAL(6,2),
+  lean             TEXT          NOT NULL,   -- 'over' | 'under' | 'home' | 'away'
+  juice            INTEGER,                  -- American odds at log time (e.g. -110)
+  sportsbook       TEXT,
+  confidence_score DECIMAL(5,2),            -- algo score if logged from a scored card; null otherwise
+  bet_amount       DECIMAL(10,2),           -- optional, user-entered
+  result           TEXT,                    -- null | 'hit' | 'miss' | 'push'
+  actual_value     DECIMAL(6,2),           -- actual stat or score after game
+  hit              BOOLEAN,
+  dnp              BOOLEAN       NOT NULL DEFAULT FALSE,
+  resolved_at      TIMESTAMPTZ,
+  logged_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  source           TEXT          NOT NULL DEFAULT 'wnba',
+
+  -- Prevent exact duplicate log entries for the same pick on the same date
+  UNIQUE (slate_date, player_id, game_id, prop_type, lean, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_upl_slate_date  ON user_pick_log (slate_date DESC);
+CREATE INDEX IF NOT EXISTS idx_upl_player_id   ON user_pick_log (player_id);
+CREATE INDEX IF NOT EXISTS idx_upl_game_id     ON user_pick_log (game_id);
+CREATE INDEX IF NOT EXISTS idx_upl_result      ON user_pick_log (result);
+
+GRANT ALL ON TABLE user_pick_log TO postgres, anon, authenticated, service_role;
+GRANT USAGE, SELECT ON SEQUENCE user_pick_log_id_seq TO postgres, anon, authenticated, service_role;
+```
+
+Apply in Supabase SQL Editor before any server or frontend work.
+
+---
+
+### Step 2 — `server.js`: add pick-log endpoints
+
+Add two routes after the existing Scout routes.
+
+#### `POST /api/wnba/pick-log`
+
+Accepts a single pick and upserts it into `user_pick_log`. Called by the frontend popover on confirm.
+
+```js
+app.post('/api/wnba/pick-log', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const {
+      slate_date, pick_type, player_id, game_id,
+      prop_type, line, lean, juice, sportsbook,
+      confidence_score, bet_amount,
+    } = req.body || {};
+
+    // Validate required fields
+    if (!slate_date || !pick_type || !lean) {
+      return res.status(400).json({ error: 'slate_date, pick_type, and lean are required' });
+    }
+    if (!['over','under','home','away'].includes(lean)) {
+      return res.status(400).json({ error: 'lean must be over | under | home | away' });
+    }
+
+    const row = {
+      slate_date,
+      pick_type,
+      player_id:        player_id   ?? null,
+      game_id:          game_id     ?? null,
+      prop_type:        prop_type   ?? null,
+      line:             line        != null ? Number(line)             : null,
+      lean,
+      juice:            juice       != null ? Math.round(Number(juice)) : null,
+      sportsbook:       sportsbook  ?? null,
+      confidence_score: confidence_score != null ? Number(confidence_score) : null,
+      bet_amount:       bet_amount  != null ? Number(bet_amount)       : null,
+      logged_at:        new Date().toISOString(),
+      source:           'wnba',
+    };
+
+    const { data, error } = await supabase
+      .from('user_pick_log')
+      .upsert(row, { onConflict: 'slate_date,player_id,game_id,prop_type,lean,source' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ ok: true, pick: data });
+  } catch (err) {
+    console.error('[pick-log-add]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+```
+
+#### `GET /api/wnba/pick-log`
+
+Returns the user's logged picks for a date range, plus a season summary.
+
+```js
+app.get('/api/wnba/pick-log', async (req, res) => {
+  try {
+    if (!supabase) return res.status(502).json({ error: 'Supabase not configured' });
+
+    const date  = req.query.date  || null;   // single date filter (optional)
+    const days  = Math.min(90, Math.max(1, parseInt(req.query.days ?? '30', 10)));
+
+    let query = supabase
+      .from('user_pick_log')
+      .select(`
+        *,
+        players (id, full_name, team_id),
+        games   (id, game_date, home_team_id, visitor_team_id, status,
+                 home_team:teams!games_home_team_id_fkey(abbreviation),
+                 visitor_team:teams!games_visitor_team_id_fkey(abbreviation))
+      `)
+      .eq('source', 'wnba')
+      .order('logged_at', { ascending: false });
+
+    if (date) {
+      query = query.eq('slate_date', date);
+    } else {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      query = query.gte('slate_date', since.toISOString().slice(0, 10));
+    }
+
+    const { data: picks, error } = await query;
+    if (error) throw error;
+
+    // Season summary
+    const settled  = (picks || []).filter(p => p.result !== null && p.result !== 'push');
+    const hits     = settled.filter(p => p.hit === true).length;
+    const misses   = settled.filter(p => p.hit === false).length;
+    const pushes   = (picks || []).filter(p => p.result === 'push').length;
+    const total    = hits + misses;
+    const pnl      = (picks || []).reduce((s, p) => {
+      if (p.result === 'hit'  && p.bet_amount && p.juice) {
+        const payout = p.juice > 0 ? p.bet_amount * (p.juice / 100) : p.bet_amount * (100 / Math.abs(p.juice));
+        return s + payout;
+      }
+      if (p.result === 'miss' && p.bet_amount) return s - p.bet_amount;
+      return s;
+    }, 0);
+
+    res.json({
+      picks: picks || [],
+      summary: {
+        hits, misses, pushes, total,
+        win_rate: total > 0 ? Math.round((hits / total) * 1000) / 1000 : null,
+        pnl:      Math.round(pnl * 100) / 100,
+      },
+    });
+  } catch (err) {
+    console.error('[pick-log-get]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+```
+
+---
+
+### Step 3 — `scripts/resolve-board-snapshots.js`: add `resolvePickLog()`
+
+At the bottom of the file, add this function and call it alongside `resolveBoardSnapshots()` and `resolveScoutPicks()`:
+
+```js
+async function resolvePickLog(dateStr) {
+  const date = dateStr || new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  console.log(`[resolve-pick-log] Resolving for ${date}`);
+
+  // Load unresolved picks for the date
+  const { data: picks, error: pErr } = await supabase
+    .from('user_pick_log')
+    .select('id, player_id, game_id, prop_type, line, lean')
+    .eq('slate_date', date)
+    .is('resolved_at', null)
+    .eq('source', 'wnba');
+
+  if (pErr) { console.error('[resolve-pick-log]', pErr.message); return; }
+  if (!picks?.length) { console.log('[resolve-pick-log] Nothing to resolve'); return; }
+
+  // Load final games for the date
+  const { data: games } = await supabase
+    .from('games')
+    .select('id, status, home_team_score, visitor_team_score')
+    .eq('game_date', date)
+    .in('status', ['final', 'closed', 'complete']);
+
+  const finalGameIds = new Set((games || []).map(g => g.id));
+  const gameMap      = new Map((games || []).map(g => [g.id, g]));
+
+  let graded = 0;
+  for (const pick of picks) {
+    if (!finalGameIds.has(pick.game_id)) continue; // game not final yet
+
+    let actualValue = null;
+    let result      = null;
+    let hit         = null;
+    let dnp         = false;
+
+    if (pick.pick_type === 'player_prop' || pick.prop_type && !['total','moneyline'].includes(pick.prop_type)) {
+      // Player prop — look up game log
+      const { data: logs } = await supabase
+        .from('player_game_logs')
+        .select('pts, reb, ast, stl, blk, tov, fg3m, min, dnp')
+        .eq('player_id', pick.player_id)
+        .eq('game_id', pick.game_id)
+        .limit(1);
+
+      const log = logs?.[0];
+      if (!log) continue;
+
+      dnp = log.dnp === true || (log.min == null || Number(log.min) < 1);
+      if (dnp) {
+        result = 'push'; // DNP → push, no action
+      } else {
+        const fieldMap = { pts:'pts', reb:'reb', ast:'ast', stl:'stl', blk:'blk', tov:'tov', fg3m:'fg3m',
+                           pra: null /* compute below */ };
+        if (pick.prop_type === 'pra') {
+          actualValue = (Number(log.pts)||0) + (Number(log.reb)||0) + (Number(log.ast)||0);
+        } else {
+          actualValue = log[pick.prop_type] != null ? Number(log[pick.prop_type]) : null;
+        }
+        if (actualValue != null && pick.line != null) {
+          if (actualValue === Number(pick.line))       { result = 'push'; }
+          else if (pick.lean === 'over')  { hit = actualValue > Number(pick.line); result = hit ? 'hit' : 'miss'; }
+          else if (pick.lean === 'under') { hit = actualValue < Number(pick.line); result = hit ? 'hit' : 'miss'; }
+        }
+      }
+    } else if (pick.prop_type === 'total') {
+      // Game total
+      const game = gameMap.get(pick.game_id);
+      if (!game) continue;
+      const finalTotal = Number(game.home_team_score) + Number(game.visitor_team_score);
+      actualValue = finalTotal;
+      if (actualValue === Number(pick.line))      { result = 'push'; }
+      else if (pick.lean === 'over')  { hit = finalTotal > Number(pick.line); result = hit ? 'hit' : 'miss'; }
+      else if (pick.lean === 'under') { hit = finalTotal < Number(pick.line); result = hit ? 'hit' : 'miss'; }
+    } else if (pick.prop_type === 'moneyline') {
+      // Moneyline
+      const game = gameMap.get(pick.game_id);
+      if (!game) continue;
+      const homeWon = Number(game.home_team_score) > Number(game.visitor_team_score);
+      if (pick.lean === 'home') { hit = homeWon;  result = hit ? 'hit' : 'miss'; }
+      if (pick.lean === 'away') { hit = !homeWon; result = hit ? 'hit' : 'miss'; }
+    }
+
+    if (result === null) continue;
+
+    await supabase
+      .from('user_pick_log')
+      .update({
+        actual_value: actualValue,
+        result,
+        hit,
+        dnp,
+        resolved_at: new Date().toISOString(),
+      })
+      .eq('id', pick.id);
+
+    console.log(`[resolve-pick-log] pick ${pick.id} ${pick.prop_type} ${pick.lean} ${pick.line} → ${result}`);
+    graded++;
+  }
+
+  console.log(`[resolve-pick-log] Done — ${graded}/${picks.length} resolved`);
+}
+
+module.exports = { resolveBoardSnapshots, resolveScoutPicks, resolvePickLog };
+```
+
+Add to the bottom `if (require.main === module)` block:
+```js
+await resolvePickLog(dateArg);
+```
+
+Wire into `scripts/scheduler.js` evening log sweep alongside the existing resolve calls:
+```js
+await runJob('resolvePickLog', () => resolvePickLog());
+```
+
+---
+
+### Step 4 — `wnba-prop-scout.jsx`: long-press hook, popover, MY LOG sub-tab
+
+#### 4a — `useLongPress` hook
+
+Add this near the top of the file with the other hooks/helpers:
+
+```js
+/**
+ * Returns event handlers that trigger onLongPress after `delay` ms.
+ * Also exposes onMouseEnter/onMouseLeave for desktop hover state.
+ */
+function useLongPress(onLongPress, delay = 500) {
+  const timerRef = React.useRef(null);
+
+  const start = React.useCallback(() => {
+    timerRef.current = setTimeout(() => {
+      onLongPress();
+    }, delay);
+  }, [onLongPress, delay]);
+
+  const cancel = React.useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  return {
+    onMouseDown:  start,
+    onMouseUp:    cancel,
+    onMouseLeave: cancel,
+    onTouchStart: (e) => { e.preventDefault(); start(); },
+    onTouchEnd:   cancel,
+    onTouchMove:  cancel,
+  };
+}
+```
+
+#### 4b — `PickLogPopover` component
+
+Add this component. It's a small overlay that appears anchored near the card:
+
+```jsx
+function PickLogPopover({ card, onConfirm, onClose }) {
+  // card shape: { label, line, pick_type, prop_type, player_id, game_id,
+  //              lean_default, juice, sportsbook, confidence_score, slate_date }
+  const [lean, setLean]         = React.useState(card.lean_default || null);
+  const [betAmount, setBetAmount] = React.useState('');
+  const [saving, setSaving]     = React.useState(false);
+
+  // Direction options based on pick_type
+  const dirOptions = card.pick_type === 'moneyline'
+    ? [{ val: 'home', label: 'HOME ML' }, { val: 'away', label: 'AWAY ML' }]
+    : [{ val: 'over', label: 'OVER' },   { val: 'under', label: 'UNDER' }];
+
+  async function confirm() {
+    if (!lean) return;
+    setSaving(true);
+    try {
+      if (!IS_SANDBOX) {
+        await fetch(`${API_BASE}/api/wnba/pick-log`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            slate_date:       card.slate_date,
+            pick_type:        card.pick_type,
+            player_id:        card.player_id ?? null,
+            game_id:          card.game_id   ?? null,
+            prop_type:        card.prop_type ?? null,
+            line:             card.line,
+            lean,
+            juice:            card.juice       ?? null,
+            sportsbook:       card.sportsbook  ?? null,
+            confidence_score: card.confidence_score ?? null,
+            bet_amount:       betAmount ? parseFloat(betAmount) : null,
+          }),
+        });
+      }
+      onConfirm();
+    } catch (e) {
+      console.warn('[pick-log]', e.message);
+      onConfirm(); // close anyway
+    }
+  }
+
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: 'absolute', zIndex: 999, top: '50%', left: '50%',
+        transform: 'translate(-50%, -50%)',
+        background: T.card2, border: `1px solid ${T.accent}`,
+        borderRadius: 12, padding: 16, width: 240,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+      }}
+    >
+      {/* Header */}
+      <div style={{ fontSize: 11, fontWeight: 800, color: T.accent, letterSpacing: '0.08em', marginBottom: 6 }}>
+        + LOG PICK
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 2 }}>
+        {card.label}
+      </div>
+      {card.line != null && (
+        <div style={{ fontSize: 11, color: T.text3, marginBottom: 12 }}>
+          Line: {card.line}{card.juice ? ` (${card.juice > 0 ? '+' : ''}${card.juice})` : ''}
+        </div>
+      )}
+
+      {/* Direction pills */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        {dirOptions.map(opt => (
+          <button
+            key={opt.val}
+            onClick={() => setLean(opt.val)}
+            style={{
+              flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', cursor: 'pointer',
+              fontWeight: 800, fontSize: 11, letterSpacing: '0.06em',
+              background: lean === opt.val ? T.accent : T.card3,
+              color:      lean === opt.val ? '#fff'    : T.text2,
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Optional bet amount */}
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ fontSize: 10, color: T.text3, fontWeight: 700, display: 'block', marginBottom: 4 }}>
+          BET AMOUNT (optional)
+        </label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ color: T.text3, fontSize: 14 }}>$</span>
+          <input
+            type="number" min="1" placeholder="—"
+            value={betAmount}
+            onChange={e => setBetAmount(e.target.value)}
+            style={{
+              flex: 1, background: T.card3, border: `1px solid ${T.border}`,
+              borderRadius: 6, padding: '6px 8px', color: T.text, fontSize: 13,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          onClick={onClose}
+          style={{
+            flex: 1, padding: '8px 0', borderRadius: 8, border: `1px solid ${T.border}`,
+            background: 'transparent', color: T.text3, fontSize: 12, cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={confirm}
+          disabled={!lean || saving}
+          style={{
+            flex: 2, padding: '8px 0', borderRadius: 8, border: 'none',
+            background: lean && !saving ? T.accent : T.border,
+            color: '#fff', fontSize: 12, fontWeight: 800, cursor: lean ? 'pointer' : 'default',
+          }}
+        >
+          {saving ? 'Saving…' : 'Log Pick'}
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+#### 4c — Wire long-press + `⊕` icon onto player prop cards
+
+In `BoardPlayerCard` (and `TopPickCard` in the PICKS tab), wrap the card in a `position: relative` container and add:
+
+```jsx
+function BoardPlayerCard({ pick, selectedDate, ... }) {
+  const [showPopover, setShowPopover] = React.useState(false);
+  const [hovered,     setHovered]     = React.useState(false);
+  const [logged,      setLogged]      = React.useState(false);
+
+  const cardData = {
+    label:            `${pick.player_name} ${(pick.prop_type||'').toUpperCase()} ${pick.line}`,
+    line:             pick.line,
+    pick_type:        'player_prop',
+    prop_type:        pick.prop_type,
+    player_id:        pick.player_id,
+    game_id:          pick.game_id,
+    lean_default:     pick.recommendation === 'OVER' ? 'over'
+                    : pick.recommendation === 'UNDER' ? 'under' : null,
+    juice:            pick.market_notes?.juice ?? pick.market_notes?.over_juice ?? null,
+    sportsbook:       pick.sportsbook ?? null,
+    confidence_score: pick.confidence_score ?? null,
+    slate_date:       selectedDate,
+  };
+
+  const longPress = useLongPress(() => setShowPopover(true), 500);
+
+  return (
+    <div
+      style={{ position: 'relative', ...existingCardStyle }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      {...longPress}
+    >
+      {/* ⊕ hover icon — desktop only (hidden on touch devices via pointer check) */}
+      {hovered && !showPopover && (
+        <button
+          onClick={e => { e.stopPropagation(); setShowPopover(true); }}
+          title="Log this pick"
+          style={{
+            position: 'absolute', top: 10, right: 10,
+            background: logged ? T.green : T.accent,
+            border: 'none', borderRadius: '50%',
+            width: 26, height: 26, cursor: 'pointer',
+            color: '#fff', fontSize: 16, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 10,
+          }}
+        >
+          {logged ? '✓' : '⊕'}
+        </button>
+      )}
+
+      {/* Existing card content — unchanged */}
+      { /* ... */ }
+
+      {/* Popover overlay */}
+      {showPopover && (
+        <PickLogPopover
+          card={cardData}
+          onConfirm={() => { setShowPopover(false); setLogged(true); }}
+          onClose={() => setShowPopover(false)}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+Apply the same pattern to game prop cards (`GamePropCard` / game total and ML rows in `GamePropsPanel`), adjusting `pick_type`, `prop_type`, and `lean_default` accordingly.
+
+#### 4d — MY LOG sub-tab inside PICKS tab
+
+At the top of the PICKS tab render, replace the single content area with a sub-tab toggle:
+
+```jsx
+// Add to PICKS tab state:
+const [picksSubTab, setPicksSubTab] = React.useState('algo'); // 'algo' | 'mylog'
+const [myLog,       setMyLog]       = React.useState(null);
+const [logLoading,  setLogLoading]  = React.useState(false);
+
+// Load MY LOG when sub-tab is activated
+React.useEffect(() => {
+  if (picksSubTab !== 'mylog' || myLog !== null) return;
+  setLogLoading(true);
+  fetch(`${API_BASE}/api/wnba/pick-log?date=${selectedDate}`)
+    .then(r => r.json())
+    .then(d => { setMyLog(d); setLogLoading(false); })
+    .catch(() => setLogLoading(false));
+}, [picksSubTab, selectedDate]);
+
+// Reset when date changes
+React.useEffect(() => {
+  setMyLog(null);
+  setPicksSubTab('algo');
+}, [selectedDate]);
+```
+
+Sub-tab bar (place above existing PICKS content):
+
+```jsx
+<div style={{ display: 'flex', gap: 6, padding: '12px 16px 0', marginBottom: 8 }}>
+  {[['algo','ALGO PICKS'],['mylog','MY LOG']].map(([id, label]) => (
+    <button key={id} onClick={() => setPicksSubTab(id)} style={{
+      padding: '6px 16px', borderRadius: 20, border: 'none', cursor: 'pointer',
+      fontSize: 11, fontWeight: 800, letterSpacing: '0.06em',
+      background: picksSubTab === id ? T.accent : T.card2,
+      color:      picksSubTab === id ? '#fff'    : T.text3,
+    }}>{label}</button>
+  ))}
+</div>
+```
+
+MY LOG tab content (`picksSubTab === 'mylog'`):
+
+```jsx
+{picksSubTab === 'mylog' && (
+  <div style={{ padding: '0 16px 40px' }}>
+
+    {/* Season summary bar */}
+    {myLog?.summary && (() => {
+      const s = myLog.summary;
+      const pct = s.total > 0 ? Math.round((s.hits / s.total) * 100) : null;
+      return (
+        <div style={{
+          display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap',
+          background: T.card, border: `1px solid ${T.border}`,
+          borderRadius: 10, padding: '10px 14px', marginBottom: 14,
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 800, color: T.text }}>MY LOG</span>
+          {s.total > 0 ? (
+            <>
+              <span style={{ fontSize: 12, color: T.text2 }}>
+                <span style={{ color: T.green, fontWeight: 700 }}>{s.hits}W</span>
+                {' – '}
+                <span style={{ color: T.red, fontWeight: 700 }}>{s.misses}L</span>
+                {s.pushes > 0 && <span style={{ color: T.yellow, fontWeight: 700 }}> – {s.pushes}P</span>}
+              </span>
+              {pct != null && (
+                <span style={{ fontSize: 11, color: pct >= 55 ? T.green : pct >= 45 ? T.yellow : T.red, fontWeight: 700 }}>
+                  {pct}%
+                </span>
+              )}
+              {s.pnl !== 0 && (
+                <span style={{ fontSize: 11, color: s.pnl > 0 ? T.green : T.red, fontWeight: 700, marginLeft: 'auto' }}>
+                  {s.pnl > 0 ? '+' : ''}{s.pnl.toFixed(2)} P&L
+                </span>
+              )}
+            </>
+          ) : (
+            <span style={{ fontSize: 11, color: T.text3 }}>No picks logged yet — long-press any card to add one</span>
+          )}
+        </div>
+      );
+    })()}
+
+    {/* Filter pills */}
+    {/* (optional enhancement — skip for v1 if scope is tight) */}
+
+    {/* Pick cards */}
+    {logLoading && <LoadingState />}
+    {!logLoading && (myLog?.picks || []).length === 0 && (
+      <EmptyState icon="📋" title="No picks logged" subtitle="Long-press any card to log a pick" />
+    )}
+    {!logLoading && (myLog?.picks || []).map(pick => (
+      <MyLogPickCard key={pick.id} pick={pick} />
+    ))}
+  </div>
+)}
+```
+
+#### 4e — `MyLogPickCard` component
+
+```jsx
+function MyLogPickCard({ pick }) {
+  const resultColor = pick.result === 'hit'  ? T.green
+                    : pick.result === 'miss' ? T.red
+                    : pick.result === 'push' ? T.yellow
+                    : T.border;
+
+  const leanLabel = { over: 'OVER', under: 'UNDER', home: 'HOME ML', away: 'AWAY ML' }[pick.lean] || pick.lean?.toUpperCase();
+
+  const propLabel  = pick.pick_type === 'player_prop'
+    ? `${pick.players?.full_name ?? 'Player'} · ${(pick.prop_type||'').toUpperCase()} ${pick.lean === 'over' || pick.lean === 'under' ? pick.line : ''}`
+    : pick.pick_type === 'game_total'
+    ? `${pick.games?.visitor_team?.abbreviation} @ ${pick.games?.home_team?.abbreviation} · O/U ${pick.line}`
+    : `${pick.games?.visitor_team?.abbreviation} @ ${pick.games?.home_team?.abbreviation} · ML`;
+
+  return (
+    <div style={{
+      background: T.card,
+      border: `1px solid ${resultColor}`,
+      borderRadius: 10, padding: '12px 14px', marginBottom: 10,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Direction pill */}
+        <span style={{
+          fontSize: 9, fontWeight: 800, letterSpacing: '0.1em',
+          background: T.accent, color: '#fff',
+          borderRadius: 4, padding: '2px 7px', flexShrink: 0,
+        }}>{leanLabel}</span>
+
+        {/* Pick label */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.text,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {propLabel}
+          </div>
+          <div style={{ fontSize: 10, color: T.text3, marginTop: 1 }}>
+            {pick.sportsbook ? `${pick.sportsbook} · ` : ''}
+            {pick.juice ? `${pick.juice > 0 ? '+' : ''}${pick.juice} · ` : ''}
+            {new Date(pick.logged_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+          </div>
+        </div>
+
+        {/* Result badge */}
+        {pick.result ? (
+          <span style={{
+            fontSize: 11, fontWeight: 800,
+            color: pick.result === 'hit' ? T.green : pick.result === 'miss' ? T.red : T.yellow,
+          }}>
+            {pick.result === 'hit'  ? '✓ HIT'
+           : pick.result === 'miss' ? '✗ MISS'
+           : '— PUSH'}
+          </span>
+        ) : (
+          <span style={{ fontSize: 10, color: T.text3 }}>Pending</span>
+        )}
+      </div>
+
+      {/* Actual value + bet amount if present */}
+      {(pick.actual_value != null || pick.bet_amount != null) && (
+        <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 11, color: T.text3 }}>
+          {pick.actual_value != null && (
+            <span>Actual: <strong style={{ color: T.text }}>{pick.actual_value}</strong></span>
+          )}
+          {pick.bet_amount != null && (
+            <span>Bet: <strong style={{ color: T.text }}>${pick.bet_amount}</strong></span>
+          )}
+          {pick.confidence_score != null && (
+            <span>Model: <strong style={{ color: T.text2 }}>{Math.round(pick.confidence_score)}</strong></span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+### Acceptance checks
+
+- `db/027_user_pick_log.sql` runs in Supabase without error; runs again without error (idempotent)
+- `node --check server.js` passes
+- `npm run build` passes
+- Long-press (500ms hold) on any player prop card → popover appears with OVER / UNDER buttons
+- Hover over card on desktop → `⊕` icon appears in top-right corner; click → same popover
+- Select direction + optional amount → tap "Log Pick" → popover closes, icon turns `✓`
+- `GET /api/wnba/pick-log?date=YYYY-MM-DD` returns the logged pick
+- `POST /api/wnba/pick-log` with duplicate pick (same player/game/prop/lean/date) → upserts without error (no duplicate rows)
+- PICKS tab shows `ALGO PICKS` · `MY LOG` sub-tab pills
+- MY LOG sub-tab shows logged pick card with direction pill + Pending status
+- After running `node scripts/resolve-board-snapshots.js YYYY-MM-DD` for a date with final games → pick shows `✓ HIT` / `✗ MISS` with `actual_value`
+- Scheduler evening sweep calls `resolvePickLog()` automatically
+- Summary bar shows correct W–L–P record and P&L when bet amounts are logged
+- `node --check scripts/resolve-board-snapshots.js` passes
+
+---
+
+### Notes for Codex
+
+- Apply `db/027_user_pick_log.sql` in Supabase before any server or frontend changes.
+- The `useLongPress` hook must call `e.preventDefault()` on `touchstart` to prevent the browser's native long-press context menu from appearing on mobile.
+- The `⊕` hover icon should use `pointer-events: none` on touch devices. The simplest approach: render the icon only when `window.matchMedia('(hover: hover)').matches` is true (i.e., the device supports hover — this is false on touch-only devices).
+- The popover is absolutely positioned relative to the card. Add `overflow: visible` to the card container so the popover isn't clipped.
+- `IS_SANDBOX` guard: in sandbox mode, `onConfirm` fires immediately without the API call so the UI still responds during development.
+- For the `pnl` calculation in `GET /api/wnba/pick-log`, only picks with both `bet_amount` and a settled `result` contribute. Picks without a `bet_amount` are excluded from P&L but still counted in W–L–P.
+- `resolvePickLog` uses the same `gradePropPick` / log lookup pattern as `resolveBoardSnapshots`. Import `gradePropPick` at the top of the file if not already imported.
+
+### Task AN completion note — 2026-06-04
+
+Implemented by Codex.
+
+- Added `db/027_user_pick_log.sql` with the `user_pick_log` table, indexes, unique constraint, and GRANTs.
+- Added `POST /api/wnba/pick-log` and `GET /api/wnba/pick-log` to root `server.js`.
+- Added `resolvePickLog(dateStr)` to `scripts/resolve-board-snapshots.js`, exported it, and made the CLI run it alongside board snapshot resolution.
+- Wired `resolvePickLog()` into the scheduler evening log sweep after `resolveBoardSnapshots()`.
+- Added frontend manual logging UX in `wnba-prop-scout.jsx`: long-press/desktop hover log wrapper, pick-log popover, MY LOG sub-tab inside PICKS, and logged-pick cards with summary/P&L.
+- Loggable surfaces in this pass: PICKS model cards, BOARD player cards, and GAMES tab game-total cards.
+
+Verification:
+
+- `node --check server.js` passed.
+- `node --check scripts/resolve-board-snapshots.js` passed.
+- `node --check scripts/scheduler.js` passed.
+- `npm run build` passed.
+
+Manual step still required before live API/UI testing:
+
+```sql
+-- Apply in Supabase SQL Editor
+-- db/027_user_pick_log.sql
+```
+
+Follow-up UI fix — 2026-06-04:
+
+- Manual log affordance now appears as a low-opacity `⊕` on loggable cards and brightens on hover/touch, instead of depending entirely on hover detection.
+- Slate/Daily Card game cards are now loggable too. They log the game total when a total line exists, with a fallback to the slate card's best model pick.
+- `LoggablePickWrapper` now merges hover and long-press handlers explicitly so long-press cancellation does not override hover state handling.
+- Verification: `npm run build` passed.
+
+**Post-deployment verification — 2026-05-20:**
+
+- `db/027_user_pick_log.sql` applied to Supabase ✅
+- `user_pick_log` table live with all indexes and grants ✅
+- Task AN fully deployed and verified. No further steps required.
+
+**Implementation notes confirmed during review:**
+- `POST /api/wnba/pick-log` handles the `NULL != NULL` Postgres UNIQUE edge case for game picks (manual check-then-update/insert when `player_id IS NULL`) — duplicate game prop log entries are prevented correctly
+- `useLongPress` skips timer if touch target is a `button`, `input`, `select`, or `a` — inner card interactions don't accidentally trigger long-press
+- `PickLogPopover` stops propagation on `onMouseDown` and `onTouchStart` so the wrapper's long-press doesn't re-fire during popover interaction
+- `lean_default` is pre-populated from the model recommendation — direction is already selected when popover opens for algo picks
+- ML row logging within game cards is a v2 follow-up; current implementation logs game O/U only from the game card wrapper
+
+**Known v2 follow-up:**
+- Add a separate `mlLogCard` for home/away ML rows within `GamePropsPanel` so users can log moneyline picks from game cards (not just O/U)

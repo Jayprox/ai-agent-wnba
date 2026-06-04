@@ -32,6 +32,7 @@ const {
   pickPreferredSportsbookLine,
   sportsbookShortLabel,
 } = require('../lib/sportsbook-priority');
+const { estimateProbability, calcEV, calcKelly } = require('../lib/scoring/ev-kelly');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -1474,6 +1475,10 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
   if (sBlowout < 40)                          riskFlags.push('blowout_risk');
   if (m.games_played < 10)                    riskFlags.push('small_sample');
 
+  const pHit = estimateProbability(confidence, round(hrSeason, 4), round(hrL5, 4));
+  const juiceRaw = marketNotes?.juice ?? marketNotes?.over_juice ?? -110;
+  const juice = Number.isFinite(Number(juiceRaw)) ? Number(juiceRaw) : -110;
+
   return {
     player_id:               player.id,
     game_id:                 game.id,
@@ -1491,6 +1496,9 @@ function analyzePlayerProp(player, logs, game, field, line, sportsbook, matchupR
     hit_rate_over_season:    round(hrSeason, 4),
     hit_rate_over_l5:        round(hrL5, 4),
     hit_rate_over_l10:       round(hrL10, 4),
+    p_hit:                   round(pHit, 4),
+    ev:                      round(calcEV(pHit, juice), 6),
+    kelly_fraction:          round(calcKelly(pHit, juice), 5),
     hit_rate_vs_opponent:    round(hrVsOpp, 4),
     opponent_matchup_rating: round(matchupRating),
     opponent_team_id:        oppId,
